@@ -1,0 +1,45 @@
+# --- Gradle / Android build output ---
+.gradle/
+build/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# --- IDE / tooling state ---
+.idea/
+.kotlin/
+*.iml
+
+# --- Machine-local config (contains absolute SDK paths; never commit) ---
+local.properties
+
+# --- Secrets ---
+*.keystore
+*.jks
+.env
+.env.*
+!.env.example
+
+# --- Graphify generated knowledge graph (regenerate with `graphify update .`) ---
+graphify-out/
+
+# --- Node ---
+node_modules/
+
+# --- Roborazzi run output ---
+# NOTE: golden baselines live in app/src/test/screenshots/ and ARE committed on purpose —
+# they are the visual-regression protection. Only the per-run actual/diff output is ignored.
+**/build/outputs/roborazzi/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Early scaffold generator scripts kept locally only (not part of the Android project) ---
+/*.py

@@ -1,0 +1,47 @@
+# Graphify indexing exclusions for the Virlin Android project.
+# Source code under app/src/, CLAUDE.md, docs/ and .claude/ are deliberately NOT excluded.
+
+# --- Gradle / Android build output ---
+.gradle/
+**/.gradle/
+build/
+**/build/
+captures/
+.externalNativeBuild/
+**/.externalNativeBuild/
+.cxx/
+**/.cxx/
+app/release/
+**/generated/
+**/intermediates/
+**/tmp/kotlin-classes/
+
+# --- IDE / tooling state ---
+.idea/
+.kotlin/
+**/.kotlin/
+*.iml
+
+# --- Build artifacts / binaries ---
+*.apk
+*.aab
+*.class
+*.dex
+*.jar
+*.aar
+*.so
+*.hprof
+*.keystore
+*.jks
+
+# --- Machine-local config (may contain absolute SDK paths) ---
+local.properties
+
+# --- Gradle wrapper binary ---
+gradle/wrapper/gradle-wrapper.jar
+
+# --- Graphify's own output ---
+graphify-out/
+
+# --- VCS ---
+.git/

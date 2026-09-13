@@ -1,0 +1,8 @@
+# Virlin smoke flow: the app launches and the approved Now screen renders.
+# Selectors are semantic text from the frozen Now UI — no coordinate taps.
+appId: com.virlin.app
+---
+- launchApp
+- assertVisible: "Virlin"
+- assertVisible: "CURRENT FOCUS"
+- assertVisible: "Psychology"

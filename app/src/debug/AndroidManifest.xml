@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Development-only Orb Interaction Lab. Debug builds only; never in production
+             navigation. Launch with:
+             adb shell am start -n com.virlin.app/.debug.OrbInteractionLabActivity -->
+        <activity
+            android:name=".debug.OrbInteractionLabActivity"
+            android:exported="true"
+            android:label="Virlin Orb Lab"
+            android:theme="@style/Theme.Virlin" />
+    </application>
+</manifest>

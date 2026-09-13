@@ -1,0 +1,15 @@
+# STATUS: EXPECTED TO PASS (Orb tappability resolved 2026-09-11 by the Living Orb Interaction System).
+# The Orb is located by its accessibility label ("Open Virlin Agent"), not by pixel coordinates.
+appId: com.virlin.app
+---
+- launchApp
+- assertVisible: "CURRENT FOCUS"
+- tapOn: "Open Virlin Agent"
+# Agent workspace: CONTROL / CREATE / CAPTURE
+- assertVisible: "CONTROL"
+- assertVisible: "CREATE"
+- assertVisible: "CAPTURE"
+- back
+- assertVisible: "CURRENT FOCUS"
+- assertVisible: "Psychology"
+

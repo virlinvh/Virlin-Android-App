@@ -1,0 +1,15 @@
+# Verifies the approved Now surface structure and bottom navigation.
+appId: com.virlin.app
+---
+- launchApp
+- assertVisible: "CURRENT FOCUS"
+- assertVisible: "Psychology"
+- assertVisible: "FOCUS INVESTED"
+- assertVisible: "Needs You"
+- assertVisible: "Working For You"
+# Bottom navigation
+- assertVisible: "Now"
+- assertVisible: "Streams"
+- assertVisible: "Pulse"
+# The Orb is matched by its accessibility label, not a coordinate.
+- assertVisible: "Open Virlin Agent"
