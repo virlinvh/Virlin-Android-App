@@ -1,6 +1,120 @@
 # Virlin — Development Status
 
-Last updated: 2026-09-11
+Last updated: 2026-09-18
+
+## Permanent startup architecture — 2026-09-18
+
+| Item | Status |
+|---|---|
+| First Compose frame **without waiting for Room** | **IMPLEMENTED** |
+| `MainActivity`: `setContent` immediately → `VirlinGraph.startAsync()` on IO | **IMPLEMENTED** |
+| `BootstrappingWorkStreamRepository` + `StartupReadiness` (Initializing / Ready / Error) | **IMPLEMENTED** |
+| Canonical `VirlinGraph.ensureReady()` (shared deferred; receivers await) | **IMPLEMENTED** |
+| Pre-READY Now shell (no MockData-as-user-data flash); Error + Retry overlay | **IMPLEMENTED** |
+| `DomainDisplayBridge` starts once after bind | **IMPLEMENTED** |
+| Theme: pearl `windowBackground` only (no AndroidX SplashScreen; no `windowDisablePreview`) | **SELECTED** |
+| DEBUG extras: `hydrate_delay_ms` / `hydrate_fail` (sticky fail until Retry) | **IMPLEMENTED** |
+| Unit: `BootstrappingRepositoryTest` + `VirlinStartupArchitectureTest` | **PASS** |
+| Device: 20/20 cold VISIBLE; 3s delay → composition before READY; fail → Error+Retry | **VERIFIED** (emulator-5554 API 35) |
+
+Supersedes the temporary splash/`windowDisablePreview` workaround below.
+
+## Black-screen startup (Focus Invested follow-up) — 2026-09-18 (superseded)
+
+| Item | Status |
+|---|---|
+| Root cause: Activity window stuck at `mShownAlpha=0` / `Surface shown=false` after heavy first Compose frame (Android 12+ splash exit) + Main-thread Room `runBlocking` before `setContent` | diagnosed |
+| Interim fix: splash exit + `windowDisablePreview` + sync hydrate | **superseded by permanent async architecture** |
+| Cumulative Focus Invested feature retained | yes |
+
+## Cumulative Focus Invested — human tasks (2026-09-17)
+
+| Item | Status |
+|---|---|
+| Source of truth: sum of persisted `FocusSession` timestamps per `taskId` (no new column) | **IMPLEMENTED** |
+| Split-flap / `focusInvestedSec` = **current session only** (unchanged) | preserved |
+| Live total = closed sessions + open session elapsed (`priorFocusInvestedSec` + session) | **IMPLEMENTED** |
+| LEAVE closes session once; reminder return duration not counted | existing + tested |
+| COMPLETE while focusing closes open session once before clearing active task | **IMPLEMENTED** |
+| Now UI: `Xm invested` under FOCUS ACTIVE; timer caption → `CURRENT SESSION` | **IMPLEMENTED** |
+| Format: `<1m` / `25m` / `1h 05m` + ` invested` | **IMPLEMENTED** |
+| No schema migration (v7 unchanged) | by design |
+
+## Capture launcher responsive density (2026-09-17)
+
+| Item | Status |
+|---|---|
+| Root cause: five intrinsic ~76dp cards + gaps exceeded Capture content box; `clipToBounds` clipped Voice | fixed |
+| `CaptureCardMetrics` Comfortable/Compact/Tight from available content height | **IMPLEMENTED** |
+| All five cards share one fixed `cardHeight` per density (Voice never special-cased) | **IMPLEMENTED** |
+| Capture sheet height `max(90%·H, 520.dp)` (Control/Create keep `86%/440`) | **IMPLEMENTED** |
+| Capture-only header chrome compression (top / after-identity spacers) | **IMPLEMENTED** |
+| Layout tests: 320 / 360 / 393 / 411 + fontScale 1.3; equal heights; Voice subtitle; no scroll | **IMPLEMENTED** |
+
+## Agent entry no-scroll launcher fit (2026-09-17)
+
+| Item | Status |
+|---|---|
+| Entry sheet height `max(90%·H, 520.dp)` (Control/Create keep `86%/440`; Capture shares Entry rule) | **IMPLEMENTED** |
+| Entry density Comfortable/Compact/Tight — compress whitespace, Orb slot, card padding | **IMPLEMENTED** |
+| Control · Create · Capture · composer always visible; **no** entry vertical scroll | **IMPLEMENTED** |
+| Living Orb centres in reported entry slot size | **IMPLEMENTED** |
+
+## Streams filter rail — horizontal scroll (2026-09-15)
+
+Filter chips (`All` · `Projects` · `Need You` · `Processing` · `Ready`) use content width + `maxLines=1` / `softWrap=false` inside a horizontally scrolling row — never compressed into vertical letter stacks.
+
+## Agent entry responsive ownership (2026-09-15)
+
+| Item | Status |
+|---|---|
+| ENTRY: FIXED Orb + title + subtitle · ADAPTIVE mode-card scroll · FIXED composer | **IMPLEMENTED** |
+| Card scroll does not move Orb slot / identity copy / composer | **IMPLEMENTED** |
+| Sheet height rule unchanged (`max(0.68·H, 440.dp)`); ownership fix is the primary remedy | preserved |
+
+## Flip timer reliability — baseline snap / tick flip (2026-09-15)
+
+| Item | Status |
+|---|---|
+| `splitFlapShouldAnimate`: first value / identity remount / non-adjacent elapsed → **SNAP**; `n → n+1` → **FLIP** | **IMPLEMENTED** |
+| Now `FocusHeroCard` + fullscreen `FocusClockScreen` keyed by WorkStream id | **IMPLEMENTED** |
+| Demo seed `focusInvestedSec` 0 (no first-frame 32:35 lie) | **IMPLEMENTED** |
+| Cancelled mid-flip settles via `NonCancellable` finally; idle draws static value only (no 90° ghost layers) | **IMPLEMENTED** (FocusClock + SplitFlapDigit) |
+| Visual design (cards, hinge, typography, fullscreen desk clock) unchanged | preserved |
+
+Shared policy: `ui/components/SplitFlapAnimationPolicy.kt`. Digits still flip from elapsed seconds, not character-count.
+
+## Capture → Voice — multi-clip voice notes (2026-09-15)
+
+| Item | Status |
+|---|---|
+| CaptureType.VOICE + VoiceDocument / VoiceClip (Room schema **v7**, additive `MIGRATION_6_7`) | **IMPLEMENTED** |
+| Managed audio under `filesDir/voices/{captureId}/{clipId}.m4a` (`VoiceFileStore`) | **IMPLEMENTED** |
+| Single-screen Voice editor (title · record/stop · multi-clip list · play/scrub · menu rename/delete/reorder) | **IMPLEMENTED** |
+| RECORD_AUDIO at record start; AAC/M4A via MediaRecorder | **IMPLEMENTED** |
+| Inbox commit once on first meaningful clip; reopen same route; empty draft discard | **IMPLEMENTED** |
+| Capture card + Inbox/Detail open Voice editor | **IMPLEMENTED** |
+| No transcription / NLP / Wispr | by design for this pass |
+
+Routes: `voice_editor` / `voice_editor/{captureId}`. Same Capture Inbox semantics as File / Text Note / Prompt / Link.
+
+Skills: `virlin-agent-capture`, `virlin-data-domain`, `virlin-android-compose` (device mic verify with `virlin-mobile-qa`).
+
+## Capture → File / Image — universal in-app viewer (2026-09-14)
+
+| Item | Status |
+|---|---|
+| CaptureType.FILE + AttachmentDocument (Room schema **v6**, additive `MIGRATION_5_6`) | **IMPLEMENTED** |
+| Single-screen File Viewer (select/replace + metadata + embedded viewer) | **IMPLEMENTED** |
+| SAF picker → streaming copy into `filesDir/attachments/` (original bytes preserved) | **IMPLEMENTED** |
+| UniversalFileViewer (PDF / Image / Video / Audio / Text / CSV / DOCX / XLSX / PPTX / Unsupported) | **IMPLEMENTED** |
+| Office: Zip + XmlPullParser read-only extract (no Apache POI / no new deps) | **IMPLEMENTED (best-effort)** |
+| Inbox reopen → same File Viewer route | **IMPLEMENTED** |
+| Voice capture | **IMPLEMENTED** (see section above; Room v7) |
+
+Single route `file_viewer` / `file_viewer/{captureId}`. No secondary preview/detail page. OPEN externally is not the primary path.
+
+Skills: `virlin-agent-capture`, `virlin-data-domain`, `virlin-android-compose` (verify with `virlin-mobile-qa` on device).
 
 ## Frozen / approved
 
@@ -33,27 +147,16 @@ Background pure black `#000000`, edge to edge, immersive landscape, black system
 Colon is two stacked light-grey dots, not in a card. Depth is restrained only: a darker body
 behind each card plus a hairline edge. No glow.
 
-### Fullscreen flip behaviour — GROUPED, not per-digit
+### Fullscreen flip behaviour — shared per-digit SplitFlapTimer
 
-Each card is ONE physical surface driven by ONE animation progress. When a card's
-two-character value changes the WHOLE card flips, even if only one character differs:
+Fullscreen Focus Clock uses the **same** `SplitFlapTimer` / `SplitFlapDigit` engine as the
+Now Focus card. Presentation is selected via `SplitFlapPresentation.Fullscreen` (larger
+tiles, `#212121` faces, quiet colon, no housing chrome). Animation mathematics are identical:
+per-digit adjacent flips, immutable from/to for the transition, 450ms linear, edge-on hide,
+no alpha/darken path.
 
-- `34:27 → 34:28` — seconds card flips entirely; minutes card stays still
-- `34:59 → 35:00` — both cards flip entirely
-- `09:59 → 10:00` — both cards flip entirely
-
-The complete two-character string is rendered once per half and clipped into top/bottom
-rectangles, so both halves share one baseline and one horizontal centre — no tearing, no
-half-glyph mismatch. Sequence: old upper half rotates down about the hinge (p 0→0.5)
-revealing the new value behind it, then the new lower half unfolds (p 0.5→1). 500ms,
-natural easing, no bounce.
-
-Digits inside a card must NEVER animate independently, and a card must never be collapsed
-into a single pre-rendered bitmap or string — it is a live two-half flip.
-
-**This is fullscreen-only.** It lives entirely in `FocusClockScreen.kt` (`GroupedFlipCard` /
-`CardHalf`). The Now screen keeps its existing per-digit `SplitFlapDigit` animation where
-only the changed digit flips. `SplitFlapTimer.kt` plays no part in fullscreen rendering.
+The old fullscreen-only `GroupedFlipCard` / `CardHalf` engine was removed so the two surfaces
+cannot diverge again.
 
 ### Behaviour
 
@@ -80,8 +183,8 @@ which fires once per minute purely for display and is not a focus timer.
 
 | File | Change |
 |---|---|
-| `ui/screens/FocusClockScreen.kt` | Grouped `GroupedFlipCard` / `CardHalf` flip engine, wall clock, FOCUS INVESTED caption, low-salience bare-X close control top-right, black canvas, orientation + immersive handling. |
-| `ui/components/SplitFlapTimer.kt` | Size/styling params + shared `focusTimeContentDescription()`. Defaults reproduce the approved Now rendering. Not used by fullscreen. |
+| `ui/screens/FocusClockScreen.kt` | Black canvas Focus Clock; wall clock + FOCUS INVESTED + close; sizes `SplitFlapTimer(..., presentation = Fullscreen)` from the same session seconds as Now. |
+| `ui/components/SplitFlapTimer.kt` | Shared flip engine for Compact (Now) and Fullscreen. Presentation changes chrome/scale only. |
 | `ui/screens/NowScreen.kt` | Focus timer wrapped in a clickable Box navigating to `focus_clock`. Visuals unchanged. |
 | `ui/navigation/VirlinApp.kt` | `focus_clock` composable with fade/scale transitions. |
 | `AndroidManifest.xml` | `configChanges` so rotation does not recreate the Activity. |
@@ -426,7 +529,48 @@ typed `DomainError` (`InvalidTransition(from,to)`, `StreamAlreadyDone`, `Already
 `ContextUpdate` uses `Field.Keep/Clear/Set`. `VirlinClock` (system / `FakeClock`) and
 `IdProvider` (UUID / `SequentialIdProvider`) are injected.
 
-### Repository boundary
+### Control Workspace — Fixed Header, Scrolling Cards Only (2026-09-14)
+
+`AgentShell` no longer wraps the CONTROL workspace in its whole-region `verticalScroll`
+(`controlOwnsScroll`); the shell header (← · handle · ×), the Control identity, QUICK ACTIONS
+and the RECENT / SUGGESTED heading are fixed, the composer stays pinned, and the ONLY scroll
+owner is the middle region inside `AgentControlArea` — the suggested cards (or the task picker
+when open), filling exactly the remaining height with a 72dp end inset so the last card clears
+the composer. Control semantics, data order and actions are unchanged.
+
+Also re-applied a lost fix in `VirlinOrb.kt`: the tap-gesture `pointerInput` node exists only
+while the Orb is interactive, so the alpha-0 Orb inside a workspace can no longer win
+hit-testing over sheet content beneath it (this — not the layout change — was what made
+`AgentControlUiTest` miss `agent_task_set_current`). Verified: `AgentControlUiTest` 2/2 on
+Pixel 8 / API 35; non-screenshot unit tests 408/408; `assembleDebug` ✓.
+
+**Environment blocker:** Robolectric screenshot tests (22) currently fail on this machine with
+`UnsatisfiedLinkError … robolectric-nativeruntime.dll: An Application Control policy has blocked
+this file` — a Windows Application Control policy, not app code. `agent_control_live.png` was
+re-recorded for the intended container-height change before the block; it stays as recorded and
+must be re-verified once the policy allows the native runtime.
+
+### Control Visual Quick Actions Rail (2026-09-14)
+
+QUICK ACTIONS is no longer four equal tiles. It is a **horizontally scrollable** rail
+(`LazyRow`) of every Control structured capability already backed by production intents:
+
+Focus · Resume · Leave · Hand Off · Complete · Check · Focus Now · Defer · Block · Tasks
+
+Interaction model: **ACTION + TARGET** (`selectedQuickAction` + `selectedTargetId`). Selection
+alone never mutates domain state; a valid pair executes through the same
+`AttentionIntentController` / `VirlinActions` paths as row chips (Leave/Hand Off/Defer/Check
+open existing choosers; Complete stays task-first with whole-stream confirmation; Block stays
+WorkStream-only). Eligibility is derived from `AgentControlPresentation.actionsFor` (+ Block
+where FOCUS/PROCESSING/CHECK_DUE/READY can move to BLOCKED). Invalid pairs stay visually
+disabled / non-executing. Recent / Suggested rows are selectable targets (WorkStream
+projection only — Projects have no Control structured actions; Task SET CURRENT / COMPLETE /
+CANCEL remain in the TASKS picker). Three-region layout unchanged (fixed rail + heading,
+vertical card scroll, pinned composer). Unit: `AgentControlQuickActionsTest` +
+`AgentControlTest`. Roborazzi still blocked by WAC on this host — do not re-record goldens
+blindly.
+
+## Repository boundary
 
 One cohesive `WorkStreamRepository` with `transaction { WorkStreamWriter }` so hand-offs
 (stream + cycle + session + snapshot + events) are atomic. `InMemoryWorkStreamRepository`
@@ -1020,13 +1164,15 @@ longer reachable from the live shell and its test was removed); Roborazzi **18/1
 | Capture organize: ATTACH | **IMPLEMENTED** |
 | Capture convert-to-Task (atomic, once) | **IMPLEMENTED** |
 | Capture detail: full content · COPY · organize · archive | IMPLEMENTED (edit: `updateCapture` action only, no UI) |
-| Voice / File / Image capture, Share-to-Virlin, Capture NLP, RESPONSE type | NOT IMPLEMENTED |
+| File / Image capture (universal in-app viewer) | **IMPLEMENTED** (schema v6) |
+| Voice capture (multi-clip notes) | **IMPLEMENTED** (schema v7; no transcription) |
+| Share-to-Virlin, Capture NLP, RESPONSE type | NOT IMPLEMENTED |
 | Free-text Control/Create NLP, LLM, Wispr/TTS, cloud sync | NOT IMPLEMENTED |
 | Orb | FROZEN |
 
 Capture is low-friction external memory: Orb → CAPTURE → type/paste in the pinned composer →
 SAVE TO INBOX. `CaptureItem` (`domain/model/CaptureModels.kt`) is its own durable object —
-never a Task: `CaptureType {NOTE, PROMPT, LINK}`, `CaptureStatus {INBOX, ORGANIZED, ARCHIVED}`,
+never a Task: `CaptureType {NOTE, PROMPT, LINK, FILE, VOICE}`, `CaptureStatus {INBOX, ORGANIZED, ARCHIVED}`,
 verbatim `content` (line breaks kept), optional `title`, `sourceUrl` (LINK, stored, never
 fetched), optional explicit `projectId/workStreamId/taskId` (ancestry derived from the most
 specific id, validated on save — stale ids are rejected), `convertedTaskId`, absolute timestamps.
@@ -1685,19 +1831,190 @@ hit-testing over the sheet), centred identity (icon · title · subtitle), no mo
   recursive parent picker · CREATE/CANCEL · after-create chaining) continues below without the cards until
   CANCEL / DONE. No Reminder card (not a V1 entity). Goldens `agent_create.png` / `agent_create_live.png`.
 - **Capture** (`ui/agent/capture/AgentCaptureArea.kt`): five cards in Stitch order — Text Note · Prompt ·
-  Link (the existing `CaptureType` selector, NOTE default, `captureTypeTag`) · **File / Image** · **Voice**.
-  File / Image and Voice are UI only: **no file/image picker, storage, recorder or audio persistence exists in
-  the app** (only display-only demo attachment chips), so those two cards are disabled
-  (`stateDescription = "Not available yet"`), never mutate anything and were NOT wired to the demo chips. The
+  Link · **File / Image** · **Voice**. File / Image opens the universal File Viewer (`file_viewer`);
+  Voice opens the Voice editor (`voice_editor`) for multi-clip AAC/M4A notes (Room schema v7). The
   composer is the Stitch pill ("What would you like to capture…", → = the existing SAVE TO INBOX path,
   `CaptureSaveInboxTestTag`); raw text still never reaches `TextCommandInterpreter`. Hint, link note, context
   row and the Inbox stay below the cards. Goldens `agent_capture.png` / `agent_capture_live.png`.
 
-## Repository
+## Orb Travel Removed — Ride-the-Sheet Placement (2026-09-13)
 
-GitHub repository: https://github.com/virlinvh/Virlin-Android-App (branch `main`; first published 2026-09-13).
+The visible root→Agent Orb travel was removed by request. `OrbTravelLayout`
+(`ui/navigation/VirlinApp.kt`) no longer interpolates the Orb between the Now slot and the
+Agent header slot. While the Agent surface is opening/open the Orb is placed at the header
+slot **offset by the sheet's own current translation** (`sheetHeightPx` captured via
+`onSizeChanged`), so it is fixed inside the rising sheet and enters from below the screen
+edge with it — at `p == 1` it rests exactly in the header slot, and on close it rides back
+down and reappears at the Now slot. The single-Orb architecture, x-coordinate (the Orb never
+moves horizontally), sheet/scrim/timing animations, renderer, and final entry design are
+unchanged; goldens unaffected (`verifyRoborazziDebug` green). CLAUDE.md's "single Orb
+travelling into an in-window Agent shell" phrase predates this pass.
+
+## Execution Responsibility — inheritable HUMAN/EXTERNAL (2026-09-14)
+
+Human/External is no longer WorkStream-only object typing. It is a separate dimension from
+hierarchy and attention lifecycle.
+
+### Model
+
+- `ExecutionPreference` — `INHERIT | HUMAN | EXTERNAL` (stored on WorkStream + Task)
+- `EffectiveExecutionMode` — `HUMAN | EXTERNAL` (resolved only; never MIXED)
+- `Project.defaultExecutionMode` — `HUMAN | EXTERNAL` (root default; no INHERIT)
+- System fallback: **HUMAN**
+- **MIXED** — derived container summary only; never persisted; never used in transitions
+
+### Resolution (canonical `ExecutionModeResolver`)
+
+Task explicit → nearest parent Task explicit → WorkStream explicit → Project default → HUMAN.
+
+Current WorkStream cycle: if `activeTaskId` resolves, use that Task's resolution; else the WorkStream.
+
+UI (Now, Control, Create labels, Detail screens) must not reimplement inheritance — they call the resolver
+(or consume projected effective mode).
+
+### Contracts preserved
+
+- EXTERNAL does **not** auto-enter PROCESSING — only **HAND OFF** does
+- **LEAVE** never starts PROCESSING
+- EXTERNAL + FOCUS is valid (prep / instructions)
+- HAND OFF requires **effective EXTERNAL** — enforced in **domain** `handOffStream` (`DomainError.NotExternalExecution`), not only UI/commands
+- PROCESSING + preference change that would make effective HUMAN → **rejected** (`CannotChangeExecutionWhileProcessing`)
+  including **Project default** / `updateProject` changes that would make an inheriting PROCESSING
+  WorkStream resolve HUMAN (explicit EXTERNAL overrides still allow the parent change)
+- Parent default/preference changes do **not** rewrite explicit descendant overrides
+- Projectless WorkStreams: UI/domain reject INHERIT (`InheritRequiresProject`); must be HUMAN or EXTERNAL
+- Standalone Project Tasks may store preference but remain not independently focusable
+- Actor/tool assignment remains a **future separate** concept (`tool` string is display only)
+
+### Room schema v3
+
+Additive migration `MIGRATION_2_3`:
+
+- `projects.defaultExecutionMode` = HUMAN for existing rows
+- `workstreams.mode` → `executionPreference` (HUMAN/EXTERNAL preserved as **explicit**)
+- `tasks.executionPreference` = INHERIT for existing rows
+
+No destructive fallback. Existing Human/External WorkStreams behave the same after migrate until users
+opt into Inherit.
+
+### Surfaces
+
+- Create: Project default · WorkStream Inherit/Human/External (no Inherit when projectless) · Task Inherit/Human/External
+- Detail: Project / WorkStream / Task execution chips + reset-to-inherit
+- Now: LEAVE+COMPLETE vs LEAVE+HAND OFF from **effective** current mode
+- Control Quick Actions: Hand Off eligibility from effective mode; visual rail unchanged
+
+### Tests
+
+`ExecutionModeResolverTest`, `ExecutionResponsibilityActionsTest`, migration `migrate2To3_*`.
+
+## Capture Text Note — full-screen block editor (2026-09-14)
+
+| Area | Status |
+|---|---|
+| Capture Text Note full-screen editor | **IMPLEMENTED (V1)** |
+| NoteDocument + block JSON payload (Room schema **v4**) | **IMPLEMENTED** |
+| Autosave (debounced) + empty-draft discard | **IMPLEMENTED** |
+| Inbox reopen of Text Notes | **IMPLEMENTED** |
+| Copy All (plain-text serializer) | **IMPLEMENTED** |
+| PDF export (native `PdfDocument` A4 + share) | **IMPLEMENTED** |
+| Context choose/change (existing Capture context) | **IMPLEMENTED** |
+| Prompt / Link / File / Image / Voice redesign | unchanged / not this pass |
+| Selection-range inline formatting · drag-reorder · note Duplicate · structural undo | **DEFERRED** |
+
+### Model
+
+- `CaptureItem(type = NOTE)` owns Inbox lifecycle, context, archive/organize.
+- `NoteDocument` owns title + ordered `NoteBlock` tree (Toggle children nested in JSON).
+- Storage: Option B — `note_documents` row with `documentJson` via `NoteDocumentCodec` (no third-party JSON lib).
+- `CaptureItem.content` / `title` stay Inbox preview projections (synced on autosave).
+- Legacy plain NOTES hydrate to a single TEXT block on open; first save creates the document row.
+
+### Editor
+
+- Route: `text_note` / `text_note/{captureId}` (full-screen; not bottom-nav).
+- Capture card **Text Note** and Inbox NOTE rows open the editor; Agent dismisses on navigate.
+- Blocks V1: TEXT, H1–H3, bullet/number, checkbox (note-local only), toggle (+ children), divider, quote, callout, code.
+- Toolbar: `+` block picker, `Aa` style transform, B/I/U/S/Link toggle **whole-block** marks (selection-range deferred).
+- Slash `/` on empty block opens block picker.
+- Overflow: Copy all · Export PDF · Choose context · Archive (no hard delete; Duplicate omitted).
+- Empty draft: never persisted; exit discards.
+
+### Interaction refinement (2026-09-14)
+
+- **Enter** creates the next block (type matrix: headings/quote/callout → TEXT; lists/checkbox sibling or exit-to-TEXT when empty; CODE keeps soft newlines).
+- **Shift+Enter** / toolbar **↵ Line break** insert a soft `\n` in the same block; wrapping never splits blocks.
+- **"/"** on empty block opens picker; transform clears any slash residue.
+- **Autosave** ≠ Inbox: drafts show Saved ✓ in-session until **Inbox ↑** or Back commits exactly one CaptureItem; opened Inbox notes flush on Back with no duplicate.
+- Status copy: `Saved ✓` (persistence) vs `In Inbox ✓` (Capture committed). Light haptic on Inbox commit.
+
+### Document canvas + Backspace + rich paste (2026-09-14)
+
+- **Presentation**: continuous white document under the context line; normal TEXT/H1–H3/lists/checkbox sit on the canvas (no gray card chrome). Specialized: callout tint, code box, quote left rule, divider, toggle disclosure. Block handle is focus/selection-only. Permanent Enter/Shift+Enter footer chrome removed.
+- **Placeholder**: `"Type something, or / for blocks"` only on the **focused** empty editable block; never stored in Room / Copy All / PDF / Inbox preview.
+- **Empty Backspace**: Notion-like — remove empty block, focus previous, caret at end when practical; never delete the last editing surface.
+- **Structured paste**: overflow **Paste** + Ctrl/Cmd+V + multi-char paste detection. Layered import via `NoteClipboardImporter` / `ClipboardNoteReader`: HTML (sanitized) → Markdown-like plain → plain paragraphs. Best-effort; no third-party editor SDK; no app-name coupling.
+
+### Room schema v4
+
+Additive `MIGRATION_3_4`: `note_documents` + unique index on `captureItemId`. Captures/projects/streams/tasks untouched. Proven by `migrate3To4_*` + `freshInstall_isV4_*`.
+
+### Skills to sync later
+
+`virlin-agent-capture` (Text Note editor + v4), optionally `virlin-data-domain` (note actions).
 
 ## Current next task
 
-> Nothing scheduled. Control V1 · Create V1 · Capture V1 are frozen; the next feature comes only
-> when a pass asks for it. Orb, shell and Now stay frozen.
+> Review Capture Link editor. Do not begin File / Image / Voice redesign until asked.
+
+## Capture Prompt — full-screen editor (2026-09-14)
+
+| Area | Status |
+|---|---|
+| Capture Prompt full-screen editor | **IMPLEMENTED (V1)** |
+| PromptDocument + block JSON (Room schema **v5**) | **IMPLEMENTED** |
+| Layered clipboard paste (HTML → Markdown → plain via shared NoteClipboardImporter) | **IMPLEMENTED** |
+| Title · description · tags · COPY · Inbox commit / reopen | **IMPLEMENTED** |
+| Text Note editor | unchanged |
+| Link / File / Image / Voice | unchanged |
+
+### Model
+
+- `CaptureItem(type = PROMPT)` owns Inbox lifecycle, context, archive/organize.
+- `PromptDocument` owns title, description, tags, and structured body (`NoteBlock` tree — shared formatting model with Text Note, distinct product surface).
+- Storage: `prompt_documents` row with `documentJson` + `tagsJson` (additive `MIGRATION_4_5`).
+- Legacy plain PROMPT captures hydrate to a single TEXT block on open.
+
+### Editor
+
+- Route: `prompt_editor` / `prompt_editor/{captureId}` (lavender-accented, reuse-focused — not a second Notion note).
+- Capture card **Prompt** and Inbox PROMPT rows open the editor; Agent dismisses on navigate.
+- Body: structured blocks with paste (overflow / Ctrl+V / multi-char detect), Enter/Backspace, focused placeholder only.
+- COPY on the prompt body; Autosave ≠ Inbox (same commit pattern as Text Note).
+
+## Capture Link — full-screen editor (2026-09-14)
+
+| Area | Status |
+|---|---|
+| Capture Link full-screen editor | **IMPLEMENTED (V1)** |
+| LinkUrl validation + optional https domain normalization | **IMPLEMENTED** |
+| Link Card · OPEN (`ACTION_VIEW`) · Copy · Share | **IMPLEMENTED** |
+| Title · note · context · autosave · Inbox commit | **IMPLEMENTED** |
+| No remote fetch / no WebView / no OpenGraph | **HARD RULE** |
+| Text Note / Prompt | unchanged |
+| File / Image | **IMPLEMENTED** (universal viewer; see top of file) |
+| Voice | unchanged (still disabled) |
+
+### Model
+
+- Still `CaptureItem(type = LINK)`: `sourceUrl` (canonical), optional `title`, `content` = note.
+- No new Room table / no schema bump for Link.
+- `LinkUrl` is the shared validator used by CaptureActions + editor (rejects non-http(s); may normalize `example.com` → `https://example.com`).
+
+### Editor
+
+- Route: `link_editor` / `link_editor/{captureId}` (teal / pale aqua card).
+- Valid paste immediately shows Link Card; OPEN uses default browser via `ACTION_VIEW` (no package hard-code).
+- Inbox row opens editor (never auto-launches browser). Legacy LINK hydrates the same CaptureItem.
+
+## Repository
