@@ -8,6 +8,7 @@ import com.virlin.app.domain.action.Field
 import com.virlin.app.domain.action.getOrNull
 import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.EventType
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.*
@@ -46,8 +47,8 @@ class VirlinActionsTest {
     private lateinit var repo: InMemoryWorkStreamRepository
     private lateinit var actions: DefaultVirlinActions
 
-    private fun stream(id: String, state: WorkStreamState, title: String = id) = WorkStream(
-        id = id, title = title, state = state, createdAt = t0, updatedAt = t0,
+    private fun stream(id: String, state: WorkStreamState, title: String = id, pref: ExecutionPreference = ExecutionPreference.HUMAN) = WorkStream(
+        id = id, title = title, state = state, executionPreference = pref, createdAt = t0, updatedAt = t0,
         nextHumanAction = "next-$id", waitingFor = "wait-$id", lastHumanAction = "last-$id"
     )
 
@@ -57,10 +58,10 @@ class VirlinActionsTest {
         repo = InMemoryWorkStreamRepository(
             seed = listOf(
                 stream("psych", FOCUS, "Psychology"),
-                stream("claude", PROCESSING, "Claude · Virlin"),
-                stream("codex", PROCESSING, "Codex · MBA"),
-                stream("anti", CHECK, "Antigravity"),
-                stream("notion", READY, "Notion Transfer"),
+                stream("claude", PROCESSING, "Claude · Virlin", ExecutionPreference.EXTERNAL),
+                stream("codex", PROCESSING, "Codex · MBA", ExecutionPreference.EXTERNAL),
+                stream("anti", CHECK, "Antigravity", ExecutionPreference.EXTERNAL),
+                stream("notion", READY, "Notion Transfer", ExecutionPreference.EXTERNAL),
                 stream("cloud", BLOCKED, "Cloud Sync"),
                 stream("design", PAUSED, "Design Review"),
                 stream("old", DONE, "Old")

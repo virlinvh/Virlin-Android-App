@@ -23,6 +23,7 @@ import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.FOCUS
 import com.virlin.app.domain.model.WorkStreamState.PROCESSING
@@ -69,7 +70,7 @@ class CaptureBoundaryTest {
     private lateinit var interpreter: TextCommandInterpreter
 
     private fun ws(id: String, title: String, state: WorkStreamState, mode: WorkStreamMode = WorkStreamMode.HUMAN, project: String? = null, active: String? = null, checkAt: Instant? = null) =
-        WorkStream(id = id, title = title, state = state, projectId = project, mode = mode, activeTaskId = active, checkAt = checkAt,
+        WorkStream(id = id, title = title, state = state, projectId = project, executionPreference = mode.toPreference(), activeTaskId = active, checkAt = checkAt,
             processingStartedAt = if (state == PROCESSING) t0 else null, createdAt = t0, updatedAt = t0)
     private fun task(id: String, title: String, stream: String?, project: String? = null, parent: String? = null) =
         Task(id = id, title = title, projectId = project, workStreamId = stream, parentTaskId = parent, createdAt = t0, updatedAt = t0)

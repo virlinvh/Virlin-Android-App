@@ -1,13 +1,14 @@
 package com.virlin.app.domain.action
 
 import com.virlin.app.domain.model.ContextSnapshot
+import com.virlin.app.domain.model.EffectiveExecutionMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.Priority
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.model.WorkStream
-import com.virlin.app.domain.model.WorkStreamMode
 import java.time.Duration
 import java.time.Instant
 
@@ -137,14 +138,127 @@ interface VirlinActions {
     /** CONVERT: real Task via the structure rules + capture ORGANIZED, atomically; once only. */
     suspend fun convertCaptureToTask(id: String, target: CaptureTaskTarget): ActionResult<Task>
 
+    // ================================================================ Text Note (Capture NOTE document)
+
+    /**
+     * Persist a new rich Text Note (CaptureItem NOTE + NoteDocument) once meaningful content exists.
+     * Empty drafts must not call this — discard in the editor instead.
+     */
+    suspend fun createTextNote(
+        title: String?,
+        blocks: List<com.virlin.app.domain.model.NoteBlock>,
+        context: CaptureContext = CaptureContext.None,
+        captureId: String? = null,
+        noteId: String? = null
+    ): ActionResult<com.virlin.app.domain.model.NoteDocument>
+
+    /** Autosave path: update NoteDocument + Capture title/preview. */
+    suspend fun saveTextNote(
+        captureItemId: String,
+        title: String?,
+        blocks: List<com.virlin.app.domain.model.NoteBlock>
+    ): ActionResult<com.virlin.app.domain.model.NoteDocument>
+
+    /** Load persisted note, or hydrate a legacy plain NOTE into an unsaved document shell. */
+    suspend fun getOrHydrateTextNote(captureItemId: String): ActionResult<com.virlin.app.domain.model.NoteDocument>
+
+    suspend fun getNoteByCaptureId(captureItemId: String): com.virlin.app.domain.model.NoteDocument?
+
+    // ================================================================ Prompt (Capture PROMPT document)
+
+    suspend fun createPrompt(
+        title: String?,
+        description: String?,
+        tags: List<String>,
+        blocks: List<com.virlin.app.domain.model.NoteBlock>,
+        context: CaptureContext = CaptureContext.None,
+        captureId: String? = null,
+        promptId: String? = null
+    ): ActionResult<com.virlin.app.domain.model.PromptDocument>
+
+    suspend fun savePrompt(
+        captureItemId: String,
+        title: String?,
+        description: String?,
+        tags: List<String>,
+        blocks: List<com.virlin.app.domain.model.NoteBlock>
+    ): ActionResult<com.virlin.app.domain.model.PromptDocument>
+
+    suspend fun getOrHydratePrompt(captureItemId: String): ActionResult<com.virlin.app.domain.model.PromptDocument>
+
+    suspend fun getPromptByCaptureId(captureItemId: String): com.virlin.app.domain.model.PromptDocument?
+
+    // ================================================================ Attachment (Capture FILE document)
+
+    suspend fun createAttachment(
+        displayName: String,
+        mimeType: String,
+        sizeBytes: Long,
+        relativePath: String,
+        kind: com.virlin.app.domain.model.AttachmentKind,
+        context: CaptureContext = CaptureContext.None,
+        captureId: String? = null,
+        attachmentId: String? = null
+    ): ActionResult<com.virlin.app.domain.model.AttachmentDocument>
+
+    suspend fun saveAttachment(
+        captureItemId: String,
+        displayName: String,
+        mimeType: String,
+        sizeBytes: Long,
+        relativePath: String,
+        kind: com.virlin.app.domain.model.AttachmentKind
+    ): ActionResult<com.virlin.app.domain.model.AttachmentDocument>
+
+    suspend fun getAttachmentByCaptureId(captureItemId: String): com.virlin.app.domain.model.AttachmentDocument?
+
+    // ================================================================ Voice (Capture VOICE document)
+
+    suspend fun createVoice(
+        title: String?,
+        clips: List<com.virlin.app.domain.model.VoiceClip>,
+        context: CaptureContext = CaptureContext.None,
+        captureId: String? = null,
+        voiceId: String? = null
+    ): ActionResult<com.virlin.app.domain.model.VoiceDocument>
+
+    suspend fun saveVoice(
+        captureItemId: String,
+        title: String?,
+        clips: List<com.virlin.app.domain.model.VoiceClip>
+    ): ActionResult<com.virlin.app.domain.model.VoiceDocument>
+
+    suspend fun getVoiceByCaptureId(captureItemId: String): com.virlin.app.domain.model.VoiceDocument?
+
     // ================================================================ Structure: WorkStream
 
     /**
-     * Create a WorkStream (Pass 9). Project is optional; [CreateWorkStream.mode] is explicit —
-     * never inferred from the title or a tool name. New streams enter READY: creation is not
-     * focus and not a hand-off.
+     * Create a WorkStream. Project is optional. [CreateWorkStream.executionPreference] is
+     * explicit (INHERIT only when a Project is set; projectless streams must be HUMAN or
+     * EXTERNAL). Never inferred from the title or a tool name. New streams enter READY.
      */
     suspend fun createWorkStream(request: CreateWorkStream): ActionResult<WorkStream>
+
+    /** Project default for inheriting descendants. Does not rewrite explicit overrides. */
+    suspend fun setProjectExecutionDefault(projectId: String, mode: EffectiveExecutionMode): ActionResult<Project>
+
+    /**
+     * Set WorkStream execution preference. Projectless streams may not use INHERIT.
+     * Rejected while PROCESSING if the change would make effective mode HUMAN.
+     */
+    suspend fun setWorkStreamExecutionPreference(streamId: String, preference: ExecutionPreference): ActionResult<WorkStream>
+
+    /** Restore INHERIT (requires a Project). */
+    suspend fun resetWorkStreamExecutionPreference(streamId: String): ActionResult<WorkStream>
+
+    /**
+     * Set Task execution preference. Rejected when the owning WorkStream is PROCESSING and
+     * the change would make [ExecutionModeResolver.resolveCurrent] HUMAN.
+     */
+    suspend fun setTaskExecutionPreference(taskId: String, preference: ExecutionPreference): ActionResult<Task>
+
+    /** Restore INHERIT on a Task. */
+    suspend fun resetTaskExecutionPreference(taskId: String): ActionResult<Task>
 
     // ================================================================ Structure: Task
 
@@ -215,6 +329,7 @@ data class CreateProject(
     val priority: Priority = Priority.NORMAL,
     val dueAt: Instant? = null,
     val estimatedEffort: Duration? = null,
+    val defaultExecutionMode: EffectiveExecutionMode = EffectiveExecutionMode.HUMAN,
     /** Optional explicit id (tests / seeding). */
     val id: String? = null
 )
@@ -224,13 +339,14 @@ data class ProjectUpdate(
     val description: Field<String> = Field.Keep,
     val priority: Field<Priority> = Field.Keep,
     val dueAt: Field<Instant> = Field.Keep,
-    val estimatedEffort: Field<Duration> = Field.Keep
+    val estimatedEffort: Field<Duration> = Field.Keep,
+    val defaultExecutionMode: Field<EffectiveExecutionMode> = Field.Keep
 )
 
 data class CreateWorkStream(
     val title: String,
     val projectId: String? = null,
-    val mode: WorkStreamMode = WorkStreamMode.HUMAN,
+    val executionPreference: ExecutionPreference = ExecutionPreference.HUMAN,
     /** External tool / working context label, e.g. "Claude". Display metadata only. */
     val tool: String? = null,
     val nextHumanAction: String? = null,
@@ -250,6 +366,7 @@ data class CreateTask(
     val reminderAt: Instant? = null,
     val priority: Priority = Priority.NORMAL,
     val order: Int? = null,
+    val executionPreference: ExecutionPreference = ExecutionPreference.INHERIT,
     val id: String? = null
 )
 
@@ -263,7 +380,8 @@ data class TaskUpdate(
     val priority: Field<Priority> = Field.Keep,
     val order: Field<Int> = Field.Keep,
     /** TODO ↔ IN_PROGRESS only; use completeTask to close. */
-    val inProgress: Field<Boolean> = Field.Keep
+    val inProgress: Field<Boolean> = Field.Keep,
+    val executionPreference: Field<ExecutionPreference> = Field.Keep
 )
 
 data class FocusOutcome(

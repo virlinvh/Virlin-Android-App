@@ -27,7 +27,7 @@ object MockData {
 
     private fun generateMockStreams() {
         val initialStreams = mutableListOf(
-            WorkStream("s1", "Psychology", "Unit 23 · Question 17", "p3", StreamState.FOCUS, 120, 1955, 0, null, false, "Complete Q17 answer"),
+            WorkStream("s1", "Psychology", "Unit 23 · Question 17", "p3", StreamState.FOCUS, 120, 0, 0, null, false, "Complete Q17 answer"),
             WorkStream("s2", "Antigravity", "App Fix · Authentication redirect", "p4", StreamState.NEEDS_YOU, null, 0, 0, 0, false, null),
             WorkStream("s3", "Claude · Virlin", "Navigation · Route structure decision", "p1", StreamState.NEEDS_YOU, null, 0, 0, -60, true, null),
             WorkStream("s4", "Claude · Virlin", "Navigation implementation", "p1", StreamState.PROCESSING, null, 258, 0, 102, false, null),

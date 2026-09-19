@@ -1,7 +1,10 @@
 package com.virlin.app.domain.action
 
 import com.virlin.app.domain.id.IdProvider
+import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.EventType
+import com.virlin.app.domain.model.ExecutionModeResolver
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.ProjectStatus
 import com.virlin.app.domain.model.Task
@@ -9,6 +12,7 @@ import com.virlin.app.domain.model.TaskHierarchy
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamEvent
+import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.domain.repository.WorkStreamWriter
 import com.virlin.app.domain.time.VirlinClock
@@ -35,6 +39,7 @@ internal class StructureActions(
         val p = Project(
             id = r.id ?: ids.newId("proj"), title = r.title.trim(), description = r.description,
             priority = r.priority, dueAt = r.dueAt, estimatedEffort = r.estimatedEffort,
+            defaultExecutionMode = r.defaultExecutionMode,
             createdAt = now, updatedAt = now
         )
         saveProject(p)
@@ -46,12 +51,17 @@ internal class StructureActions(
         if (p.status == ProjectStatus.DONE || p.status == ProjectStatus.ARCHIVED) return@tx ActionResult.Rejected(DomainError.ProjectAlreadyDone)
         val title = u.title.applyTo(p.title)?.trim()
         if (title.isNullOrBlank()) return@tx ActionResult.Rejected(DomainError.EmptyTitle)
+        val nextDefault = u.defaultExecutionMode.applyTo(p.defaultExecutionMode) ?: p.defaultExecutionMode
+        if (nextDefault != p.defaultExecutionMode) {
+            rejectProjectDefaultIfProcessingBecomesHuman(p.id, nextDefault)?.let { return@tx it }
+        }
         val updated = p.copy(
             title = title,
             description = u.description.applyTo(p.description),
             priority = u.priority.applyTo(p.priority) ?: p.priority,
             dueAt = u.dueAt.applyTo(p.dueAt),
             estimatedEffort = u.estimatedEffort.applyTo(p.estimatedEffort),
+            defaultExecutionMode = nextDefault,
             updatedAt = clock.now()
         )
         saveProject(updated)
@@ -112,7 +122,8 @@ internal class StructureActions(
             workStreamId = workStreamId, parentTaskId = r.parentTaskId,
             order = r.order ?: (siblings.maxOfOrNull { it.order }?.plus(1) ?: 0),
             estimatedEffort = r.estimatedEffort, dueAt = r.dueAt, reminderAt = r.reminderAt,
-            priority = r.priority, createdAt = now, updatedAt = now
+            priority = r.priority, executionPreference = r.executionPreference,
+            createdAt = now, updatedAt = now
         )
         saveTask(task)
         workStreamId?.let { streamEvent(it, EventType.TASK_CREATED, now, task.id) }
@@ -130,6 +141,11 @@ internal class StructureActions(
         val effort = u.estimatedEffort.applyTo(t.estimatedEffort)
         if (effort != null && (effort.isNegative || effort.isZero)) return@tx ActionResult.Rejected(DomainError.InvalidEffort)
         val now = clock.now()
+        val nextPref = u.executionPreference.applyTo(t.executionPreference) ?: t.executionPreference
+        if (nextPref != t.executionPreference) {
+            rejectProcessingHuman(t.workStreamId, proposedTask = t.copy(executionPreference = nextPref))
+                ?.let { return@tx it }
+        }
         val status = when (u.inProgress.applyTo(t.status == TaskStatus.IN_PROGRESS)) {
             true -> TaskStatus.IN_PROGRESS; false -> TaskStatus.TODO; null -> t.status
         }
@@ -137,12 +153,103 @@ internal class StructureActions(
             title = title, description = u.description.applyTo(t.description), notes = u.notes.applyTo(t.notes),
             estimatedEffort = effort, dueAt = u.dueAt.applyTo(t.dueAt), reminderAt = u.reminderAt.applyTo(t.reminderAt),
             priority = u.priority.applyTo(t.priority) ?: t.priority, order = u.order.applyTo(t.order) ?: t.order,
-            status = status, updatedAt = now
+            status = status,
+            executionPreference = nextPref,
+            updatedAt = now
         )
         saveTask(updated)
         t.workStreamId?.let { streamEvent(it, EventType.TASK_UPDATED, now, t.id) }
         ActionResult.Success(updated)
     }
+
+    // ------------------------------------------------------------------ Execution preference
+
+    suspend fun setProjectExecutionDefault(id: String, mode: EffectiveExecutionMode): ActionResult<Project> = tx {
+        val p = getProject(id) ?: return@tx ActionResult.Rejected(DomainError.ProjectNotFound(id))
+        if (p.status == ProjectStatus.DONE || p.status == ProjectStatus.ARCHIVED) return@tx ActionResult.Rejected(DomainError.ProjectAlreadyDone)
+        if (p.defaultExecutionMode == mode) return@tx ActionResult.Success(p)
+        rejectProjectDefaultIfProcessingBecomesHuman(id, mode)?.let { return@tx it }
+        val updated = p.copy(defaultExecutionMode = mode, updatedAt = clock.now())
+        saveProject(updated)
+        ActionResult.Success(updated)
+    }
+
+    suspend fun setWorkStreamExecutionPreference(streamId: String, preference: ExecutionPreference): ActionResult<WorkStream> = tx {
+        val ws = getStream(streamId) ?: return@tx ActionResult.NotFound(streamId)
+        if (ws.state.isTerminal) return@tx ActionResult.Rejected(DomainError.StreamAlreadyDone)
+        if (preference == ExecutionPreference.INHERIT && ws.projectId == null) {
+            return@tx ActionResult.Rejected(DomainError.InheritRequiresProject)
+        }
+        if (ws.executionPreference == preference) return@tx ActionResult.Success(ws)
+        val proposed = ws.copy(executionPreference = preference)
+        rejectIfProcessingWouldBecomeHuman(proposed)?.let { return@tx it }
+        val updated = proposed.copy(updatedAt = clock.now())
+        saveStream(updated)
+        ActionResult.Success(updated)
+    }
+
+    suspend fun resetWorkStreamExecutionPreference(streamId: String): ActionResult<WorkStream> =
+        setWorkStreamExecutionPreference(streamId, ExecutionPreference.INHERIT)
+
+    suspend fun setTaskExecutionPreference(taskId: String, preference: ExecutionPreference): ActionResult<Task> = tx {
+        val t = getTask(taskId) ?: return@tx ActionResult.Rejected(DomainError.TaskNotFound(taskId))
+        if (t.status.isTerminal) return@tx ActionResult.Rejected(DomainError.TaskAlreadyClosed)
+        if (t.executionPreference == preference) return@tx ActionResult.Success(t)
+        rejectProcessingHuman(t.workStreamId, proposedTask = t.copy(executionPreference = preference))
+            ?.let { return@tx it }
+        val updated = t.copy(executionPreference = preference, updatedAt = clock.now())
+        saveTask(updated)
+        t.workStreamId?.let { streamEvent(it, EventType.TASK_UPDATED, clock.now(), t.id) }
+        ActionResult.Success(updated)
+    }
+
+    suspend fun resetTaskExecutionPreference(taskId: String): ActionResult<Task> =
+        setTaskExecutionPreference(taskId, ExecutionPreference.INHERIT)
+
+    /**
+     * If [streamId] is PROCESSING and applying overlays would make resolveCurrent HUMAN, reject.
+     */
+    private suspend fun WorkStreamWriter.rejectProcessingHuman(
+        streamId: String?,
+        proposedTask: Task? = null,
+        proposedStream: WorkStream? = null,
+        proposedProjectDefault: EffectiveExecutionMode? = null
+    ): ActionResult.Rejected? {
+        val id = streamId ?: return null
+        val ws = proposedStream ?: getStream(id) ?: return null
+        if (ws.state != WorkStreamState.PROCESSING) return null
+        val projectDefault = proposedProjectDefault
+            ?: ws.projectId?.let { getProject(it)?.defaultExecutionMode }
+        val tasks = allTasks().associateBy { it.id }.toMutableMap()
+        proposedTask?.let { tasks[it.id] = it }
+        val effective = ExecutionModeResolver.resolveCurrent(ws, tasks, projectDefault)
+        return if (effective == EffectiveExecutionMode.HUMAN)
+            ActionResult.Rejected(DomainError.CannotChangeExecutionWhileProcessing) else null
+    }
+
+    /**
+     * Project default change must not leave any PROCESSING descendant resolving HUMAN via inheritance.
+     * Explicit EXTERNAL overrides on WorkStream/Task still allow the parent change.
+     */
+    private suspend fun WorkStreamWriter.rejectProjectDefaultIfProcessingBecomesHuman(
+        projectId: String,
+        proposedDefault: EffectiveExecutionMode
+    ): ActionResult.Rejected? {
+        val tasks = allTasks().associateBy { it.id }
+        for (ws in allStreams()) {
+            if (ws.projectId != projectId || ws.state != WorkStreamState.PROCESSING) continue
+            val effective = ExecutionModeResolver.resolveCurrent(ws, tasks, proposedDefault)
+            if (effective == EffectiveExecutionMode.HUMAN) {
+                return ActionResult.Rejected(DomainError.CannotChangeExecutionWhileProcessing)
+            }
+        }
+        return null
+    }
+
+    private suspend fun WorkStreamWriter.rejectIfProcessingWouldBecomeHuman(proposed: WorkStream): ActionResult.Rejected? =
+        rejectProcessingHuman(proposed.id, proposedStream = proposed)
+
+    // ------------------------------------------------------------------ Active task
 
     suspend fun completeTask(id: String): ActionResult<Task> = close(id, TaskStatus.DONE, EventType.TASK_COMPLETED)
 
@@ -160,6 +267,13 @@ internal class StructureActions(
             // Clear — never auto-advance. Callers use nextTaskCandidate() explicitly.
             val ws = getStream(wsId)
             if (ws != null && ws.activeTaskId == t.id) {
+                // Commit the open FocusSession exactly once before clearing attribution so
+                // COMPLETE while focusing preserves invested time (same as LEAVE).
+                if (ws.state == WorkStreamState.FOCUS) {
+                    getOpenFocusSession(wsId)?.let { open ->
+                        if (open.isOpen) saveFocusSession(open.copy(endedAt = now))
+                    }
+                }
                 saveStream(ws.copy(activeTaskId = null, updatedAt = now))
                 streamEvent(wsId, EventType.ACTIVE_TASK_CLEARED, now, t.id)
             }

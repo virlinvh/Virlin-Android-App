@@ -18,7 +18,8 @@ import org.robolectric.annotation.GraphicsMode
  * Determinism notes:
  *  - [com.virlin.app.mock.MockData] seeds fixed values in its initializer, and
  *    MockTimerEngine is only started by MainActivity. Rendering NowScreen directly
- *    therefore yields a frozen, reproducible clock (focusInvestedSec = 1955 -> 32:35).
+ *    therefore yields a frozen, reproducible clock (focusInvestedSec = 0 -> 00:00).
+ *    (Previously seeded 1955/32:35; that lied before FocusSession truth and corrupted first flips.)
  *  - mainClock.autoAdvance is disabled so the screen's infinite transitions (pulsing
  *    beacons, colon fade) are pinned to frame 0 instead of sampling at random phases.
  *

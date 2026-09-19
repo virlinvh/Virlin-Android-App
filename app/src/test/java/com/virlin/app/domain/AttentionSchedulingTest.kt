@@ -6,6 +6,7 @@ import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.*
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
@@ -36,12 +37,13 @@ class AttentionSchedulingTest {
     private lateinit var actions: DefaultVirlinActions
 
     private fun ws(id: String, state: WorkStreamState, mode: WorkStreamMode = WorkStreamMode.HUMAN, active: String? = null) =
-        WorkStream(id = id, title = "T-$id", state = state, mode = mode, activeTaskId = active, createdAt = t0, updatedAt = t0)
+        WorkStream(id = id, title = "T-$id", state = state, executionPreference = mode.toPreference(), activeTaskId = active, createdAt = t0, updatedAt = t0)
 
     @Before fun setUp() {
         clock = FakeClock(t0); scheduler = FakeAttentionScheduler(); errors = mutableListOf()
         repo = SchedulingWorkStreamRepository(InMemoryWorkStreamRepository(seed = listOf(
-            ws("h", FOCUS, active = "q17"), ws("e", READY, WorkStreamMode.EXTERNAL, "nl"), ws("x", READY), ws("y", READY), ws("z", READY)
+            ws("h", FOCUS, active = "q17"), ws("e", READY, WorkStreamMode.EXTERNAL, "nl"),
+            ws("x", READY, WorkStreamMode.EXTERNAL), ws("y", READY, WorkStreamMode.EXTERNAL), ws("z", READY, WorkStreamMode.EXTERNAL)
         )), scheduler) { errors += it }
         actions = DefaultVirlinActions(repo, clock, SequentialIdProvider())
     }

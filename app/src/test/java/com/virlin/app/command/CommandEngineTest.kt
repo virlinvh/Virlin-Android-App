@@ -30,6 +30,7 @@ import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.*
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
@@ -58,7 +59,7 @@ class CommandEngineTest {
     private lateinit var engine: CommandEngine
 
     private fun ws(id: String, title: String, state: WorkStreamState, project: String?, mode: WorkStreamMode = WorkStreamMode.HUMAN, active: String? = null) =
-        WorkStream(id = id, title = title, state = state, projectId = project, mode = mode, activeTaskId = active, createdAt = t0, updatedAt = t0)
+        WorkStream(id = id, title = title, state = state, projectId = project, executionPreference = mode.toPreference(), activeTaskId = active, createdAt = t0, updatedAt = t0)
 
     @Before fun setUp() {
         clock = FakeClock(t0); scheduler = FakeAttentionScheduler()
@@ -216,12 +217,12 @@ class CommandEngineTest {
 
     @Test fun create_projectless_workstream() = runTest {
         done(Create.CreateWorkStream("Walk", project = null, mode = WorkStreamMode.HUMAN))
-        repo.streams.value.first { it.title == "Walk" }.let { assertNull(it.projectId); assertEquals(READY, it.state); assertEquals(WorkStreamMode.HUMAN, it.mode) }
+        repo.streams.value.first { it.title == "Walk" }.let { assertNull(it.projectId); assertEquals(READY, it.state); assertEquals(ExecutionPreference.HUMAN, it.executionPreference) }
     }
 
     @Test fun create_project_backed_workstream_by_project_name() = runTest {
         done(Create.CreateWorkStream("Claude Build", project = TargetRef.ByName("Virlin Android App"), mode = WorkStreamMode.EXTERNAL))
-        repo.streams.value.first { it.title == "Claude Build" }.let { assertEquals("p1", it.projectId); assertEquals(WorkStreamMode.EXTERNAL, it.mode) }
+        repo.streams.value.first { it.title == "Claude Build" }.let { assertEquals("p1", it.projectId); assertEquals(ExecutionPreference.EXTERNAL, it.executionPreference) }
     }
 
     @Test fun missing_mode_clarifies_and_choice_fills_it() = runTest {
@@ -230,13 +231,13 @@ class CommandEngineTest {
         assertEquals(listOf("HUMAN", "EXTERNAL"), c.candidates.map { it.value })
         assertTrue(repo.streams.value.none { it.title == "Claude Build" })
         engine.choose(c, "EXTERNAL")
-        assertEquals(WorkStreamMode.EXTERNAL, repo.streams.value.first { it.title == "Claude Build" }.mode)
+        assertEquals(ExecutionPreference.EXTERNAL, repo.streams.value.first { it.title == "Claude Build" }.executionPreference)
     }
 
     @Test fun mode_is_never_inferred_from_title() = runTest {
         assertTrue(engine.submit(Create.CreateWorkStream("Claude training run", mode = null)) is Outcome.Clarify)
         done(Create.CreateWorkStream("Claude training run", mode = WorkStreamMode.HUMAN))
-        assertEquals(WorkStreamMode.HUMAN, repo.streams.value.first { it.title == "Claude training run" }.mode)
+        assertEquals(ExecutionPreference.HUMAN, repo.streams.value.first { it.title == "Claude training run" }.executionPreference)
     }
 
     @Test fun create_workstream_task_standalone_task_child_task() = runTest {

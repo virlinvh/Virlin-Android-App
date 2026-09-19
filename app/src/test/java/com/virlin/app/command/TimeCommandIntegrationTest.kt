@@ -21,6 +21,7 @@ import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.*
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
@@ -68,7 +69,7 @@ class TimeCommandIntegrationTest {
     private lateinit var vm: AgentCommandViewModel
 
     private fun ws(id: String, title: String, state: WorkStreamState, project: String?, mode: WorkStreamMode = WorkStreamMode.HUMAN, active: String? = null) =
-        WorkStream(id = id, title = title, state = state, projectId = project, mode = mode, activeTaskId = active, createdAt = t0, updatedAt = t0)
+        WorkStream(id = id, title = title, state = state, projectId = project, executionPreference = mode.toPreference(), activeTaskId = active, createdAt = t0, updatedAt = t0)
     private fun local(date: LocalDate, time: LocalTime) = ZonedDateTime.of(date, time, zone).toInstant()
 
     @Before fun setUp() {

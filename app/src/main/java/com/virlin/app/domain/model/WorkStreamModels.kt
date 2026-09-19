@@ -40,11 +40,16 @@ enum class WorkStreamState {
 enum class Priority { LOW, NORMAL, HIGH }
 
 /**
- * Who does the work when the human is not looking. HUMAN streams have no independent
- * process: leaving them means READY or a timed return. EXTERNAL streams can be handed off
- * to a tool/process that keeps working (PROCESSING). Explicit — never inferred from titles.
+ * @deprecated Use [EffectiveExecutionMode]. Kept as a typealias so existing Create/command
+ * call sites that mean HUMAN/EXTERNAL continue to compile during the execution-responsibility
+ * migration. Prefer [ExecutionPreference] for stored fields and [ExecutionModeResolver] for
+ * eligibility.
  */
-enum class WorkStreamMode { HUMAN, EXTERNAL }
+@Deprecated(
+    message = "Use EffectiveExecutionMode",
+    replaceWith = ReplaceWith("EffectiveExecutionMode", "com.virlin.app.domain.model.EffectiveExecutionMode")
+)
+typealias WorkStreamMode = EffectiveExecutionMode
 
 /**
  * Why a stream is SNOOZED — decides the wording and actions when the time is due.
@@ -59,7 +64,12 @@ data class WorkStream(
     val projectId: String? = null,
     /** External tool / working context, e.g. "Claude", "Codex". */
     val tool: String? = null,
-    val mode: WorkStreamMode = WorkStreamMode.HUMAN,
+    /**
+     * Stored execution preference (INHERIT / HUMAN / EXTERNAL). Resolve with
+     * [ExecutionModeResolver] — never treat this alone as current Hand Off eligibility when
+     * an active Task may override.
+     */
+    val executionPreference: ExecutionPreference = ExecutionPreference.HUMAN,
     val state: WorkStreamState,
     val priority: Priority = Priority.NORMAL,
     val pinned: Boolean = false,

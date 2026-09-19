@@ -31,6 +31,7 @@ class AttentionAlarmReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 VirlinGraph.init(context.applicationContext)
+                VirlinGraph.ensureReady()
                 when (val v = validate(VirlinGraph.repository, streamId, kind, dueAt, VirlinGraph.clock.now())) {
                     is Verdict.Due -> {
                         // Idempotent: if the ticker/startup already surfaced it, checkDue is rejected

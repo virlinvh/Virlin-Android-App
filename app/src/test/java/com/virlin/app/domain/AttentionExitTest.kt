@@ -7,6 +7,7 @@ import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.*
 import com.virlin.app.domain.model.effectiveAttentionState
@@ -32,7 +33,7 @@ class AttentionExitTest {
 
     private fun ws(id: String, state: WorkStreamState, mode: WorkStreamMode = WorkStreamMode.HUMAN, active: String? = null,
                    checkAt: Instant? = null, processingStartedAt: Instant? = null) =
-        WorkStream(id = id, title = id, state = state, mode = mode, activeTaskId = active, checkAt = checkAt,
+        WorkStream(id = id, title = id, state = state, executionPreference = mode.toPreference(), activeTaskId = active, checkAt = checkAt,
             processingStartedAt = processingStartedAt, nextHumanAction = "next-$id", waitingFor = "wait-$id",
             lastHumanAction = "last-$id", createdAt = t0, updatedAt = t0)
 

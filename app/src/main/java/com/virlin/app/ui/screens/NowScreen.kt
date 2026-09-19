@@ -30,8 +30,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.navigation.NavController
+import com.virlin.app.debug.VirlinStartup
+import com.virlin.app.domain.StartupReadiness
+import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.mock.MockData
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.virlin.app.domain.model.FocusInvestment
 import com.virlin.app.model.StreamState
 import com.virlin.app.model.WorkStream
 import com.virlin.app.ui.components.ProcessingWave
@@ -60,8 +64,46 @@ val WorkingRowBorder = Color(0xFFE8E6F0)
 val MintFreeBg = Color(0xFFE8F6EE)
 val MintFreeBorder = Color(0xFFCEEBD9)
 
+/** Calm first-frame shell while Room hydrates — no fake Focus / Needs You from MockData. */
+@Composable
+private fun NowInitializingShell() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Pearl)
+            .padding(horizontal = 16.dp)
+    ) {
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Virlin", fontSize = 24.sp, fontWeight = FontWeight.Black, color = Charcoal)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(Color(0xFF34C759), CircleShape)
+                    )
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text("Preparing your attention…", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
+            }
+        }
+    }
+}
+
 @Composable
 fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewModel()) {
+    VirlinStartup.markOnceNow()
+    val readiness by VirlinGraph.startupReadiness.collectAsState()
+    // Until Room is READY, do not render MockData demo fixtures as if they were persisted user state.
+    if (readiness !is StartupReadiness.Ready) {
+        NowInitializingShell()
+        return
+    }
     val streams by MockData.streams.collectAsState()
     // Hierarchy (Project / WorkStream / active Task) comes from the domain, never from MockData.
     val currentFocus by nowViewModel.currentFocus.collectAsState()
@@ -297,10 +339,17 @@ fun FocusHeroCard(
             .padding(20.dp)
     ) {
         Column {
-            // Badges
+            // Badges + cumulative invested (live = prior closed sessions + current session).
+            // Split-flap stays current-session only; this metric never feeds the flap.
+            val totalInvestedSec = FocusInvestment.liveTotalSeconds(
+                stream.priorFocusInvestedSec.toLong(),
+                stream.focusInvestedSec
+            )
+            val showInvested = !external && hierarchy?.activeTaskId != null
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
             ) {
                 Row(
                     modifier = Modifier.background(Color.Black.copy(alpha=0.15f), RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 4.dp),
@@ -313,19 +362,33 @@ fun FocusHeroCard(
                     Text("CURRENT FOCUS", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.5.sp, color = Color.White)
                 }
 
-                Row(
-                    modifier = Modifier.background(Color.White.copy(alpha=0.4f), RoundedCornerShape(50)).border(1.dp, Color.White.copy(alpha=0.4f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val infiniteTransition = rememberInfiniteTransition(label = "")
-                    val alpha by infiniteTransition.animateFloat(initialValue = 0.4f, targetValue = 0.9f, animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse), label="")
-                    val scale by infiniteTransition.animateFloat(initialValue = 1.0f, targetValue = 1.15f, animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse), label="")
-                    Box(modifier = Modifier.size(8.dp), contentAlignment = Alignment.Center) {
-                        Box(modifier = Modifier.size(8.dp).scale(scale).background(Charcoal.copy(alpha=alpha), CircleShape))
-                        Box(modifier = Modifier.size(8.dp).background(Charcoal, CircleShape))
+                Column(horizontalAlignment = Alignment.End) {
+                    Row(
+                        modifier = Modifier.background(Color.White.copy(alpha=0.4f), RoundedCornerShape(50)).border(1.dp, Color.White.copy(alpha=0.4f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val infiniteTransition = rememberInfiniteTransition(label = "")
+                        val alpha by infiniteTransition.animateFloat(initialValue = 0.4f, targetValue = 0.9f, animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse), label="")
+                        val scale by infiniteTransition.animateFloat(initialValue = 1.0f, targetValue = 1.15f, animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse), label="")
+                        Box(modifier = Modifier.size(8.dp), contentAlignment = Alignment.Center) {
+                            Box(modifier = Modifier.size(8.dp).scale(scale).background(Charcoal.copy(alpha=alpha), CircleShape))
+                            Box(modifier = Modifier.size(8.dp).background(Charcoal, CircleShape))
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("FOCUS ACTIVE", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.sp, color = Charcoal)
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("FOCUS ACTIVE", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.sp, color = Charcoal)
+                    if (showInvested) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            FocusInvestment.formatInvested(totalInvestedSec),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Charcoal.copy(alpha = 0.75f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag(FocusInvestedTag)
+                        )
+                    }
                 }
             }
 
@@ -380,13 +443,16 @@ fun FocusHeroCard(
                             navController.navigate(FocusClockRoute) { launchSingleTop = true }
                         }
                 ) {
-                    SplitFlapTimer(stream.focusInvestedSec)
+                    // Key by WorkStream id so flap state never leaks across focus identity.
+                    key(stream.id) {
+                        SplitFlapTimer(stream.focusInvestedSec)
+                    }
                 }
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.size(6.dp).background(Color(0xFF047857).copy(alpha=0.6f), CircleShape))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("FOCUS INVESTED", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp, color = Charcoal.copy(alpha=0.85f))
+                    Text("CURRENT SESSION", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp, color = Charcoal.copy(alpha=0.85f))
                     Spacer(modifier = Modifier.width(6.dp))
                     Box(modifier = Modifier.size(6.dp).background(Color(0xFF047857).copy(alpha=0.6f), CircleShape))
                 }
@@ -888,6 +954,7 @@ const val FocusHandOffTag = "focus_hand_off"
 const val FocusProjectTag = "focus_project"
 const val FocusTaskTag = "focus_task"
 const val FocusCompleteTag = "focus_complete"
+const val FocusInvestedTag = "focus_invested"
 const val CompleteWorkStreamConfirmTag = "complete_workstream_confirm"
 const val CompleteWorkStreamCancelTag = "complete_workstream_cancel"
 

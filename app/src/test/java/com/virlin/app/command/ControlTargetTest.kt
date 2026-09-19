@@ -26,6 +26,7 @@ import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.FOCUS
 import com.virlin.app.domain.model.WorkStreamState.READY
@@ -62,7 +63,7 @@ class ControlTargetTest {
     }
 
     private fun ws(id: String, title: String, state: WorkStreamState = READY, project: String? = null, mode: WorkStreamMode = WorkStreamMode.HUMAN, active: String? = null) =
-        WorkStream(id = id, title = title, state = state, projectId = project, mode = mode, activeTaskId = active, createdAt = t0, updatedAt = t0)
+        WorkStream(id = id, title = title, state = state, projectId = project, executionPreference = mode.toPreference(), activeTaskId = active, createdAt = t0, updatedAt = t0)
     private fun task(id: String, title: String, stream: String?, project: String? = null, parent: String? = null, status: TaskStatus = TaskStatus.TODO) =
         Task(id = id, title = title, projectId = project, workStreamId = stream, parentTaskId = parent, status = status, createdAt = t0, updatedAt = t0)
 

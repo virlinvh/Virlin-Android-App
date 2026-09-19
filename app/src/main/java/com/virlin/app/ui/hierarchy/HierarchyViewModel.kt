@@ -7,6 +7,9 @@ import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.domain.action.ActionResult
 import com.virlin.app.domain.action.CreateTask
 import com.virlin.app.domain.action.VirlinActions
+import com.virlin.app.domain.model.EffectiveExecutionMode
+import com.virlin.app.domain.model.ExecutionPreference
+import com.virlin.app.domain.model.FocusInvestment
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStream
@@ -81,10 +84,9 @@ class HierarchyViewModel(
     /** Human focus attributed to this task, derived from FocusSession timestamps. */
     suspend fun focusedOn(task: Task): Duration? {
         val wsId = task.workStreamId ?: return null
-        val sessions = repository.getFocusSessions(wsId).filter { it.taskId == task.id }
-        if (sessions.isEmpty()) return null
-        val now = VirlinGraph.clock.now()
-        return sessions.fold(Duration.ZERO) { acc, s -> acc.plus(s.duration(now)) }
+        val sessions = repository.getFocusSessions(wsId)
+        val total = FocusInvestment.total(sessions, task.id, VirlinGraph.clock.now())
+        return total.takeIf { !it.isZero && !it.isNegative }
     }
 
     suspend fun nextCandidate(streamId: String): Task? = actions.nextTaskCandidate(streamId).let {
@@ -113,6 +115,21 @@ class HierarchyViewModel(
             if (r is ActionResult.Success) expanded.update { it + parentId }
         }
     }
+
+    fun setProjectExecutionDefault(projectId: String, mode: EffectiveExecutionMode) =
+        dispatch("setProjectExecutionDefault") { actions.setProjectExecutionDefault(projectId, mode) }
+
+    fun setWorkStreamExecutionPreference(streamId: String, preference: ExecutionPreference) =
+        dispatch("setWorkStreamExecutionPreference") { actions.setWorkStreamExecutionPreference(streamId, preference) }
+
+    fun resetWorkStreamExecutionPreference(streamId: String) =
+        dispatch("resetWorkStreamExecutionPreference") { actions.resetWorkStreamExecutionPreference(streamId) }
+
+    fun setTaskExecutionPreference(taskId: String, preference: ExecutionPreference) =
+        dispatch("setTaskExecutionPreference") { actions.setTaskExecutionPreference(taskId, preference) }
+
+    fun resetTaskExecutionPreference(taskId: String) =
+        dispatch("resetTaskExecutionPreference") { actions.resetTaskExecutionPreference(taskId) }
 
     private fun dispatch(name: String, block: suspend () -> ActionResult<*>) {
         viewModelScope.launch {

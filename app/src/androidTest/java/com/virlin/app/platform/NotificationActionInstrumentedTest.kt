@@ -43,7 +43,8 @@ class NotificationActionInstrumentedTest {
     private fun active(id: String) = nm.activeNotifications.firstOrNull { it.id == AttentionNotifications.notificationId(id) }
 
     @Before fun setUp() {
-        VirlinGraph.init(ctx); VirlinGraph.start()
+        VirlinGraph.init(ctx)
+        runBlocking { VirlinGraph.ensureReady() }
         nm.cancelAll()
         runBlocking {
             listOf("s1", "s2", "s7", "s10").forEach { VirlinGraph.actions.leaveFocus(it); VirlinGraph.actions.markReady(it) }

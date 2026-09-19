@@ -2,9 +2,11 @@ package com.virlin.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -20,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
@@ -30,6 +33,15 @@ import com.virlin.app.ui.theme.*
 
 /** Test hook: the Streams lazy list (lets tests scroll a row into composition). */
 const val StreamsListTag = "streams_list"
+
+/** Horizontal Streams filter rail (All · Projects · Need You · Processing · Ready). */
+const val StreamsFilterRailTag = "streams_filter_rail"
+
+private val StreamsFilters = listOf("All", "Projects", "Need You", "Processing", "Ready")
+
+fun streamsFilterTag(label: String) =
+    "streams_filter_${label.lowercase().replace(' ', '_')}"
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,22 +102,11 @@ fun StreamsScreen(navController: NavController) {
         
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Restrained filter row. Projects live INSIDE Streams — never a fourth nav destination.
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("All", "Projects", "Need You", "Processing", "Ready").forEach { f ->
-                val sel = f == filter
-                Text(
-                    f, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 0.4.sp,
-                    color = if (sel) Color.White else CharcoalMuted,
-                    modifier = Modifier
-                        .background(if (sel) Charcoal else Color.White, RoundedCornerShape(50))
-                        .testTag("streams_filter_${f.lowercase().replace(' ', '_')}")
-                        .clickable { filter = f }
-                        .semantics { contentDescription = "$f filter"; selected = sel }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                )
-            }
-        }
+        // Horizontal filter rail: chips own content width; viewport scrolls — never compress labels.
+        StreamsFilterRail(
+            filter = filter,
+            onFilterSelected = { filter = it }
+        )
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -160,6 +161,48 @@ fun StreamsScreen(navController: NavController) {
                 items(blocked) { stream -> StreamRow(stream, navController) }
             }
             item { Spacer(modifier = Modifier.height(88.dp)) }
+        }
+    }
+}
+
+/**
+ * Streams filter rail. Chips keep intrinsic width (`maxLines = 1`, `softWrap = false`);
+ * the row viewport owns horizontal scrolling — never compress labels into the screen width.
+ * Projects live INSIDE Streams — never a fourth nav destination.
+ */
+@Composable
+fun StreamsFilterRail(
+    filter: String,
+    onFilterSelected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .testTag(StreamsFilterRailTag)
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        StreamsFilters.forEach { f ->
+            val sel = f == filter
+            Text(
+                text = f,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.4.sp,
+                color = if (sel) Color.White else CharcoalMuted,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier
+                    .background(if (sel) Charcoal else Color.White, RoundedCornerShape(50))
+                    .testTag(streamsFilterTag(f))
+                    .clickable { onFilterSelected(f) }
+                    .semantics { contentDescription = "$f filter"; selected = sel }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
         }
     }
 }
