@@ -6,6 +6,7 @@ import com.virlin.app.domain.action.DefaultVirlinActions
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
 import com.virlin.app.ui.screens.AttentionKind
@@ -42,7 +43,7 @@ class NowAttentionExitTest {
         clock = FakeClock(t0)
         repo = InMemoryWorkStreamRepository(seed = listOf(
             WorkStream("s1", "Psychology", state = WorkStreamState.FOCUS, activeTaskId = "q17", createdAt = t0, updatedAt = t0),
-            WorkStream("s4", "Antigravity", state = WorkStreamState.PROCESSING, mode = WorkStreamMode.EXTERNAL, activeTaskId = "nl",
+            WorkStream("s4", "Antigravity", state = WorkStreamState.PROCESSING, executionPreference = ExecutionPreference.EXTERNAL, activeTaskId = "nl",
                 checkAt = t0.plusSeconds(30), processingStartedAt = t0, createdAt = t0, updatedAt = t0)
         ))
         vm = NowViewModel(DefaultVirlinActions(repo, clock, SequentialIdProvider()), clock, repo)
