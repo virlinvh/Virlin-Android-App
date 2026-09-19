@@ -27,6 +27,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 VirlinGraph.init(context.applicationContext)
+                VirlinGraph.ensureReady()
                 val outcome = NotificationActionHandler.execute(
                     VirlinGraph.repository, VirlinGraph.actions, streamId, kind, action, VirlinGraph.clock.now()
                 )

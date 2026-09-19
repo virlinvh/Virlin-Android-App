@@ -95,18 +95,57 @@ interface MetaDao {
     @Query("SELECT value FROM meta WHERE `key` = :key") suspend fun get(key: String): String?
 }
 
+@Dao
+interface NoteDocumentDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(n: NoteDocumentEntity)
+    @Query("SELECT * FROM note_documents WHERE id = :id") suspend fun byId(id: String): NoteDocumentEntity?
+    @Query("SELECT * FROM note_documents WHERE captureItemId = :captureItemId") suspend fun byCaptureId(captureItemId: String): NoteDocumentEntity?
+    @Query("SELECT COUNT(*) FROM note_documents") suspend fun count(): Int
+}
+
+@Dao
+interface PromptDocumentDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(p: PromptDocumentEntity)
+    @Query("SELECT * FROM prompt_documents WHERE id = :id") suspend fun byId(id: String): PromptDocumentEntity?
+    @Query("SELECT * FROM prompt_documents WHERE captureItemId = :captureItemId") suspend fun byCaptureId(captureItemId: String): PromptDocumentEntity?
+    @Query("SELECT COUNT(*) FROM prompt_documents") suspend fun count(): Int
+}
+
+@Dao
+interface AttachmentDocumentDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(a: AttachmentDocumentEntity)
+    @Query("SELECT * FROM attachment_documents WHERE id = :id") suspend fun byId(id: String): AttachmentDocumentEntity?
+    @Query("SELECT * FROM attachment_documents WHERE captureItemId = :captureItemId") suspend fun byCaptureId(captureItemId: String): AttachmentDocumentEntity?
+    @Query("SELECT COUNT(*) FROM attachment_documents") suspend fun count(): Int
+}
+
+@Dao
+interface VoiceDocumentDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(v: VoiceDocumentEntity)
+    @Query("SELECT * FROM voice_documents WHERE id = :id") suspend fun byId(id: String): VoiceDocumentEntity?
+    @Query("SELECT * FROM voice_documents WHERE captureItemId = :captureItemId") suspend fun byCaptureId(captureItemId: String): VoiceDocumentEntity?
+    @Query("SELECT COUNT(*) FROM voice_documents") suspend fun count(): Int
+}
+
 /**
  * Virlin's durable schema. v1 (Pass 5): projects, workstreams, tasks, cycles, focus_sessions,
- * context_snapshots, events, meta. v2 (Pass 10): + captures. Every version change ships an
- * explicit [Migration] proven by `VirlinMigrationTest`; there is NO destructive fallback.
+ * context_snapshots, events, meta. v2 (Pass 10): + captures. v3: execution responsibility
+ * (Project.defaultExecutionMode, WorkStream.executionPreference replacing mode,
+ * Task.executionPreference). v4: + note_documents (Capture Text Note block documents).
+ * v5: + prompt_documents (Capture Prompt documents).
+ * v6: + attachment_documents (Capture File/Image metadata; bytes in managed files).
+ * v7: + voice_documents (Capture Voice notes; clip audio in managed files).
+ * Every version change ships an explicit [Migration] proven by `VirlinMigrationTest`;
+ * there is NO destructive fallback.
  */
 @Database(
     entities = [
         ProjectEntity::class, WorkStreamEntity::class, TaskEntity::class, CycleEntity::class,
         FocusSessionEntity::class, ContextSnapshotEntity::class, EventEntity::class, MetaEntity::class,
-        CaptureEntity::class
+        CaptureEntity::class, NoteDocumentEntity::class, PromptDocumentEntity::class,
+        AttachmentDocumentEntity::class, VoiceDocumentEntity::class
     ],
-    version = 2,
+    version = 7,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
@@ -120,6 +159,10 @@ abstract class VirlinDatabase : RoomDatabase() {
     abstract fun events(): EventDao
     abstract fun meta(): MetaDao
     abstract fun captures(): CaptureDao
+    abstract fun noteDocuments(): NoteDocumentDao
+    abstract fun promptDocuments(): PromptDocumentDao
+    abstract fun attachmentDocuments(): AttachmentDocumentDao
+    abstract fun voiceDocuments(): VoiceDocumentDao
 
     companion object {
         const val NAME = "virlin.db"
@@ -139,7 +182,92 @@ abstract class VirlinDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_captures_taskId` ON `captures` (`taskId`)")
             }
         }
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2)
+        /**
+         * v2 → v3: additive execution-responsibility columns.
+         * - projects.defaultExecutionMode = HUMAN for all existing rows
+         * - workstreams.mode → executionPreference (HUMAN/EXTERNAL preserved as explicit)
+         * - tasks.executionPreference = INHERIT for all existing rows
+         */
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `projects` ADD COLUMN `defaultExecutionMode` TEXT NOT NULL DEFAULT 'HUMAN'")
+
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `workstreams_new` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `projectId` TEXT, `tool` TEXT, " +
+                        "`executionPreference` TEXT NOT NULL, `state` TEXT NOT NULL, `priority` TEXT NOT NULL, `pinned` INTEGER NOT NULL, " +
+                        "`lastHumanAction` TEXT, `waitingFor` TEXT, `nextHumanAction` TEXT, `blockerReason` TEXT, " +
+                        "`processingStartedAt` INTEGER, `checkAt` INTEGER, `snoozedUntil` INTEGER, `snoozeReason` TEXT, " +
+                        "`currentCycleId` TEXT, `cycleCount` INTEGER NOT NULL, `activeTaskId` TEXT, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `completedAt` INTEGER, PRIMARY KEY(`id`))"
+                )
+                db.execSQL(
+                    "INSERT INTO `workstreams_new` (`id`,`title`,`projectId`,`tool`,`executionPreference`,`state`,`priority`,`pinned`," +
+                        "`lastHumanAction`,`waitingFor`,`nextHumanAction`,`blockerReason`,`processingStartedAt`,`checkAt`,`snoozedUntil`," +
+                        "`snoozeReason`,`currentCycleId`,`cycleCount`,`activeTaskId`,`createdAt`,`updatedAt`,`completedAt`) " +
+                        "SELECT `id`,`title`,`projectId`,`tool`,`mode`,`state`,`priority`,`pinned`," +
+                        "`lastHumanAction`,`waitingFor`,`nextHumanAction`,`blockerReason`,`processingStartedAt`,`checkAt`,`snoozedUntil`," +
+                        "`snoozeReason`,`currentCycleId`,`cycleCount`,`activeTaskId`,`createdAt`,`updatedAt`,`completedAt` FROM `workstreams`"
+                )
+                db.execSQL("DROP TABLE `workstreams`")
+                db.execSQL("ALTER TABLE `workstreams_new` RENAME TO `workstreams`")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_workstreams_projectId` ON `workstreams` (`projectId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_workstreams_state` ON `workstreams` (`state`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_workstreams_checkAt` ON `workstreams` (`checkAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_workstreams_activeTaskId` ON `workstreams` (`activeTaskId`)")
+
+                db.execSQL("ALTER TABLE `tasks` ADD COLUMN `executionPreference` TEXT NOT NULL DEFAULT 'INHERIT'")
+            }
+        }
+
+        /** v3 → v4: additive note_documents for Capture Text Note block documents. */
+        val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `note_documents` (`id` TEXT NOT NULL, `captureItemId` TEXT NOT NULL, " +
+                        "`title` TEXT, `documentJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`id`))"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_note_documents_captureItemId` ON `note_documents` (`captureItemId`)")
+            }
+        }
+
+        /** v4 → v5: additive prompt_documents for Capture Prompt documents. */
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `prompt_documents` (`id` TEXT NOT NULL, `captureItemId` TEXT NOT NULL, " +
+                        "`title` TEXT, `description` TEXT, `tagsJson` TEXT NOT NULL, `documentJson` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_prompt_documents_captureItemId` ON `prompt_documents` (`captureItemId`)")
+            }
+        }
+
+        /** v5 → v6: additive attachment_documents for Capture File/Image metadata. */
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `attachment_documents` (`id` TEXT NOT NULL, `captureItemId` TEXT NOT NULL, " +
+                        "`displayName` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `sizeBytes` INTEGER NOT NULL, " +
+                        "`relativePath` TEXT NOT NULL, `kind` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_attachment_documents_captureItemId` ON `attachment_documents` (`captureItemId`)")
+            }
+        }
+
+        /** v6 → v7: additive voice_documents for Capture Voice notes. */
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `voice_documents` (`id` TEXT NOT NULL, `captureItemId` TEXT NOT NULL, " +
+                        "`title` TEXT, `clipsJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_voice_documents_captureItemId` ON `voice_documents` (`captureItemId`)")
+            }
+        }
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

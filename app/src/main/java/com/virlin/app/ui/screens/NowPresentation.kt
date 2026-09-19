@@ -1,10 +1,10 @@
 package com.virlin.app.ui.screens
 
+import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStream
-import com.virlin.app.domain.model.WorkStreamMode
 import com.virlin.app.domain.model.WorkStreamState
 
 /**
@@ -24,7 +24,7 @@ data class CurrentFocusProjection(
     val activeTaskTitle: String?,
     val nextHumanAction: String?,
     val state: WorkStreamState,
-    /** From `WorkStream.mode` — decides LEAVE/COMPLETE vs LEAVE/HAND OFF. Never from the title. */
+    /** From effective execution of deepest active node — decides LEAVE/COMPLETE vs LEAVE/HAND OFF. */
     val isExternal: Boolean = false
 )
 
@@ -59,7 +59,8 @@ object NowPresentation {
             activeTaskTitle = task?.title,
             nextHumanAction = stream.nextHumanAction?.takeIf { it.isNotBlank() },
             state = stream.state,
-            isExternal = stream.mode == WorkStreamMode.EXTERNAL
+            isExternal = ExecutionModeResolver.resolveCurrent(stream, projects, tasks) ==
+                com.virlin.app.domain.model.EffectiveExecutionMode.EXTERNAL
         )
     }
 

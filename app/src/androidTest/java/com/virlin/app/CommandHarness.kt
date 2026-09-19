@@ -34,6 +34,7 @@ class CommandHarness {
     @Test fun proof_A_to_G() = runBlocking {
         org.junit.Assume.assumeTrue("manual harness — pass -e harness true", InstrumentationRegistry.getArguments().getString("harness") == "true")
         VirlinGraph.init(InstrumentationRegistry.getInstrumentation().targetContext)
+        VirlinGraph.ensureReady()
         val e = VirlinGraph.commands
         fun out(o: Outcome) = when (o) {
             is Outcome.Done -> when (val r = o.result) { is CommandResult.Executed -> "Executed: ${r.summary}"; is CommandResult.Answered -> "Answered: ${r.result}"; is CommandResult.Rejected -> "Rejected: ${r.reason}"; is CommandResult.Failed -> "Failed: ${r.reason}"; is CommandResult.Navigate -> "Navigate: ${r.destination}" }

@@ -26,7 +26,14 @@ const val InboxScreenTag = "inbox_screen"
  * capture domain as the Agent's CAPTURE area. Quick capture stays in the Agent (Orb → CAPTURE).
  */
 @Composable
-fun InboxScreen(vm: AgentCaptureViewModel) {
+fun InboxScreen(
+    vm: AgentCaptureViewModel,
+    onOpenTextNote: ((captureId: String?) -> Unit)? = null,
+    onOpenPrompt: ((captureId: String?) -> Unit)? = null,
+    onOpenLink: ((captureId: String?) -> Unit)? = null,
+    onOpenFile: ((captureId: String?) -> Unit)? = null,
+    onOpenVoice: ((captureId: String?) -> Unit)? = null
+) {
     Column(
         modifier = Modifier.fillMaxSize().background(Pearl).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).testTag(InboxScreenTag)
     ) {
@@ -34,7 +41,7 @@ fun InboxScreen(vm: AgentCaptureViewModel) {
         Text("Inbox", style = Typography.titleLarge, color = Charcoal)
         Text("Captured, not yet organized · save more from the Orb", fontSize = 12.sp, color = CharcoalMuted)
         Spacer(Modifier.height(12.dp))
-        CaptureInbox(vm)
+        CaptureInbox(vm, onOpenTextNote = onOpenTextNote, onOpenPrompt = onOpenPrompt, onOpenLink = onOpenLink, onOpenFile = onOpenFile, onOpenVoice = onOpenVoice)
         Spacer(Modifier.height(88.dp))
     }
 }

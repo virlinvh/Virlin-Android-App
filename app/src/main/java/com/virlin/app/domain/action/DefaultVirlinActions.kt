@@ -3,7 +3,10 @@ package com.virlin.app.domain.action
 import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.EventType
+import com.virlin.app.domain.model.ExecutionModeResolver
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
@@ -35,6 +38,10 @@ class DefaultVirlinActions(
 
     private val structure = StructureActions(repository, clock, ids)
     private val capture = CaptureActions(repository, clock, ids, structure)
+    private val notes = NoteActions(repository, clock, ids, capture)
+    private val prompts = PromptActions(repository, clock, ids, capture)
+    private val attachments = AttachmentActions(repository, clock, ids, capture)
+    private val voices = VoiceActions(repository, clock, ids, capture)
 
     // ------------------------------------------------------------------ Structure (delegated)
     override suspend fun createProject(request: CreateProject) = structure.createProject(request)
@@ -44,22 +51,119 @@ class DefaultVirlinActions(
         repository.transaction {
             if (request.title.isBlank()) return@transaction ActionResult.Rejected(DomainError.EmptyTitle)
             request.projectId?.let { pid -> getProject(pid) ?: return@transaction ActionResult.Rejected(DomainError.ProjectNotFound(pid)) }
+            if (request.executionPreference == ExecutionPreference.INHERIT && request.projectId == null) {
+                return@transaction ActionResult.Rejected(DomainError.InheritRequiresProject)
+            }
             val now = clock.now()
             val stream = WorkStream(
                 id = request.id ?: ids.newId("ws"), title = request.title.trim(), projectId = request.projectId,
-                tool = request.tool?.takeIf { it.isNotBlank() }, mode = request.mode, state = READY,
+                tool = request.tool?.takeIf { it.isNotBlank() },
+                executionPreference = request.executionPreference, state = READY,
                 priority = request.priority, nextHumanAction = request.nextHumanAction?.takeIf { it.isNotBlank() },
                 createdAt = now, updatedAt = now
             )
             saveStream(stream)
-            event(stream, EventType.STREAM_CREATED, now, to = READY, cycleId = null, detail = request.mode.name)
+            event(stream, EventType.STREAM_CREATED, now, to = READY, cycleId = null, detail = request.executionPreference.name)
             ActionResult.Success(stream)
         }
     } catch (e: Exception) { ActionResult.Failure(e) }
 
+    override suspend fun setProjectExecutionDefault(projectId: String, mode: EffectiveExecutionMode) =
+        structure.setProjectExecutionDefault(projectId, mode)
+    override suspend fun setWorkStreamExecutionPreference(streamId: String, preference: ExecutionPreference) =
+        structure.setWorkStreamExecutionPreference(streamId, preference)
+    override suspend fun resetWorkStreamExecutionPreference(streamId: String) =
+        structure.resetWorkStreamExecutionPreference(streamId)
+    override suspend fun setTaskExecutionPreference(taskId: String, preference: ExecutionPreference) =
+        structure.setTaskExecutionPreference(taskId, preference)
+    override suspend fun resetTaskExecutionPreference(taskId: String) =
+        structure.resetTaskExecutionPreference(taskId)
+
     override suspend fun createCapture(request: CreateCapture) = capture.createCapture(request)
     override suspend fun updateCapture(id: String, update: CaptureUpdate) = capture.updateCapture(id, update)
     override suspend fun attachCapture(id: String, context: CaptureContext) = capture.attachCapture(id, context)
+
+    override suspend fun createTextNote(
+        title: String?,
+        blocks: List<com.virlin.app.domain.model.NoteBlock>,
+        context: CaptureContext,
+        captureId: String?,
+        noteId: String?
+    ) = notes.createTextNote(title, blocks, context, captureId, noteId)
+
+    override suspend fun saveTextNote(
+        captureItemId: String,
+        title: String?,
+        blocks: List<com.virlin.app.domain.model.NoteBlock>
+    ) = notes.saveTextNote(captureItemId, title, blocks)
+
+    override suspend fun getOrHydrateTextNote(captureItemId: String) = notes.getOrHydrateTextNote(captureItemId)
+
+    override suspend fun getNoteByCaptureId(captureItemId: String) = notes.getNoteDocumentByCaptureId(captureItemId)
+
+    override suspend fun createPrompt(
+        title: String?,
+        description: String?,
+        tags: List<String>,
+        blocks: List<com.virlin.app.domain.model.NoteBlock>,
+        context: CaptureContext,
+        captureId: String?,
+        promptId: String?
+    ) = prompts.createPrompt(title, description, tags, blocks, context, captureId, promptId)
+
+    override suspend fun savePrompt(
+        captureItemId: String,
+        title: String?,
+        description: String?,
+        tags: List<String>,
+        blocks: List<com.virlin.app.domain.model.NoteBlock>
+    ) = prompts.savePrompt(captureItemId, title, description, tags, blocks)
+
+    override suspend fun getOrHydratePrompt(captureItemId: String) = prompts.getOrHydratePrompt(captureItemId)
+
+    override suspend fun getPromptByCaptureId(captureItemId: String) =
+        prompts.getPromptDocumentByCaptureId(captureItemId)
+
+    override suspend fun createAttachment(
+        displayName: String,
+        mimeType: String,
+        sizeBytes: Long,
+        relativePath: String,
+        kind: com.virlin.app.domain.model.AttachmentKind,
+        context: CaptureContext,
+        captureId: String?,
+        attachmentId: String?
+    ) = attachments.createAttachment(displayName, mimeType, sizeBytes, relativePath, kind, context, captureId, attachmentId)
+
+    override suspend fun saveAttachment(
+        captureItemId: String,
+        displayName: String,
+        mimeType: String,
+        sizeBytes: Long,
+        relativePath: String,
+        kind: com.virlin.app.domain.model.AttachmentKind
+    ) = attachments.saveAttachment(captureItemId, displayName, mimeType, sizeBytes, relativePath, kind)
+
+    override suspend fun getAttachmentByCaptureId(captureItemId: String) =
+        attachments.getAttachmentByCaptureId(captureItemId)
+
+    override suspend fun createVoice(
+        title: String?,
+        clips: List<com.virlin.app.domain.model.VoiceClip>,
+        context: CaptureContext,
+        captureId: String?,
+        voiceId: String?
+    ) = voices.createVoice(title, clips, context, captureId, voiceId)
+
+    override suspend fun saveVoice(
+        captureItemId: String,
+        title: String?,
+        clips: List<com.virlin.app.domain.model.VoiceClip>
+    ) = voices.saveVoice(captureItemId, title, clips)
+
+    override suspend fun getVoiceByCaptureId(captureItemId: String) =
+        voices.getVoiceByCaptureId(captureItemId)
+
     override suspend fun archiveCapture(id: String) = capture.archiveCapture(id)
     override suspend fun restoreCapture(id: String) = capture.restoreCapture(id)
     override suspend fun convertCaptureToTask(id: String, target: CaptureTaskTarget) = capture.convertCaptureToTask(id, target)
@@ -125,6 +229,12 @@ class DefaultVirlinActions(
         streamId: String, waitingFor: String?, nextHumanAction: String?, checkAt: Instant?
     ): ActionResult<WorkStream> = run(streamId) { stream ->
         if (stream.state != FOCUS) return@run ActionResult.Rejected(DomainError.NotInFocus)
+        val projectDefault = stream.projectId?.let { getProject(it)?.defaultExecutionMode }
+        val tasksById = allTasks().associateBy { it.id }
+        val effective = ExecutionModeResolver.resolveCurrent(stream, tasksById, projectDefault)
+        if (effective != EffectiveExecutionMode.EXTERNAL) {
+            return@run ActionResult.Rejected(DomainError.NotExternalExecution)
+        }
         requireTransition(stream, PROCESSING)?.let { return@run it }
 
         val now = clock.now()

@@ -5,17 +5,22 @@ import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.EventType
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.FocusSession
+import com.virlin.app.domain.model.NoteDocument
 import com.virlin.app.domain.model.Priority
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.ProjectStatus
+import com.virlin.app.domain.model.AttachmentDocument
+import com.virlin.app.domain.model.AttachmentKind
+import com.virlin.app.domain.model.PromptDocument
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamEvent
-import com.virlin.app.domain.model.WorkStreamMode
 import com.virlin.app.domain.model.WorkStreamState
 
 /**
@@ -24,18 +29,27 @@ import com.virlin.app.domain.model.WorkStreamState
  */
 object VirlinMappers {
 
-    fun Project.toEntity() = ProjectEntity(id, title, description, status.name, priority.name, dueAt, estimatedEffort, createdAt, updatedAt, completedAt)
-    fun ProjectEntity.toDomain() = Project(id, title, description, ProjectStatus.valueOf(status), Priority.valueOf(priority), dueAt, estimatedEffort, createdAt, updatedAt, completedAt)
+    fun Project.toEntity() = ProjectEntity(
+        id, title, description, status.name, priority.name, dueAt, estimatedEffort,
+        defaultExecutionMode.name, createdAt, updatedAt, completedAt
+    )
+    fun ProjectEntity.toDomain() = Project(
+        id, title, description, ProjectStatus.valueOf(status), Priority.valueOf(priority),
+        dueAt, estimatedEffort, EffectiveExecutionMode.valueOf(defaultExecutionMode),
+        createdAt, updatedAt, completedAt
+    )
 
     fun WorkStream.toEntity() = WorkStreamEntity(
-        id = id, title = title, projectId = projectId, tool = tool, mode = mode.name, state = state.name,
+        id = id, title = title, projectId = projectId, tool = tool,
+        executionPreference = executionPreference.name, state = state.name,
         priority = priority.name, pinned = pinned, lastHumanAction = lastHumanAction, waitingFor = waitingFor,
         nextHumanAction = nextHumanAction, blockerReason = blockerReason, processingStartedAt = processingStartedAt,
         checkAt = checkAt, snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.name, currentCycleId = currentCycleId,
         cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
     )
     fun WorkStreamEntity.toDomain() = WorkStream(
-        id = id, title = title, projectId = projectId, tool = tool, mode = WorkStreamMode.valueOf(mode),
+        id = id, title = title, projectId = projectId, tool = tool,
+        executionPreference = ExecutionPreference.valueOf(executionPreference),
         state = WorkStreamState.valueOf(state), priority = Priority.valueOf(priority), pinned = pinned,
         lastHumanAction = lastHumanAction, waitingFor = waitingFor, nextHumanAction = nextHumanAction,
         blockerReason = blockerReason, processingStartedAt = processingStartedAt, checkAt = checkAt,
@@ -48,12 +62,14 @@ object VirlinMappers {
         id = id, title = title, description = description, projectId = projectId, workStreamId = workStreamId,
         parentTaskId = parentTaskId, status = status.name, order = order, estimatedEffort = estimatedEffort,
         dueAt = dueAt, reminderAt = reminderAt, priority = priority.name, notes = notes,
+        executionPreference = executionPreference.name,
         createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
     )
     fun TaskEntity.toDomain() = Task(
         id = id, title = title, description = description, projectId = projectId, workStreamId = workStreamId,
         parentTaskId = parentTaskId, status = TaskStatus.valueOf(status), order = order, estimatedEffort = estimatedEffort,
         dueAt = dueAt, reminderAt = reminderAt, priority = Priority.valueOf(priority), notes = notes,
+        executionPreference = ExecutionPreference.valueOf(executionPreference),
         createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
     )
 
@@ -66,6 +82,90 @@ object VirlinMappers {
         id = id, type = CaptureType.valueOf(type), content = content, title = title, sourceUrl = sourceUrl, projectId = projectId,
         workStreamId = workStreamId, taskId = taskId, status = CaptureStatus.valueOf(status), convertedTaskId = convertedTaskId,
         createdAt = createdAt, updatedAt = updatedAt, archivedAt = archivedAt
+    )
+
+    fun NoteDocument.toEntity() = NoteDocumentEntity(
+        id = id,
+        captureItemId = captureItemId,
+        title = title,
+        documentJson = com.virlin.app.domain.note.NoteDocumentCodec.encodePayload(blocks),
+        createdAt = createdAt,
+        updatedAt = updatedAt
+    )
+
+    fun NoteDocumentEntity.toDomain() = com.virlin.app.domain.note.NoteDocumentCodec.decodeInto(
+        com.virlin.app.domain.note.NoteDocumentCodec.NoteDocumentMeta(
+            id = id, captureItemId = captureItemId, title = title, createdAt = createdAt, updatedAt = updatedAt
+        ),
+        documentJson
+    )
+
+    fun PromptDocument.toEntity() = PromptDocumentEntity(
+        id = id,
+        captureItemId = captureItemId,
+        title = title,
+        description = description,
+        tagsJson = com.virlin.app.domain.prompt.PromptDocumentCodec.encodeTags(tags),
+        documentJson = com.virlin.app.domain.prompt.PromptDocumentCodec.encodeBlocks(blocks),
+        createdAt = createdAt,
+        updatedAt = updatedAt
+    )
+
+    fun PromptDocumentEntity.toDomain() = com.virlin.app.domain.prompt.PromptDocumentCodec.decodeInto(
+        com.virlin.app.domain.prompt.PromptDocumentCodec.Meta(
+            id = id,
+            captureItemId = captureItemId,
+            title = title,
+            description = description,
+            tagsJson = tagsJson,
+            createdAt = createdAt,
+            updatedAt = updatedAt
+        ),
+        documentJson
+    )
+
+    fun AttachmentDocument.toEntity() = AttachmentDocumentEntity(
+        id = id,
+        captureItemId = captureItemId,
+        displayName = displayName,
+        mimeType = mimeType,
+        sizeBytes = sizeBytes,
+        relativePath = relativePath,
+        kind = kind.name,
+        createdAt = createdAt,
+        updatedAt = updatedAt
+    )
+
+    fun AttachmentDocumentEntity.toDomain() = AttachmentDocument(
+        id = id,
+        captureItemId = captureItemId,
+        displayName = displayName,
+        mimeType = mimeType,
+        sizeBytes = sizeBytes,
+        relativePath = relativePath,
+        kind = runCatching { AttachmentKind.valueOf(kind) }.getOrDefault(AttachmentKind.UNSUPPORTED),
+        createdAt = createdAt,
+        updatedAt = updatedAt
+    )
+
+    fun com.virlin.app.domain.model.VoiceDocument.toEntity() = VoiceDocumentEntity(
+        id = id,
+        captureItemId = captureItemId,
+        title = title,
+        clipsJson = com.virlin.app.domain.voice.VoiceDocumentCodec.encodeClips(clips),
+        createdAt = createdAt,
+        updatedAt = updatedAt
+    )
+
+    fun VoiceDocumentEntity.toDomain() = com.virlin.app.domain.voice.VoiceDocumentCodec.decodeInto(
+        com.virlin.app.domain.voice.VoiceDocumentCodec.Meta(
+            id = id,
+            captureItemId = captureItemId,
+            title = title,
+            createdAt = createdAt,
+            updatedAt = updatedAt
+        ),
+        clipsJson
     )
 
     fun Cycle.toEntity(seq: Long) = CycleEntity(id, workStreamId, number, startedAt, handedOffAt, endedAt, seq)
@@ -81,8 +181,11 @@ object VirlinMappers {
         id, workStreamId, cycleId, createdAt, WorkStreamState.valueOf(reason), lastHumanAction, waitingFor, nextHumanAction, checkAt, contextLabel, note, taskId
     )
 
-    fun WorkStreamEvent.toEntity(seq: Long) = EventEntity(id, workStreamId, type.name, at, cycleId, fromState?.name, toState?.name, detail, seq)
+    fun WorkStreamEvent.toEntity(seq: Long) = EventEntity(
+        id, workStreamId, type.name, at, cycleId, fromState?.name, toState?.name, detail, seq
+    )
     fun EventEntity.toDomain() = WorkStreamEvent(
-        id, workStreamId, EventType.valueOf(type), at, cycleId, fromState?.let(WorkStreamState::valueOf), toState?.let(WorkStreamState::valueOf), detail
+        id, workStreamId, EventType.valueOf(type), at, cycleId,
+        fromState?.let(WorkStreamState::valueOf), toState?.let(WorkStreamState::valueOf), detail
     )
 }

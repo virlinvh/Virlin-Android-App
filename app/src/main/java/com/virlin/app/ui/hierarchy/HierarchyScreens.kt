@@ -23,6 +23,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.virlin.app.domain.model.EffectiveExecutionMode
+import com.virlin.app.domain.model.ExecutionModeResolver
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
@@ -81,6 +84,16 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
                 project.dueAt?.let { "Due ${DueFmt.format(it.atZone(ZoneId.systemDefault()))}" }
             )
             if (facts.isNotEmpty()) { Spacer(Modifier.height(8.dp)); Text(facts.joinToString("   ·   "), fontSize = 12.sp, color = VirlinColors.TextSecondary) }
+            Spacer(Modifier.height(12.dp))
+            SectionLabel("DEFAULT EXECUTION")
+            Spacer(Modifier.height(6.dp))
+            ExecutionChoiceRow(
+                selectedKey = project.defaultExecutionMode.name,
+                options = listOf(
+                    Triple("Human", EffectiveExecutionMode.HUMAN.name) { vm.setProjectExecutionDefault(project.id, EffectiveExecutionMode.HUMAN) },
+                    Triple("External", EffectiveExecutionMode.EXTERNAL.name) { vm.setProjectExecutionDefault(project.id, EffectiveExecutionMode.EXTERNAL) }
+                )
+            )
             Spacer(Modifier.height(24.dp))
             SectionLabel("WORKSTREAMS")
             Spacer(Modifier.height(8.dp))
@@ -164,6 +177,17 @@ fun WorkStreamDetailScreen(streamId: String?, navController: NavController, vm: 
                     Spacer(Modifier.width(10.dp)); Text("Check in %02d:%02d".format(maxOf(it, 0) / 60, maxOf(it, 0) % 60), fontSize = 11.sp, color = VirlinColors.TextTertiary)
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            val effectiveWs = ExecutionModeResolver.resolveCurrent(stream, s.projects, s.tasks)
+            SectionLabel("EXECUTION · ${effectiveWs.name}")
+            Spacer(Modifier.height(6.dp))
+            ExecutionPreferenceRow(
+                preference = stream.executionPreference,
+                effective = effectiveWs,
+                allowInherit = project != null,
+                onSelect = { vm.setWorkStreamExecutionPreference(stream.id, it) },
+                onReset = { vm.resetWorkStreamExecutionPreference(stream.id) }
+            )
             Spacer(Modifier.height(16.dp))
             SectionLabel("CURRENT TASK"); Spacer(Modifier.height(4.dp))
             if (sum.currentTask != null) {
@@ -244,6 +268,17 @@ fun TaskDetailScreen(taskId: String?, navController: NavController, vm: Hierarch
                 )
             }
             task.description?.let { Spacer(Modifier.height(8.dp)); Text(it, fontSize = 13.sp, color = VirlinColors.TextSecondary) }
+            Spacer(Modifier.height(12.dp))
+            val effectiveTask = ExecutionModeResolver.resolveTask(task, s.projects, s.streams, s.tasks)
+            SectionLabel("EXECUTION · ${effectiveTask.name}")
+            Spacer(Modifier.height(6.dp))
+            ExecutionPreferenceRow(
+                preference = task.executionPreference,
+                effective = effectiveTask,
+                allowInherit = true,
+                onSelect = { vm.setTaskExecutionPreference(task.id, it) },
+                onReset = { vm.resetTaskExecutionPreference(task.id) }
+            )
             Spacer(Modifier.height(16.dp))
             if (rows.isNotEmpty()) { SectionLabel("PROGRESS"); Spacer(Modifier.height(4.dp)); ProgressLine(progress); Spacer(Modifier.height(14.dp)) }
             // Distinct time concepts — never merged. Omitted when unavailable.
@@ -294,6 +329,80 @@ fun TaskDetailScreen(taskId: String?, navController: NavController, vm: Hierarch
 }
 
 // =====================================================================================
+
+@Composable
+private fun ExecutionChoiceRow(
+    selectedKey: String,
+    options: List<Triple<String, String, () -> Unit>>
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEach { (label, key, onClick) ->
+            val selected = selectedKey == key
+            Text(
+                label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (selected) Color.White else VirlinColors.TextSecondary,
+                modifier = Modifier
+                    .background(if (selected) VirlinColors.TextPrimary else Color.White, RoundedCornerShape(50))
+                    .border(1.dp, Hairline, RoundedCornerShape(50))
+                    .clickable(role = Role.Button, onClick = onClick)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .testTag("execution_choice_${key.lowercase()}")
+            )
+        }
+    }
+}
+
+@Composable
+private fun ExecutionPreferenceRow(
+    preference: ExecutionPreference,
+    effective: EffectiveExecutionMode,
+    allowInherit: Boolean,
+    onSelect: (ExecutionPreference) -> Unit,
+    onReset: () -> Unit
+) {
+    val inheritLabel = "Inherit — ${effective.name.lowercase().replaceFirstChar(Char::uppercase)}"
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+        if (allowInherit) {
+            val selected = preference == ExecutionPreference.INHERIT
+            Text(
+                inheritLabel,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (selected) Color.White else VirlinColors.TextSecondary,
+                modifier = Modifier
+                    .background(if (selected) VirlinColors.TextPrimary else Color.White, RoundedCornerShape(50))
+                    .border(1.dp, Hairline, RoundedCornerShape(50))
+                    .clickable(role = Role.Button) { onReset() }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .testTag("execution_choice_inherit")
+            )
+        }
+        listOf(
+            "Human" to ExecutionPreference.HUMAN,
+            "External" to ExecutionPreference.EXTERNAL
+        ).forEach { (label, pref) ->
+            val selected = preference == pref
+            Text(
+                label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (selected) Color.White else VirlinColors.TextSecondary,
+                modifier = Modifier
+                    .background(if (selected) VirlinColors.TextPrimary else Color.White, RoundedCornerShape(50))
+                    .border(1.dp, Hairline, RoundedCornerShape(50))
+                    .clickable(role = Role.Button) { onSelect(pref) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .testTag("execution_choice_${pref.name.lowercase()}")
+            )
+        }
+    }
+    if (preference != ExecutionPreference.INHERIT && allowInherit) {
+        Spacer(Modifier.height(4.dp))
+        Text("Overrides parent · effective ${effective.name.lowercase()}", fontSize = 11.sp, color = VirlinColors.TextTertiary)
+    }
+}
 
 @Composable
 private fun BackRow(navController: NavController) {

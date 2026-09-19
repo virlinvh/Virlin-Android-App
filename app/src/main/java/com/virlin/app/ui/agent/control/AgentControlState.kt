@@ -1,10 +1,11 @@
 package com.virlin.app.ui.agent.control
 
+import com.virlin.app.domain.model.EffectiveExecutionMode
+import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStream
-import com.virlin.app.domain.model.WorkStreamMode
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.ui.hierarchy.HierarchyPresentation
 import com.virlin.app.ui.hierarchy.TaskRow
@@ -56,17 +57,29 @@ data class AgentControlState(
     val nextCandidate: Task? = null,
     /** Task awaiting explicit cancel confirmation. */
     val pendingCancelTaskId: String? = null,
-    /** Row expanded in Recent / Suggested (UI only). */
-    val expandedItemId: String? = null
+    /**
+     * Selected Quick Action on the rail (UI only). Selection does not mutate domain state.
+     * Execution requires a valid [selectedTargetId] pair (or vice versa).
+     */
+    val selectedQuickAction: QuickAction? = null,
+    /**
+     * Selected Recent / Suggested WorkStream target (UI only). Also reveals that row's
+     * structured chips. Selection does not mutate domain state.
+     */
+    val selectedTargetId: String? = null
 ) {
     /** Recent / Suggested order: current FOCUS · needs you · working for you · ready — all real state. */
     val suggested: List<ControlItem> get() = listOfNotNull(currentFocus) + needsAttention + processing + ready
+
+    val selectedTarget: ControlItem? get() = selectedTargetId?.let { id -> suggested.firstOrNull { it.streamId == id } }
 }
 
 object AgentControlPresentation {
 
-    fun kindOf(s: WorkStream): ControlKind? = when (s.state) {
-        WorkStreamState.FOCUS -> if (s.mode == WorkStreamMode.EXTERNAL) ControlKind.FOCUS_EXTERNAL else ControlKind.FOCUS_HUMAN
+    fun kindOf(s: WorkStream, projects: List<Project>, tasks: List<Task>): ControlKind? = when (s.state) {
+        WorkStreamState.FOCUS ->
+            if (ExecutionModeResolver.resolveCurrent(s, projects, tasks) == EffectiveExecutionMode.EXTERNAL)
+                ControlKind.FOCUS_EXTERNAL else ControlKind.FOCUS_HUMAN
         WorkStreamState.CHECK -> when (s.snoozeReason) {
             SnoozeReason.HUMAN_RETURN -> ControlKind.RETURN_DUE
             SnoozeReason.EXTERNAL_RESULT_READY -> ControlKind.RESULT_READY_DUE
@@ -108,7 +121,7 @@ object AgentControlPresentation {
     }
 
     fun item(s: WorkStream, projects: List<Project>, tasks: List<Task>, now: Instant): ControlItem? {
-        val kind = kindOf(s) ?: return null
+        val kind = kindOf(s, projects, tasks) ?: return null
         return ControlItem(
             streamId = s.id,
             title = s.title,
@@ -127,14 +140,18 @@ object AgentControlPresentation {
         val selectedTaskId: String? = null,
         val nextCandidate: Task? = null,
         val pendingCancelTaskId: String? = null,
-        /** Recent / Suggested row whose structured controls are shown (Stitch Control UI). Ephemeral. */
-        val expandedItemId: String? = null
+        /** Selected Quick Action on the rail. Ephemeral; does not mutate domain. */
+        val selectedQuickAction: QuickAction? = null,
+        /** Selected Recent / Suggested WorkStream target (+ reveals chips). Ephemeral. */
+        val selectedTargetId: String? = null
     )
 
     fun build(projects: List<Project>, streams: List<WorkStream>, tasks: List<Task>, now: Instant, ui: Selection = Selection()): AgentControlState {
         val items = streams.mapNotNull { item(it, projects, tasks, now) }
         val attention = setOf(ControlKind.RETURN_DUE, ControlKind.CHECK_DUE, ControlKind.RESULT_READY_DUE, ControlKind.BLOCKED)
         val selected = ui.selectedStreamId?.let { id -> streams.firstOrNull { it.id == id } }
+        val targetId = ui.selectedTargetId?.takeIf { id -> items.any { it.streamId == id } }
+        val quick = ui.selectedQuickAction
         return AgentControlState(
             currentFocus = items.firstOrNull { it.kind == ControlKind.FOCUS_HUMAN || it.kind == ControlKind.FOCUS_EXTERNAL },
             needsAttention = items.filter { it.kind in attention },
@@ -146,7 +163,8 @@ object AgentControlPresentation {
             selectedTaskId = ui.selectedTaskId?.takeIf { id -> tasks.any { it.id == id } },
             nextCandidate = ui.nextCandidate,
             pendingCancelTaskId = ui.pendingCancelTaskId?.takeIf { id -> tasks.any { it.id == id } },
-            expandedItemId = ui.expandedItemId?.takeIf { id -> items.any { it.streamId == id } }
+            selectedQuickAction = quick,
+            selectedTargetId = targetId
         )
     }
 }

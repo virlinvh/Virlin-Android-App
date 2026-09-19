@@ -24,24 +24,39 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.virlin.app.ui.components.VirlinOrb
+import com.virlin.app.ui.note.TextNoteEditorScreen
+import com.virlin.app.ui.note.textNoteRoute
+import com.virlin.app.ui.prompt.PromptEditorScreen
+import com.virlin.app.ui.prompt.promptEditorRoute
+import com.virlin.app.ui.link.LinkEditorScreen
+import com.virlin.app.ui.link.linkEditorRoute
+import com.virlin.app.ui.file.FileViewerScreen
+import com.virlin.app.ui.file.fileViewerRoute
+import com.virlin.app.ui.voice.VoiceEditorScreen
+import com.virlin.app.ui.voice.voiceEditorRoute
 import com.virlin.app.ui.orb.VirlinAgentViewModel
 import com.virlin.app.ui.orb.VirlinOrbInteractionState
 import com.virlin.app.ui.orb.toOrbParameters
 import com.virlin.app.ui.screens.*
 import com.virlin.app.ui.hierarchy.*
+import com.virlin.app.debug.VirlinStartup
 import kotlin.math.roundToInt
 
 /** Test identities for the Agent overlay. */
@@ -53,6 +68,8 @@ const val AgentScrimTestTag = "virlin_agent_scrim"
  * but unreachable by pointer input. The zone has the same 90dp so the Orb's coordinates are
  * identical; the difference is that the slot is now inside its parent's layout bounds.
  */
+private val OrbAboveNavZone = 90.dp
+
 /** Orb V2: the visible liquid-glass sphere is 52dp (the accessible target is the same node). */
 private val OrbSize = 52.dp
 private val AgentOrbSlotSize = 64.dp
@@ -60,6 +77,8 @@ private val AgentOrbSlotSize = 64.dp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
+    VirlinStartup.markOnceVirlinApp()
+    val readiness by com.virlin.app.domain.VirlinGraph.startupReadiness.collectAsState()
     val navController = rememberNavController()
     val controlViewModel: com.virlin.app.ui.agent.control.AgentControlViewModel = viewModel()
     val createViewModel: com.virlin.app.ui.agent.create.AgentCreateViewModel = viewModel()
@@ -81,6 +100,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
     val currentRoute = backStackEntry?.destination?.route ?: "now"
     val orbOnThisRoute = currentRoute in RootDestination.routes
     // Live Inbox count for the bottom-nav badge: the same capture projection the Inbox shows.
+    // Safe before READY (bootstrap emits emptyList).
     val captures by com.virlin.app.domain.VirlinGraph.repository.captures.collectAsState()
     val inboxCount = captures.count { it.status == com.virlin.app.domain.model.CaptureStatus.INBOX }
 
@@ -99,8 +119,8 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
     val agentVisible = orbState.isAgentSurfaceVisible
     val agentOpen = agentVisible && orbState != VirlinOrbInteractionState.Closing
 
-    // ---- ONE animation drives scrim, sheet rise and Orb travel, so they are always in sync.
-    // It starts the moment state becomes Opening — the Agent rises AS the Orb responds.
+    // ---- ONE animation drives scrim, sheet rise and the Orb riding the sheet, so they are
+    // always in sync. It starts the moment state becomes Opening — the Agent rises AS the Orb responds.
     val openProgress = remember { Animatable(0f) }
     LaunchedEffect(agentOpen) {
         openProgress.animateTo(
@@ -118,28 +138,39 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
     // the very first frame with no recomposition round-trip.
     val nowSlot = remember { SlotHolder() }
     var agentSlot by remember { mutableStateOf<Offset?>(null) }
+    var agentOrbSlotSize by remember { mutableStateOf(AgentOrbSlotSize) }
+    // The sheet's laid-out height in px, used to offset the Orb by the sheet's current
+    // translation so it stays fixed inside the rising sheet (no root→Agent traversal).
+    var sheetHeightPx by remember { mutableFloatStateOf(0f) }
 
     // Android Back and gesture dismissal use exactly the same closing path as the X and scrim.
     BackHandler(enabled = agentVisible) { agentViewModel.dismiss() }
 
+    val agentOrbDrawSize = minOf(OrbSize, agentOrbSlotSize)
+
+    Box(Modifier.fillMaxSize()) {
     OrbTravelLayout(
         nowSlot = nowSlot,
         agentSlot = { agentSlot },
+        agentOrbSlotSize = { agentOrbSlotSize },
+        agentOrbDrawSize = { agentOrbDrawSize },
+        sheetTravelPx = { sheetHeightPx },
         progress = { openProgress.value },
         orb = {
             if (orbOnThisRoute) {
                 // =============================================================
                 // THE ONE LIVING ORB. Placed by OrbTravelLayout above the scrim and sheet,
-                // in root coordinates: at its approved Now slot when closed, travelling into
-                // the Agent's slot as the sheet rises. Same composable, same liquid, same
-                // phase — never recreated, never duplicated.
+                // in root coordinates: at its approved Now slot when closed; while the Agent
+                // surface is opening/open it rides WITH the rising sheet, fixed in the header
+                // slot — it never traverses the screen from the root slot. Same composable,
+                // same liquid, same phase — never recreated, never duplicated.
                 // =============================================================
                 // The Control workspace has no Orb (Stitch Control UI): the one Orb fades out there and returns on ← / close.
                 val orbHidden = agentVisible && workspace.modeChosen
                 val orbAlpha by androidx.compose.animation.core.animateFloatAsState(if (orbHidden) 0f else 1f, tween(200), label = "orbAlpha")
                 VirlinOrb(
                     modifier = Modifier.graphicsLayer { alpha = orbAlpha },
-                    size = OrbSize,
+                    size = if (agentVisible || openProgress.value > 0f) agentOrbDrawSize else OrbSize,
                     params = orbParams,
                     onPress = agentViewModel::onOrbPressed,
                     onRelease = agentViewModel::onOrbReleased,
@@ -180,9 +211,29 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     val id = backStackEntry.arguments?.getString("id")
                     StreamDetailScreen(id, navController)
                 }
-                // Root Inbox tab: the SAME capture Inbox (view / organize / archive / convert) as the Agent's CAPTURE area,
-                // over the same capture domain — its own ViewModel instance so a selection here never redirects the Agent.
-                composable("inbox") { InboxScreen(viewModel(key = "inbox_tab")) }
+                // Root Inbox tab: capture review/manage (organize / archive / convert).
+                // Agent CAPTURE is creation-only (five cards + composer); review lives here —
+                // own ViewModel instance so a selection here never redirects the Agent.
+                composable("inbox") {
+                    InboxScreen(
+                        viewModel(key = "inbox_tab"),
+                        onOpenTextNote = { id ->
+                            navController.navigate(textNoteRoute(id)) { launchSingleTop = true }
+                        },
+                        onOpenPrompt = { id ->
+                            navController.navigate(promptEditorRoute(id)) { launchSingleTop = true }
+                        },
+                        onOpenLink = { id ->
+                            navController.navigate(linkEditorRoute(id)) { launchSingleTop = true }
+                        },
+                        onOpenFile = { id ->
+                            navController.navigate(fileViewerRoute(id)) { launchSingleTop = true }
+                        },
+                        onOpenVoice = { id ->
+                            navController.navigate(voiceEditorRoute(id)) { launchSingleTop = true }
+                        }
+                    )
+                }
 
             // Hierarchy surfaces (Pass 2): Streams -> Project -> WorkStream -> Task (any depth).
             composable(ProjectDetailRoute) { e -> ProjectDetailScreen(e.arguments?.getString("id"), navController) }
@@ -201,6 +252,61 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     popEnterTransition = { fadeIn(animationSpec = tween(180)) },
                     popExitTransition = { fadeOut(animationSpec = tween(180)) }
                 ) { FocusClockScreen(navController) }
+
+                // Full-screen Capture Text Note editor (not a bottom-nav destination).
+                composable("text_note") {
+                    TextNoteEditorScreen(navController, captureId = null)
+                }
+                composable(
+                    route = "text_note/{captureId}",
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })
+                ) { entry ->
+                    TextNoteEditorScreen(navController, captureId = entry.arguments?.getString("captureId"))
+                }
+
+                // Full-screen Capture Prompt editor (not a bottom-nav destination).
+                composable("prompt_editor") {
+                    PromptEditorScreen(navController, captureId = null)
+                }
+                composable(
+                    route = "prompt_editor/{captureId}",
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })
+                ) { entry ->
+                    PromptEditorScreen(navController, captureId = entry.arguments?.getString("captureId"))
+                }
+
+                // Full-screen Capture Link editor (not a bottom-nav destination).
+                composable("link_editor") {
+                    LinkEditorScreen(navController, captureId = null)
+                }
+                composable(
+                    route = "link_editor/{captureId}",
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })
+                ) { entry ->
+                    LinkEditorScreen(navController, captureId = entry.arguments?.getString("captureId"))
+                }
+
+                // Full-screen Capture File / Image viewer (single screen; not a bottom-nav destination).
+                composable("file_viewer") {
+                    FileViewerScreen(navController, captureId = null)
+                }
+                composable(
+                    route = "file_viewer/{captureId}",
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })
+                ) { entry ->
+                    FileViewerScreen(navController, captureId = entry.arguments?.getString("captureId"))
+                }
+
+                // Full-screen Capture Voice editor (single screen; not a bottom-nav destination).
+                composable("voice_editor") {
+                    VoiceEditorScreen(navController, captureId = null)
+                }
+                composable(
+                    route = "voice_editor/{captureId}",
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })
+                ) { entry ->
+                    VoiceEditorScreen(navController, captureId = entry.arguments?.getString("captureId"))
+                }
             }
             }
         }
@@ -227,10 +333,16 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
             )
 
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                // ~60% of the screen normally. When the keyboard resizes the window, keep enough
-                // height for the pinned composer plus context; content above it scrolls.
-                // The entry selector is compact; a chosen workspace gets a taller, adaptive sheet.
-                val sheetHeight = maxOf(maxHeight * (if (workspace.modeChosen) 0.86f else 0.68f), 440.dp).coerceAtMost(maxHeight)
+                // Entry + Capture launchers need more safe viewport than Control/Create:
+                // Entry fits 3 modes + composer; Capture fits 5 equal action cards + composer.
+                // Control/Create keep 0.86 / 440. Never exceed the measured safe maxHeight.
+                val sheetHeight = when {
+                    !workspace.modeChosen ||
+                        workspace.mode == com.virlin.app.ui.orb.AgentMode.CAPTURE ->
+                        maxOf(maxHeight * 0.90f, 520.dp).coerceAtMost(maxHeight)
+                    else ->
+                        maxOf(maxHeight * 0.86f, 440.dp).coerceAtMost(maxHeight)
+                }
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -239,6 +351,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                         .graphicsLayer {
                             translationY = (1f - openProgress.value) * sheetHeight.toPx()
                         }
+                        .onSizeChanged { sheetHeightPx = it.height.toFloat() }
                         .background(if (workspace.modeChosen) Pearl else Color.White, RoundedCornerShape(topStart = if (workspace.modeChosen) 28.dp else 34.dp, topEnd = if (workspace.modeChosen) 28.dp else 34.dp))
                         // Absorb taps on the sheet body so they never reach the scrim/dismiss.
                         .pointerInput(Unit) { detectTapGestures { } }
@@ -278,7 +391,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                                         else -> com.virlin.app.ui.orb.AgentMode.CONTROL
                                     }
                                 )
-                                commandViewModel.context = com.virlin.app.domain.command.CommandContext(selectedStreamId = controlViewModel.selection.value.selectedStreamId, selectedTaskId = controlViewModel.selection.value.selectedTaskId)
+                                commandViewModel.context = com.virlin.app.domain.command.CommandContext(selectedStreamId = controlViewModel.selection.value.selectedTargetId ?: controlViewModel.selection.value.selectedStreamId, selectedTaskId = controlViewModel.selection.value.selectedTaskId)
                                 commandViewModel.submit(composerText) { agentViewModel.onComposerTextChanged("") }
                             }
                         },
@@ -288,20 +401,95 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                         onDismiss = agentViewModel::dismiss,
                         onBackToEntry = agentViewModel::returnToEntry,
                         onOrbSlotPositioned = { agentSlot = it },
+                        onEntryOrbSlotSize = { agentOrbSlotSize = it },
                         // CONTROL is real (Pass 8): structured controls over persisted state via VirlinActions.
                         controlContent = { androidx.compose.foundation.layout.Column { com.virlin.app.ui.agent.command.AgentCommandPanel(vm = commandViewModel); com.virlin.app.ui.agent.control.AgentControlArea(vm = controlViewModel, onCommand = { cmd ->
                             // Quick Action without a target → the SAME typed contract the composer uses (clarification in the command panel).
-                            commandViewModel.context = com.virlin.app.domain.command.CommandContext(selectedStreamId = controlViewModel.selection.value.expandedItemId ?: controlViewModel.selection.value.selectedStreamId, selectedTaskId = controlViewModel.selection.value.selectedTaskId)
+                            commandViewModel.context = com.virlin.app.domain.command.CommandContext(selectedStreamId = controlViewModel.selection.value.selectedTargetId ?: controlViewModel.selection.value.selectedStreamId, selectedTaskId = controlViewModel.selection.value.selectedTaskId)
                             commandViewModel.run(cmd)
                         }) } },
                         // CREATE is real (Pass 9): structured Project / WorkStream / Task creation via VirlinActions.
                         createContent = { androidx.compose.foundation.layout.Column { com.virlin.app.ui.agent.command.AgentCommandPanel(vm = commandViewModel); com.virlin.app.ui.agent.create.AgentCreateArea(vm = createViewModel) } },
-                        captureContent = { com.virlin.app.ui.agent.capture.AgentCaptureArea(vm = captureViewModel) }
+                        captureContent = {
+                            com.virlin.app.ui.agent.capture.AgentCaptureArea(
+                                vm = captureViewModel,
+                                onOpenTextNote = { id ->
+                                    agentViewModel.dismiss()
+                                    navController.navigate(textNoteRoute(id)) { launchSingleTop = true }
+                                },
+                                onOpenPrompt = { id ->
+                                    agentViewModel.dismiss()
+                                    navController.navigate(promptEditorRoute(id)) { launchSingleTop = true }
+                                },
+                                onOpenLink = { id ->
+                                    agentViewModel.dismiss()
+                                    navController.navigate(linkEditorRoute(id)) { launchSingleTop = true }
+                                },
+                                onOpenFile = { id ->
+                                    agentViewModel.dismiss()
+                                    navController.navigate(fileViewerRoute(id)) { launchSingleTop = true }
+                                },
+                                onOpenVoice = { id ->
+                                    agentViewModel.dismiss()
+                                    navController.navigate(voiceEditorRoute(id)) { launchSingleTop = true }
+                                }
+                            )
+                        }
                     )
                 }
             }
         }
 
+    }
+
+    // Genuine Room/init failure only — not shown during normal Initializing.
+    val err = readiness as? com.virlin.app.domain.StartupReadiness.Error
+    if (err != null) {
+        StartupErrorOverlay(
+            message = err.message,
+            onRetry = { com.virlin.app.domain.VirlinGraph.retryStartup() }
+        )
+    }
+    } // Box
+}
+
+/** Controlled startup failure — pearl canvas, no black screen. */
+@Composable
+private fun StartupErrorOverlay(message: String, onRetry: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF8F7F4))
+            .testTag("startup_error"),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp)
+        ) {
+            Text("Virlin", fontSize = 28.sp, fontWeight = FontWeight.Black, color = Color(0xFF162016))
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Unable to load local data",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF525B54)
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                message,
+                fontSize = 13.sp,
+                color = Color(0xFF859088),
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            Spacer(Modifier.height(24.dp))
+            Button(
+                onClick = onRetry,
+                modifier = Modifier.testTag("startup_retry")
+            ) {
+                Text("Retry")
+            }
+        }
     }
 }
 
@@ -313,14 +501,23 @@ private class SlotHolder {
 /**
  * Root layout that places [content] (the Scaffold and Agent overlay) and then the single
  * [orb] above it — in ONE placement pass. Placing the content fires the Now slot's
- * `onPlaced`, so the Orb can be positioned immediately from that anchor, interpolated
- * toward the Agent slot by [progress]. Reading [progress]/[agentSlot] here is placement-
- * scoped, so animation frames re-place the Orb without re-measuring or recomposing.
+ * `onPlaced`, so the Orb can be positioned immediately from that anchor. Reading
+ * [progress]/[agentSlot]/[sheetTravelPx] here is placement-scoped, so animation frames
+ * re-place the Orb without re-measuring or recomposing.
+ *
+ * Placement rule (2026-09-13, travel removed): the Orb sits at the Now slot when the Agent
+ * is closed. While the Agent surface is opening/open it is placed at the Agent header slot
+ * OFFSET by the sheet's current translation — i.e. it is fixed inside the rising sheet and
+ * enters from below the screen edge with it. The Orb never interpolates between the root
+ * slot and the Agent slot, so there is no visible root→Agent traversal.
  */
 @Composable
 private fun OrbTravelLayout(
     nowSlot: SlotHolder,
     agentSlot: () -> Offset?,
+    agentOrbSlotSize: () -> Dp = { AgentOrbSlotSize },
+    agentOrbDrawSize: () -> Dp = { OrbSize },
+    sheetTravelPx: () -> Float,
     progress: () -> Float,
     orb: @Composable () -> Unit,
     content: @Composable () -> Unit
@@ -334,11 +531,13 @@ private fun OrbTravelLayout(
 
             val idle = nowSlot.position ?: return@layout
             val p = progress()
-            // The Agent's identity slot is 64dp (shell unchanged); the 52dp Orb V2 lands centred in it.
-            val inset = ((AgentOrbSlotSize - OrbSize) / 2).toPx()
-            val target = agentSlot()?.let { Offset(it.x + inset, it.y + inset) }
-            val pos = if (target != null && p > 0f) {
-                Offset(idle.x + (target.x - idle.x) * p, idle.y + (target.y - idle.y) * p)
+            // Centre the drawn Orb inside whatever entry slot size the shell reported.
+            val inset = ((agentOrbSlotSize().toPx() - agentOrbDrawSize().toPx()) / 2f).coerceAtLeast(0f)
+            val slot = agentSlot()?.let { Offset(it.x + inset, it.y + inset) }
+            val pos = if (slot != null && p > 0f) {
+                // Ride the sheet: same translation the sheet itself has, so the Orb stays
+                // fixed relative to it (at p == 1 it rests exactly in the header slot).
+                Offset(slot.x, slot.y + (1f - p) * sheetTravelPx())
             } else idle
             orbPlaceables.forEach { it.place(pos.x.roundToInt(), pos.y.roundToInt()) }
         }

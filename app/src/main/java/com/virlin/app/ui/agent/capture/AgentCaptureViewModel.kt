@@ -135,14 +135,25 @@ class AgentCaptureViewModel(
      */
     fun save(text: String, onSaved: () -> Unit = {}) {
         val f = _form.value
+        if (f.type == CaptureType.FILE || f.type == CaptureType.VOICE) {
+            _form.update { it.copy(error = if (f.type == CaptureType.VOICE) "Use Voice to record" else "Use File / Image to attach a file") }
+            return
+        }
         val request = when (f.type) {
             CaptureType.NOTE, CaptureType.PROMPT -> CreateCapture(type = f.type, content = text, context = f.context.toContext())
             CaptureType.LINK -> CreateCapture(type = CaptureType.LINK, sourceUrl = text, content = f.linkNote, context = f.context.toContext())
+            CaptureType.FILE, CaptureType.VOICE -> return
         }
         viewModelScope.launch {
             when (val r = actions.createCapture(request)) {
                 is ActionResult.Success -> {
-                    val what = when (r.value.type) { CaptureType.NOTE -> "Saved to Inbox"; CaptureType.PROMPT -> "Saved prompt"; CaptureType.LINK -> "Saved link" }
+                    val what = when (r.value.type) {
+                        CaptureType.NOTE -> "Saved to Inbox"
+                        CaptureType.PROMPT -> "Saved prompt"
+                        CaptureType.LINK -> "Saved link"
+                        CaptureType.FILE -> "Saved file"
+                        CaptureType.VOICE -> "Saved voice"
+                    }
                     // Context is a per-capture choice: the next capture starts global again.
                     _form.update { it.copy(linkNote = "", context = CaptureContextChoice(), contextPickerOpen = false, feedback = what, error = null, filter = CaptureFilter.INBOX) }
                     onSaved()

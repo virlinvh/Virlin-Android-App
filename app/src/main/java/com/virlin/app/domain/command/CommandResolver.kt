@@ -4,6 +4,8 @@ import com.virlin.app.domain.command.CommandPreview.Field
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.CaptureType
+import com.virlin.app.domain.model.EffectiveExecutionMode
+import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStream
@@ -68,35 +70,35 @@ class CommandResolver(
             else ready(ResolvedCommand.LeaveStream(ws.id, task?.id, preview("Leave", ws, s, *listOfNotNull(task?.let { Field("Task", it.title) }, c.returnAt?.let { timeField("Back", it) } ?: Field("Reminder", "none")).toTypedArray()), c.returnAt)) }
         // ---- Control 2: external processing by name. Mode comes from the WorkStream, never from its title.
         is VirlinCommand.Control.HandOffStream -> temporal(c.checkAt) ?: namedStream(c.target, "Hand off", s, { VirlinCommand.Control.HandOffStream(it, c.checkAt) }) { ws, task ->
-            external(ws, "Hand off") ?: if (ws.state != WorkStreamState.FOCUS) CommandResolution.Rejected("${ws.title} isn't in Focus right now")
+            external(ws, "Hand off", s) ?: if (ws.state != WorkStreamState.FOCUS) CommandResolution.Rejected("${ws.title} isn't in Focus right now")
             else ready(ResolvedCommand.HandOffStream(ws.id, task?.id, c.checkAt, preview("Hand off", ws, s, *listOfNotNull(task?.let { Field("Task", it.title) }, c.checkAt?.let { timeField("Check", it) } ?: Field("Check", "none")).toTypedArray()))) }
         is VirlinCommand.Control.CheckStream -> temporal(c.checkAt) ?: namedStream(c.target, "Check", s, { VirlinCommand.Control.CheckStream(it, c.checkAt) }) { ws, task ->
-            external(ws, "Check") ?: when {
+            external(ws, "Check", s) ?: when {
                 ws.state == WorkStreamState.FOCUS -> ready(ResolvedCommand.HandOffStream(ws.id, task?.id, c.checkAt, preview("Hand off", ws, s, timeField("Check", c.checkAt))))
                 ws.state == WorkStreamState.PROCESSING || (ws.state == WorkStreamState.CHECK && ws.snoozeReason == null) ->
                     ready(ResolvedCommand.StillRunning(ws.id, c.checkAt, preview("Check", ws, s, timeField("Check", c.checkAt))))
                 else -> CommandResolution.Rejected("${ws.title} isn't processing right now — nothing to check")
             } }
         is VirlinCommand.Control.ResultReady -> namedStream(c.target, "Result ready", s, { VirlinCommand.Control.ResultReady(it) }) { ws, _ ->
-            external(ws, "Result ready") ?: if (ws.state != WorkStreamState.PROCESSING && ws.state != WorkStreamState.CHECK) CommandResolution.Rejected("${ws.title} isn't processing right now")
+            external(ws, "Result ready", s) ?: if (ws.state != WorkStreamState.PROCESSING && ws.state != WorkStreamState.CHECK) CommandResolution.Rejected("${ws.title} isn't processing right now")
             else ready(ResolvedCommand.MarkReady(ws.id, preview("Result ready", ws, s, Field("Focus", "not yet")))) }
         is VirlinCommand.Control.RemindStream -> temporal(c.at) ?: namedStream(c.target, "Remind", s, { VirlinCommand.Control.RemindStream(it, c.at) }) { ws, task -> remind(ws, task, c.at, s) }
         is VirlinCommand.Control.LeaveCurrent -> temporal(c.returnAt) ?: stream(TargetRef.CurrentStream, s, null) { ws ->
             ResolvedCommand.LeaveCurrent(ws.id, c.returnAt, preview("Leave", ws, s, c.returnAt?.let { timeField("Back", it) } ?: Field("Reminder", "none"))) }
         is VirlinCommand.Control.HandOffCurrent -> temporal(c.checkAt) ?: when (val r = streamRef(TargetRef.CurrentStream, s, null)) {
             is Ask -> r.resolution
-            is Found -> external(r.value, "Hand off") ?: ready(ResolvedCommand.HandOffCurrent(r.value.id, c.checkAt, preview("Hand off", r.value, s, c.checkAt?.let { timeField("Check", it) } ?: Field("Check", "none"))))
+            is Found -> external(r.value, "Hand off", s) ?: ready(ResolvedCommand.HandOffCurrent(r.value.id, c.checkAt, preview("Hand off", r.value, s, c.checkAt?.let { timeField("Check", it) } ?: Field("Check", "none"))))
         }
         is VirlinCommand.Control.StillRunning -> temporal(c.checkAt) ?: if (c.target.isNamed) namedStream(c.target, "Still running", s, { VirlinCommand.Control.StillRunning(it, c.checkAt) }) { ws, _ ->
-                external(ws, "Still running") ?: ready(ResolvedCommand.StillRunning(ws.id, c.checkAt, preview("Still running", ws, s, timeField("Check", c.checkAt)))) }
+                external(ws, "Still running", s) ?: ready(ResolvedCommand.StillRunning(ws.id, c.checkAt, preview("Still running", ws, s, timeField("Check", c.checkAt)))) }
             else stream(c.target, s, { VirlinCommand.Control.StillRunning(TargetRef.ById(it), c.checkAt) }) { ws ->
                 ResolvedCommand.StillRunning(ws.id, c.checkAt, preview("Still running", ws, s, timeField("Check", c.checkAt))) }
         is VirlinCommand.Control.ResultReadyNow -> if (c.target.isNamed) namedStream(c.target, "Result ready", s, { VirlinCommand.Control.ResultReadyNow(it) }) { ws, _ ->
-                external(ws, "Result ready") ?: ready(ResolvedCommand.ResultReadyNow(ws.id, preview("Result ready · focus now", ws, s))) }
+                external(ws, "Result ready", s) ?: ready(ResolvedCommand.ResultReadyNow(ws.id, preview("Result ready · focus now", ws, s))) }
             else stream(c.target, s, { VirlinCommand.Control.ResultReadyNow(TargetRef.ById(it)) }) { ws ->
                 ResolvedCommand.ResultReadyNow(ws.id, preview("Result ready · focus now", ws, s)) }
         is VirlinCommand.Control.ResultReadyLater -> temporal(c.returnAt) ?: if (c.target.isNamed) namedStream(c.target, "Result ready", s, { VirlinCommand.Control.ResultReadyLater(it, c.returnAt) }) { ws, _ ->
-                external(ws, "Result ready") ?: ready(ResolvedCommand.ResultReadyLater(ws.id, c.returnAt, preview("Result ready · remind later", ws, s, timeField("Remind", c.returnAt)))) }
+                external(ws, "Result ready", s) ?: ready(ResolvedCommand.ResultReadyLater(ws.id, c.returnAt, preview("Result ready · remind later", ws, s, timeField("Remind", c.returnAt)))) }
             else stream(c.target, s, { VirlinCommand.Control.ResultReadyLater(TargetRef.ById(it), c.returnAt) }) { ws ->
                 ResolvedCommand.ResultReadyLater(ws.id, c.returnAt, preview("Result ready · remind later", ws, s, timeField("Remind", c.returnAt))) }
         // BLOCK is WorkStream-only: a Task never blocks its owner silently.
@@ -145,9 +147,12 @@ class CommandResolver(
             is Ask -> h.resolution
             is Found -> when (val o = owning(h.value, s, verb)) { is Ask -> o.resolution; is Found -> build(o.value, h.value.task) }
         }
-    /** External-processing verbs need an EXTERNAL WorkStream — from its mode, never from words like "Claude" in its title. */
-    private fun external(ws: WorkStream, verb: String): CommandResolution? =
-        if (ws.mode == WorkStreamMode.EXTERNAL) null else CommandResolution.Rejected("${ws.title} is human work — $verb needs a WorkStream that can continue without you")
+    /** External-processing verbs need effective EXTERNAL — from [ExecutionModeResolver], never from the title. */
+    private fun external(ws: WorkStream, verb: String, s: Snapshot): CommandResolution? {
+        val effective = ExecutionModeResolver.resolveCurrent(ws, s.projects, s.tasks)
+        return if (effective == EffectiveExecutionMode.EXTERNAL) null
+        else CommandResolution.Rejected("${ws.title} is human work — $verb needs work that can continue without you")
+    }
     /**
      * "Remind me about X": ONE existing semantic chosen from the stream's state, or a refusal.
      * FOCUS → leave with a HUMAN return; READY/PAUSED → snooze (HUMAN_RETURN); an existing timed

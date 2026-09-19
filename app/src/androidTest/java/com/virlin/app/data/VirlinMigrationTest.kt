@@ -64,7 +64,7 @@ class VirlinMigrationTest {
             runBlocking {
                 assertEquals("Virlin Android App", db.projects().byId("p1")!!.title)
                 val s4 = db.workStreams().byId("s4")!!
-                assertEquals("PROCESSING", s4.state); assertEquals("EXTERNAL", s4.mode); assertEquals("t_nl", s4.activeTaskId); assertEquals(t0 + 1800000, s4.checkAt!!.toEpochMilli())
+                assertEquals("PROCESSING", s4.state); assertEquals("EXTERNAL", s4.executionPreference); assertEquals("t_nl", s4.activeTaskId); assertEquals(t0 + 1800000, s4.checkAt!!.toEpochMilli())
                 assertEquals("FOCUS", db.workStreams().byId("s1")!!.state)
                 assertEquals(3, db.tasks().all().size); assertEquals("t_create", db.tasks().byId("t_nl")!!.parentTaskId)
                 assertEquals(1, db.cycles().byWorkStream("s4").size)
@@ -83,13 +83,189 @@ class VirlinMigrationTest {
         } finally { db.close(); ApplicationProvider.getApplicationContext<android.content.Context>().deleteDatabase(dbName) }
     }
 
-    @Test fun freshInstall_isV2_andNoMigrationNeeded() {
+    @Test fun migrate2To3_preservesModeAsExecutionPreference() {
+        helper.createDatabase(dbName, 2).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,$t0,$t0,NULL)")
+            execSQL("INSERT INTO workstreams (id,title,projectId,tool,mode,state,priority,pinned,lastHumanAction,waitingFor,nextHumanAction,blockerReason,processingStartedAt,checkAt,snoozedUntil,snoozeReason,currentCycleId,cycleCount,activeTaskId,createdAt,updatedAt,completedAt) " +
+                "VALUES ('s4','Agent Development','p1','Antigravity','EXTERNAL','PROCESSING','NORMAL',0,NULL,'Claude','Review diff',NULL,${t0 - 600000},${t0 + 1800000},NULL,NULL,'c1',1,'t_nl',$t0,$t0,NULL)")
+            execSQL("INSERT INTO workstreams (id,title,projectId,tool,mode,state,priority,pinned,lastHumanAction,waitingFor,nextHumanAction,blockerReason,processingStartedAt,checkAt,snoozedUntil,snoozeReason,currentCycleId,cycleCount,activeTaskId,createdAt,updatedAt,completedAt) " +
+                "VALUES ('s1','Psychology Unit 23',NULL,NULL,'HUMAN','FOCUS','NORMAL',0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,0,'p_q17',$t0,$t0,NULL)")
+            execSQL("INSERT INTO tasks (id,title,description,projectId,workStreamId,parentTaskId,status,sortOrder,estimatedEffort,dueAt,reminderAt,priority,notes,createdAt,updatedAt,completedAt) VALUES ('t_nl','Natural Language',NULL,'p1','s4','t_create','IN_PROGRESS',0,2700000,NULL,NULL,'NORMAL',NULL,$t0,$t0,NULL)")
+            execSQL("INSERT INTO tasks (id,title,description,projectId,workStreamId,parentTaskId,status,sortOrder,estimatedEffort,dueAt,reminderAt,priority,notes,createdAt,updatedAt,completedAt) VALUES ('t_create','Create Mode',NULL,'p1','s4',NULL,'TODO',0,NULL,NULL,NULL,'NORMAL',NULL,$t0,$t0,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 3, true, VirlinDatabase.MIGRATION_2_3).close()
+
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                assertEquals("HUMAN", db.projects().byId("p1")!!.defaultExecutionMode)
+                assertEquals("EXTERNAL", db.workStreams().byId("s4")!!.executionPreference)
+                assertEquals("HUMAN", db.workStreams().byId("s1")!!.executionPreference)
+                assertEquals("INHERIT", db.tasks().byId("t_nl")!!.executionPreference)
+                assertEquals("INHERIT", db.tasks().byId("t_create")!!.executionPreference)
+            }
+        } finally { db.close(); ApplicationProvider.getApplicationContext<android.content.Context>().deleteDatabase(dbName) }
+    }
+
+    @Test fun migrate3To4_addsNoteDocuments_preservesCaptures() {
+        helper.createDatabase(dbName, 3).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL)")
+            execSQL("INSERT INTO captures (id,type,content,title,sourceUrl,projectId,workStreamId,taskId,status,convertedTaskId,createdAt,updatedAt,archivedAt) VALUES ('cap_note','NOTE','hello note','Hi',NULL,NULL,NULL,NULL,'INBOX',NULL,$t0,$t0,NULL)")
+            execSQL("INSERT INTO captures (id,type,content,title,sourceUrl,projectId,workStreamId,taskId,status,convertedTaskId,createdAt,updatedAt,archivedAt) VALUES ('cap_prompt','PROMPT','sys prompt',NULL,NULL,NULL,NULL,NULL,'INBOX',NULL,$t0,$t0,NULL)")
+            execSQL("INSERT INTO captures (id,type,content,title,sourceUrl,projectId,workStreamId,taskId,status,convertedTaskId,createdAt,updatedAt,archivedAt) VALUES ('cap_link','LINK','','L','https://example.com',NULL,NULL,NULL,'INBOX',NULL,$t0,$t0,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 4, true, VirlinDatabase.MIGRATION_3_4).close()
+
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                assertEquals(3, db.captures().count())
+                assertEquals("NOTE", db.captures().byId("cap_note")!!.type)
+                assertEquals("PROMPT", db.captures().byId("cap_prompt")!!.type)
+                assertEquals("https://example.com", db.captures().byId("cap_link")!!.sourceUrl)
+                assertEquals(0, db.noteDocuments().count())
+                db.noteDocuments().upsert(
+                    com.virlin.app.data.db.NoteDocumentEntity(
+                        "n1", "cap_note", "Hi",
+                        """{"v":1,"blocks":[{"id":"b1","type":"TEXT","text":"hello","checked":false,"collapsed":false,"marks":[],"children":[]}]}""",
+                        Instant.ofEpochMilli(t0), Instant.ofEpochMilli(t0)
+                    )
+                )
+                assertEquals(1, db.noteDocuments().count())
+                assertEquals("cap_note", db.noteDocuments().byCaptureId("cap_note")!!.captureItemId)
+            }
+        } finally {
+            db.close()
+            ApplicationProvider.getApplicationContext<android.content.Context>().deleteDatabase(dbName)
+        }
+    }
+
+    @Test fun migrate4To5_addsPromptDocuments_preservesNotes() {
+        helper.createDatabase(dbName, 4).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL)")
+            execSQL("INSERT INTO captures (id,type,content,title,sourceUrl,projectId,workStreamId,taskId,status,convertedTaskId,createdAt,updatedAt,archivedAt) VALUES ('cap_note','NOTE','hello note','Hi',NULL,NULL,NULL,NULL,'INBOX',NULL,$t0,$t0,NULL)")
+            execSQL("INSERT INTO captures (id,type,content,title,sourceUrl,projectId,workStreamId,taskId,status,convertedTaskId,createdAt,updatedAt,archivedAt) VALUES ('cap_prompt','PROMPT','sys prompt','P',NULL,NULL,NULL,NULL,'INBOX',NULL,$t0,$t0,NULL)")
+            execSQL(
+                "INSERT INTO note_documents (id,captureItemId,title,documentJson,createdAt,updatedAt) VALUES (" +
+                    "'n1','cap_note','Hi'," +
+                    "'{\"v\":1,\"blocks\":[{\"id\":\"b1\",\"type\":\"TEXT\",\"text\":\"hello\",\"checked\":false,\"collapsed\":false,\"marks\":[],\"children\":[]}]}'," +
+                    "$t0,$t0)"
+            )
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 5, true, VirlinDatabase.MIGRATION_4_5).close()
+
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                assertEquals(2, db.captures().count())
+                assertEquals(1, db.noteDocuments().count())
+                assertEquals(0, db.promptDocuments().count())
+                db.promptDocuments().upsert(
+                    com.virlin.app.data.db.PromptDocumentEntity(
+                        "prm1", "cap_prompt", "P", "desc", "[]",
+                        """{"v":1,"blocks":[{"id":"b1","type":"TEXT","text":"sys","checked":false,"collapsed":false,"marks":[],"children":[]}]}""",
+                        Instant.ofEpochMilli(t0), Instant.ofEpochMilli(t0)
+                    )
+                )
+                assertEquals(1, db.promptDocuments().count())
+                assertEquals("cap_prompt", db.promptDocuments().byCaptureId("cap_prompt")!!.captureItemId)
+            }
+        } finally {
+            db.close()
+            ApplicationProvider.getApplicationContext<android.content.Context>().deleteDatabase(dbName)
+        }
+    }
+
+    @Test fun migrate5To6_addsAttachmentDocuments_preservesPrompts() {
+        helper.createDatabase(dbName, 5).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL)")
+            execSQL("INSERT INTO captures (id,type,content,title,sourceUrl,projectId,workStreamId,taskId,status,convertedTaskId,createdAt,updatedAt,archivedAt) VALUES ('cap_prompt','PROMPT','sys','P',NULL,NULL,NULL,NULL,'INBOX',NULL,$t0,$t0,NULL)")
+            execSQL(
+                "INSERT INTO prompt_documents (id,captureItemId,title,description,tagsJson,documentJson,createdAt,updatedAt) VALUES (" +
+                    "'prm1','cap_prompt','P','d','[]'," +
+                    "'{\"v\":1,\"blocks\":[{\"id\":\"b1\",\"type\":\"TEXT\",\"text\":\"sys\",\"checked\":false,\"collapsed\":false,\"marks\":[],\"children\":[]}]}'," +
+                    "$t0,$t0)"
+            )
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 6, true, VirlinDatabase.MIGRATION_5_6).close()
+
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                assertEquals(1, db.captures().count())
+                assertEquals(1, db.promptDocuments().count())
+                assertEquals(0, db.attachmentDocuments().count())
+                db.attachmentDocuments().upsert(
+                    com.virlin.app.data.db.AttachmentDocumentEntity(
+                        "att1", "cap_file", "doc.pdf", "application/pdf", 1200L,
+                        "att1/original", "PDF",
+                        Instant.ofEpochMilli(t0), Instant.ofEpochMilli(t0)
+                    )
+                )
+                assertEquals(1, db.attachmentDocuments().count())
+                assertEquals("cap_file", db.attachmentDocuments().byCaptureId("cap_file")!!.captureItemId)
+            }
+        } finally {
+            db.close()
+            ApplicationProvider.getApplicationContext<android.content.Context>().deleteDatabase(dbName)
+        }
+    }
+
+    @Test fun migrate6To7_addsVoiceDocuments_preservesAttachments() {
+        helper.createDatabase(dbName, 6).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL)")
+            execSQL("INSERT INTO captures (id,type,content,title,sourceUrl,projectId,workStreamId,taskId,status,convertedTaskId,createdAt,updatedAt,archivedAt) VALUES ('cap_file','FILE','doc.pdf','doc.pdf',NULL,NULL,NULL,NULL,'INBOX',NULL,$t0,$t0,NULL)")
+            execSQL(
+                "INSERT INTO attachment_documents (id,captureItemId,displayName,mimeType,sizeBytes,relativePath,kind,createdAt,updatedAt) VALUES (" +
+                    "'att1','cap_file','doc.pdf','application/pdf',1200,'att1/original','PDF',$t0,$t0)"
+            )
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 7, true, VirlinDatabase.MIGRATION_6_7).close()
+
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                assertEquals(1, db.captures().count())
+                assertEquals(1, db.attachmentDocuments().count())
+                assertEquals(0, db.voiceDocuments().count())
+                db.voiceDocuments().upsert(
+                    com.virlin.app.data.db.VoiceDocumentEntity(
+                        "vox1", "cap_voice", "Meeting Ideas", "[]",
+                        Instant.ofEpochMilli(t0), Instant.ofEpochMilli(t0)
+                    )
+                )
+                assertEquals(1, db.voiceDocuments().count())
+                assertEquals("cap_voice", db.voiceDocuments().byCaptureId("cap_voice")!!.captureItemId)
+            }
+        } finally {
+            db.close()
+            ApplicationProvider.getApplicationContext<android.content.Context>().deleteDatabase(dbName)
+        }
+    }
+
+    @Test fun freshInstall_isV7_andNoMigrationNeeded() {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         ctx.deleteDatabase("virlin-fresh-test.db")
         val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, "virlin-fresh-test.db").addMigrations(*VirlinDatabase.MIGRATIONS).build()
         try {
-            runBlocking { assertEquals(0, db.captures().count()) }
-            assertEquals(2, db.openHelper.readableDatabase.version)
+            runBlocking {
+                assertEquals(0, db.captures().count())
+                assertEquals(0, db.noteDocuments().count())
+                assertEquals(0, db.promptDocuments().count())
+                assertEquals(0, db.attachmentDocuments().count())
+                assertEquals(0, db.voiceDocuments().count())
+            }
+            assertEquals(7, db.openHelper.readableDatabase.version)
         } finally { db.close(); ctx.deleteDatabase("virlin-fresh-test.db") }
     }
 }

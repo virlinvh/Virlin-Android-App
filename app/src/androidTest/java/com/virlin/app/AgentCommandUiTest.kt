@@ -23,6 +23,7 @@ import com.virlin.app.domain.command.VirlinCommand.Query
 import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.ui.components.VirlinOrbTestTag
 import com.virlin.app.ui.screens.FocusContextTag
@@ -87,7 +88,7 @@ class AgentCommandUiTest {
         val project = repo().projects.value.first { it.title == "Command Thesis" }
         executed(Create.CreateWorkStream("Command Walk", project = null, mode = WorkStreamMode.HUMAN))
         val walk = repo().streams.value.first { it.title == "Command Walk" }
-        check(walk.projectId == null && walk.state == WorkStreamState.READY && walk.mode == WorkStreamMode.HUMAN)
+        check(walk.projectId == null && walk.state == WorkStreamState.READY && walk.executionPreference == ExecutionPreference.HUMAN)
         executed(Create.CreateTask("Command task", TaskOwnerRef.WorkStream(TargetRef.ByName("Command Walk"))))
         val task = repo().tasks.value.first { it.title == "Command task" }
         check(task.workStreamId == walk.id && walk.activeTaskId == null)

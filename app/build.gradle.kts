@@ -34,7 +34,7 @@ android {
     ksp { arg("room.schemaLocation", "$projectDir/schemas") }
     // Exported Room schemas are test assets so MigrationTestHelper can build every old version (Pass 10).
     sourceSets { getByName("androidTest").assets.srcDirs("$projectDir/schemas") }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
 
     // Required by Robolectric/Roborazzi so unit tests can resolve Android resources.
     testOptions {

@@ -1,5 +1,6 @@
 package com.virlin.app.domain.action
 
+import com.virlin.app.domain.capture.LinkUrl
 import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.CaptureStatus
@@ -23,14 +24,21 @@ internal class CaptureActions(
     private val structure: StructureActions
 ) {
 
-    suspend fun createCapture(r: CreateCapture): ActionResult<CaptureItem> = tx {
+    suspend fun createCapture(r: CreateCapture): ActionResult<CaptureItem> = tx { createCaptureIn(this, r) }
+
+    /** Same rules as [createCapture], for composing into another writer transaction (e.g. Text Note). */
+    suspend fun createCaptureIn(w: WorkStreamWriter, r: CreateCapture): ActionResult<CaptureItem> = with(w) {
         val content = r.content.trim()
-        val url = r.sourceUrl?.trim()?.takeIf { it.isNotEmpty() }
-        when (r.type) {
-            CaptureType.NOTE, CaptureType.PROMPT -> if (content.isEmpty()) return@tx ActionResult.Rejected(DomainError.EmptyCapture)
-            CaptureType.LINK -> if (url == null || !looksLikeUrl(url)) return@tx ActionResult.Rejected(DomainError.InvalidLink)
+        val url = when (r.type) {
+            CaptureType.LINK -> LinkUrl.canonicalOrNull(r.sourceUrl.orEmpty())
+            else -> r.sourceUrl?.trim()?.takeIf { it.isNotEmpty() }
         }
-        val ctx = resolveContext(r.context) ?: return@tx contextError(r.context)
+        when (r.type) {
+            CaptureType.NOTE, CaptureType.PROMPT -> if (content.isEmpty()) return ActionResult.Rejected(DomainError.EmptyCapture)
+            CaptureType.LINK -> if (url == null) return ActionResult.Rejected(DomainError.InvalidLink)
+            CaptureType.FILE, CaptureType.VOICE -> if (content.isEmpty()) return ActionResult.Rejected(DomainError.EmptyCapture)
+        }
+        val ctx = resolveContext(r.context) ?: return contextError(r.context)
         val now = clock.now()
         val item = CaptureItem(
             id = r.id ?: ids.newId("cap"), type = r.type, content = content,
@@ -45,10 +53,15 @@ internal class CaptureActions(
     suspend fun updateCapture(id: String, u: CaptureUpdate): ActionResult<CaptureItem> = tx {
         val c = getCapture(id) ?: return@tx ActionResult.Rejected(DomainError.CaptureNotFound(id))
         val content = u.content.applyTo(c.content)?.trim() ?: ""
-        val url = u.sourceUrl.applyTo(c.sourceUrl)?.trim()?.takeIf { it.isNotEmpty() }
+        val urlRaw = u.sourceUrl.applyTo(c.sourceUrl)
+        val url = when (c.type) {
+            CaptureType.LINK -> LinkUrl.canonicalOrNull(urlRaw.orEmpty())
+            else -> urlRaw?.trim()?.takeIf { it.isNotEmpty() }
+        }
         when (c.type) {
             CaptureType.NOTE, CaptureType.PROMPT -> if (content.isEmpty()) return@tx ActionResult.Rejected(DomainError.EmptyCapture)
-            CaptureType.LINK -> if (url == null || !looksLikeUrl(url)) return@tx ActionResult.Rejected(DomainError.InvalidLink)
+            CaptureType.LINK -> if (url == null) return@tx ActionResult.Rejected(DomainError.InvalidLink)
+            CaptureType.FILE, CaptureType.VOICE -> if (content.isEmpty()) return@tx ActionResult.Rejected(DomainError.EmptyCapture)
         }
         val updated = c.copy(content = content, title = u.title.applyTo(c.title)?.trim()?.takeIf { it.isNotEmpty() },
             sourceUrl = if (c.type == CaptureType.LINK) url else null, updatedAt = clock.now())
@@ -141,9 +154,6 @@ internal class CaptureActions(
         ctx.projectId?.let { if (getProject(it) == null) return ActionResult.Rejected(DomainError.ProjectNotFound(it)) }
         return ActionResult.Rejected(DomainError.OwnershipMismatch)
     }
-
-    private fun looksLikeUrl(s: String): Boolean =
-        !s.any { it.isWhitespace() } && (s.startsWith("http://", true) || s.startsWith("https://", true)) && s.length > 8
 
     private suspend fun <T> tx(block: suspend WorkStreamWriter.() -> ActionResult<T>): ActionResult<T> =
         try { repository.transaction(block) } catch (e: Exception) { ActionResult.Failure(e) }

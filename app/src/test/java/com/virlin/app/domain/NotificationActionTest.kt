@@ -7,6 +7,7 @@ import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.*
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
@@ -35,7 +36,7 @@ class NotificationActionTest {
     private lateinit var actions: DefaultVirlinActions
 
     private fun ws(id: String, title: String, state: WorkStreamState, mode: WorkStreamMode = WorkStreamMode.HUMAN, active: String? = null) =
-        WorkStream(id = id, title = title, state = state, mode = mode, activeTaskId = active, createdAt = t0, updatedAt = t0)
+        WorkStream(id = id, title = title, state = state, executionPreference = mode.toPreference(), activeTaskId = active, createdAt = t0, updatedAt = t0)
 
     @Before fun setUp() {
         clock = FakeClock(t0); scheduler = FakeAttentionScheduler()

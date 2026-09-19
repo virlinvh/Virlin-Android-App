@@ -20,7 +20,7 @@ object CapturePresentation {
     }
 
     /** Scheme dropped for display only; the stored URL is untouched. */
-    fun displayUrl(url: String): String = url.removePrefix("https://").removePrefix("http://").removePrefix("www.").trimEnd('/')
+    fun displayUrl(url: String): String = com.virlin.app.domain.capture.LinkUrl.displayUrl(url)
 
     fun age(createdAt: Instant, now: Instant): String {
         val d = Duration.between(createdAt, now).coerceAtLeast(Duration.ZERO)
@@ -32,5 +32,11 @@ object CapturePresentation {
         }
     }
 
-    fun typeLabel(t: CaptureType): String = when (t) { CaptureType.NOTE -> "Note"; CaptureType.PROMPT -> "Prompt"; CaptureType.LINK -> "Link" }
+    fun typeLabel(t: CaptureType): String = when (t) {
+        CaptureType.NOTE -> "Text Note"
+        CaptureType.PROMPT -> "Prompt"
+        CaptureType.LINK -> "Link"
+        CaptureType.FILE -> "File / Image"
+        CaptureType.VOICE -> "Voice"
+    }
 }

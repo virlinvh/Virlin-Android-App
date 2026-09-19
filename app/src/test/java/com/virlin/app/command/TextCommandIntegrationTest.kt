@@ -14,6 +14,7 @@ import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.*
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
@@ -55,7 +56,7 @@ class TextCommandIntegrationTest {
     private lateinit var vm: AgentCommandViewModel
 
     private fun ws(id: String, title: String, state: WorkStreamState, project: String?, mode: WorkStreamMode = WorkStreamMode.HUMAN, active: String? = null) =
-        WorkStream(id = id, title = title, state = state, projectId = project, mode = mode, activeTaskId = active, createdAt = t0, updatedAt = t0)
+        WorkStream(id = id, title = title, state = state, projectId = project, executionPreference = mode.toPreference(), activeTaskId = active, createdAt = t0, updatedAt = t0)
 
     @Before fun setUp() {
         Dispatchers.setMain(dispatcher)
@@ -103,7 +104,7 @@ class TextCommandIntegrationTest {
         assertTrue(repo.streams.value.none { it.title == "Claude Build" })          // preview only
         vm.accept(p.command); advanceUntilIdle()
         assertEquals("Created WorkStream · Claude Build", feedback().text)
-        repo.streams.value.first { it.title == "Claude Build" }.let { assertEquals(WorkStreamMode.EXTERNAL, it.mode); assertNull(it.projectId); assertEquals(READY, it.state) }
+        repo.streams.value.first { it.title == "Claude Build" }.let { assertEquals(ExecutionPreference.EXTERNAL, it.executionPreference); assertNull(it.projectId); assertEquals(READY, it.state) }
     }
 
     @Test fun complete_stream_confirmation_rejected_then_accepted() = runTest(dispatcher) {

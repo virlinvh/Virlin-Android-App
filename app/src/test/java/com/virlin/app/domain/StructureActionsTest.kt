@@ -28,8 +28,8 @@ class StructureActionsTest {
     private lateinit var repo: InMemoryWorkStreamRepository
     private lateinit var a: DefaultVirlinActions
 
-    private fun ws(id: String, state: WorkStreamState, project: String? = "app") =
-        WorkStream(id = id, title = id, state = state, projectId = project, createdAt = t0, updatedAt = t0)
+    private fun ws(id: String, state: WorkStreamState, project: String? = "app", pref: ExecutionPreference = ExecutionPreference.EXTERNAL) =
+        WorkStream(id = id, title = id, state = state, projectId = project, executionPreference = pref, createdAt = t0, updatedAt = t0)
 
     @Before
     fun setUp() {

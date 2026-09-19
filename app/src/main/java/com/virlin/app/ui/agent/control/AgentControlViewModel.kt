@@ -21,16 +21,17 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** The four Quick Actions of the Control workspace. Each maps to an existing control path only. */
-enum class QuickAction(val label: String) { FOCUS("Focus"), LEAVE("Leave"), HAND_OFF("Hand Off"), BLOCK("Block") }
-
 /**
  * Agent CONTROL mode: a deterministic, structured alternate interface to the existing
  * domain. Observes the repository, projects [AgentControlState], and forwards every control
  * to the SAME `VirlinActions` (through the shared [AttentionIntentController]) that Now,
  * Needs You and the notification actions use. Holds only ephemeral selection/dialog state —
  * no durable truth, no second activeTaskId, no Room, no DAO, no scheduler, no notifications.
- * No natural language is interpreted here; controls are chips and choosers.
+ *
+ * Quick Actions use [selectedQuickAction] + [Selection.selectedTargetId]: selection alone
+ * never mutates domain state. When both sides of a valid pair are present, execution goes
+ * through [act] / [AttentionIntentController] (or typed clarification when no target exists
+ * and the user re-taps an already-selected action that needs one).
  */
 class AgentControlViewModel(
     private val actions: VirlinActions = VirlinGraph.actions,
@@ -55,6 +56,10 @@ class AgentControlViewModel(
     /** Re-projects with the current clock (details such as "check in 2m" are time-derived). */
     fun refresh() { _selection.update { it.copy() } }
 
+    /** Snapshot projection for intent routing — does not require a StateFlow subscriber. */
+    private fun projection(ui: Selection = _selection.value): AgentControlState =
+        AgentControlPresentation.build(repository.projects.value, repository.streams.value, repository.tasks.value, clock.now(), ui)
+
     // ------------------------------------------------------------------ structured stream controls
 
     fun act(streamId: String, action: ControlAction) {
@@ -70,27 +75,69 @@ class AgentControlViewModel(
         }
     }
 
-    /** Recent / Suggested row tap: reveal / hide that item's structured controls. */
-    fun toggleItem(streamId: String) { _selection.update { it.copy(expandedItemId = if (it.expandedItemId == streamId) null else streamId) } }
+    /** Select / deselect a Recent / Suggested WorkStream as the Control target. Selection ≠ execution. */
+    fun selectTarget(streamId: String) {
+        val ui = _selection.value
+        val nextId = if (ui.selectedTargetId == streamId) null else streamId
+        val action = ui.selectedQuickAction
+        val item = nextId?.let { id -> projection(ui).suggested.firstOrNull { it.streamId == id } }
+        _selection.update { it.copy(selectedTargetId = nextId) }
+        if (action != null && item != null && ControlQuickRegistry.eligibleFor(action, item)) {
+            executePair(action, item.streamId)
+        }
+    }
 
     /**
-     * Quick Actions (Stitch Control UI). Deterministic target rule: the expanded row, else the
-     * current FOCUS. With a target every action is the SAME structured control as the row chips
-     * (shared chooser semantics); without one the typed command contract asks the existing
-     * clarification ("Which WorkStream do you mean?" / "Nothing is in Focus right now.").
+     * Select a Quick Action. Selection alone does not mutate domain.
+     * - If a valid target is already selected → execute via existing intents.
+     * - If the same action is re-tapped with no target → typed clarification (existing contract).
+     * - If the action is disabled for the current target → keep selection, do not execute.
      */
-    fun quick(action: QuickAction, onCommand: (VirlinCommand) -> Unit) {
-        val st = state.value
-        val expanded = st.expandedItemId?.let { id -> st.suggested.firstOrNull { it.streamId == id } }
+    fun selectQuick(action: QuickAction, onCommand: (VirlinCommand) -> Unit) {
+        val ui = _selection.value
+        val st = projection(ui)
+        val target = st.selectedTarget
+        if (target != null && !ControlQuickRegistry.eligibleFor(action, target)) {
+            _selection.update { it.copy(selectedQuickAction = action) }
+            return
+        }
+        if (ui.selectedQuickAction == action && target == null) {
+            requestClarification(action, onCommand)
+            return
+        }
+        if (target != null && ControlQuickRegistry.eligibleFor(action, target)) {
+            _selection.update { it.copy(selectedQuickAction = action) }
+            executePair(action, target.streamId)
+            return
+        }
+        _selection.update { it.copy(selectedQuickAction = action) }
+    }
+
+    /** Whether [action] is enabled given the current selected target (or always browsable when none). */
+    fun isQuickEnabled(action: QuickAction): Boolean {
+        val target = projection().selectedTarget ?: return true
+        return ControlQuickRegistry.eligibleFor(action, target)
+    }
+
+    private fun executePair(action: QuickAction, streamId: String) {
         when (action) {
-            QuickAction.FOCUS -> if (expanded != null) intents.focus(expanded.streamId)
-                else onCommand(VirlinCommand.Control.FocusStream(TargetRef.ThisStream))
-            QuickAction.LEAVE -> (expanded ?: st.currentFocus)?.let { intents.openLeave(it.streamId) }
-                ?: onCommand(VirlinCommand.Control.LeaveStream(TargetRef.CurrentStream))
-            QuickAction.HAND_OFF -> (expanded ?: st.currentFocus)?.let { intents.openHandOff(it.streamId) }
-                ?: onCommand(VirlinCommand.Control.HandOffStream(TargetRef.CurrentStream))
-            QuickAction.BLOCK -> (expanded ?: st.currentFocus)?.let { intents.block(it.streamId) }
-                ?: onCommand(VirlinCommand.Control.BlockStream(TargetRef.CurrentStream))
+            QuickAction.BLOCK -> intents.block(streamId)
+            else -> action.controlAction?.let { act(streamId, it) }
+        }
+        // Clear action selection after kicking off execution / chooser; keep target so chips stay useful.
+        _selection.update { it.copy(selectedQuickAction = null) }
+    }
+
+    private fun requestClarification(action: QuickAction, onCommand: (VirlinCommand) -> Unit) {
+        // Only actions that already had a typed clarification path without a target.
+        // CHECK / FOCUS_NOW / DEFER / TASKS need a concrete stream — keep selection, do not invent times.
+        when (action) {
+            QuickAction.FOCUS, QuickAction.RESUME -> onCommand(VirlinCommand.Control.FocusStream(TargetRef.ThisStream))
+            QuickAction.LEAVE -> onCommand(VirlinCommand.Control.LeaveStream(TargetRef.CurrentStream))
+            QuickAction.HAND_OFF -> onCommand(VirlinCommand.Control.HandOffStream(TargetRef.CurrentStream))
+            QuickAction.COMPLETE -> onCommand(VirlinCommand.Control.Complete(TargetRef.ThisStream))
+            QuickAction.BLOCK -> onCommand(VirlinCommand.Control.BlockStream(TargetRef.CurrentStream))
+            QuickAction.CHECK, QuickAction.FOCUS_NOW, QuickAction.DEFER, QuickAction.TASKS -> Unit
         }
     }
 
@@ -100,10 +147,15 @@ class AgentControlViewModel(
         val stream = repository.streams.value.firstOrNull { it.id == streamId } ?: return
         _selection.update {
             it.copy(selectedStreamId = streamId, selectedTaskId = null, nextCandidate = null, pendingCancelTaskId = null,
-                expanded = HierarchyPresentation.ancestorIds(repository.tasks.value, stream.activeTaskId))
+                expanded = HierarchyPresentation.ancestorIds(repository.tasks.value, stream.activeTaskId),
+                selectedQuickAction = null)
         }
     }
-    fun closeTasks() { _selection.update { Selection() } }
+    fun closeTasks() {
+        _selection.update {
+            it.copy(selectedStreamId = null, selectedTaskId = null, nextCandidate = null, pendingCancelTaskId = null, expanded = emptySet())
+        }
+    }
     fun toggleExpanded(taskId: String) { _selection.update { it.copy(expanded = if (taskId in it.expanded) it.expanded - taskId else it.expanded + taskId) } }
     fun selectTask(taskId: String?) { _selection.update { it.copy(selectedTaskId = taskId) } }
 

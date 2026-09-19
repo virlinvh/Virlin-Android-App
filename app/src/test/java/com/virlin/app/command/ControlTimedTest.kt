@@ -24,6 +24,7 @@ import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamMode.EXTERNAL
 import com.virlin.app.domain.model.WorkStreamMode.HUMAN
 import com.virlin.app.domain.model.WorkStreamState
@@ -76,9 +77,9 @@ class ControlTimedTest {
         fun rejected(text: String) = (engine.resolve(parse(text)) as CommandResolution.Rejected).reason
     }
 
-    private fun ws(id: String, title: String, state: WorkStreamState = READY, mode: WorkStreamMode = HUMAN, project: String? = null, active: String? = null,
+    private fun ws(id: String, title: String, state: WorkStreamState = READY, mode: WorkStreamMode = WorkStreamMode.HUMAN, project: String? = null, active: String? = null,
                    snoozeReason: SnoozeReason? = null, checkAt: Instant? = null) =
-        WorkStream(id = id, title = title, state = state, projectId = project, mode = mode, activeTaskId = active, snoozeReason = snoozeReason, checkAt = checkAt, snoozedUntil = if (state == SNOOZED) checkAt else null,
+        WorkStream(id = id, title = title, state = state, projectId = project, executionPreference = mode.toPreference(), activeTaskId = active, snoozeReason = snoozeReason, checkAt = checkAt, snoozedUntil = if (state == SNOOZED) checkAt else null,
             processingStartedAt = if (state == PROCESSING) t0 else null, createdAt = t0, updatedAt = t0)
     private fun task(id: String, title: String, stream: String, project: String? = null) =
         Task(id = id, title = title, projectId = project, workStreamId = stream, createdAt = t0, updatedAt = t0)

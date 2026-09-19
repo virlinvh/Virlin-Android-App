@@ -1,63 +1,91 @@
 package com.virlin.app.ui.agent.control
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Bolt
-import androidx.compose.material.icons.rounded.CenterFocusStrong
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.Groups
-import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.Block
-import androidx.compose.material3.Icon
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.selected
-import com.virlin.app.domain.command.VirlinCommand
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.virlin.app.domain.command.VirlinCommand
 import com.virlin.app.ui.hierarchy.TaskTreeRow
 import com.virlin.app.ui.screens.CompleteWorkStreamDialog
 import com.virlin.app.ui.screens.NowChooserDialog
+import com.virlin.app.ui.screens.scrollEdgeFade
 import com.virlin.app.ui.theme.VirlinColors
+import kotlinx.coroutines.launch
 
 /**
- * CONTROL mode content inside the frozen Agent shell: current focus, attention items,
- * working-for-you, ready — each with its structured controls — plus a compact recursive task
- * picker. Reuses the shared chooser dialog, the whole-WorkStream confirmation and the
- * hierarchy row component. Pure rendering of [AgentControlState]; every tap is a ViewModel
- * intent. No free-text command execution.
+ * CONTROL mode content inside the frozen Agent shell.
+ *
+ * Layout contract: FIXED top (feedback · QUICK ACTIONS horizontal rail · RECENT / SUGGESTED
+ * heading) · SCROLLABLE middle (suggested targets / task picker) · shell-pinned composer.
+ *
+ * Quick Actions: ACTION + TARGET selection. Selection alone never mutates domain state;
+ * a valid pair executes through [AgentControlViewModel] → AttentionIntentController / VirlinActions.
  */
 private val Hairline = Color(0x1F162016)
+
+/** Bottom inset inside a scrollable middle region so the last card clears the composer. */
+private val ControlListBottomInset = 72.dp
 
 const val AgentControlTag = "agent_control"
 const val AgentControlFocusTag = "agent_control_focus"
@@ -69,7 +97,6 @@ fun quickActionTag(a: QuickAction) = "control_quick_${a.name.lowercase()}"
 const val AgentControlQuickActionsTag = "agent_control_quick_actions"
 const val AgentControlSuggestedTag = "agent_control_suggested"
 
-// Stitch Control palette (low saturation).
 private val Neutral400 = Color(0xFF9CA3AF)
 private val Neutral500 = Color(0xFF6B7280)
 private val Neutral800 = Color(0xFF1F2937)
@@ -80,7 +107,7 @@ private val CardBorder = Color(0xD9E5E7EB)
 fun AgentControlArea(
     vm: AgentControlViewModel,
     modifier: Modifier = Modifier,
-    /** Typed command sink for Quick Actions without a target (the existing command panel / clarification). */
+    /** Typed command sink for Quick Actions without a target (existing command panel / clarification). */
     onCommand: (VirlinCommand) -> Unit = {}
 ) {
     val state by vm.state.collectAsState()
@@ -90,7 +117,7 @@ fun AgentControlArea(
 
     chooser?.let { NowChooserDialog(it, vm.intents) }
     pendingCompletion?.let { id ->
-        val title = (listOfNotNull(state.currentFocus) + state.needsAttention + state.processing + state.ready).firstOrNull { it.streamId == id }?.title ?: "this WorkStream"
+        val title = state.suggested.firstOrNull { it.streamId == id }?.title ?: "this WorkStream"
         CompleteWorkStreamDialog(title, onConfirm = vm.intents::confirmCompleteWorkStream, onDismiss = vm.intents::dismissWorkStreamCompletion)
     }
 
@@ -100,68 +127,220 @@ fun AgentControlArea(
                 modifier = Modifier.testTag(AgentControlFeedbackTag).padding(bottom = 8.dp))
         }
         if (state.selectedStreamId != null) {
-            TaskPicker(state, vm)
+            val pickerScroll = rememberScrollState()
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds()
+                    .scrollEdgeFade(pickerScroll, VirlinColors.Background)
+                    .verticalScroll(pickerScroll)
+            ) {
+                TaskPicker(state, vm)
+                Spacer(Modifier.height(ControlListBottomInset))
+            }
             return@Column
         }
 
-        // ---- QUICK ACTIONS (Stitch): four equal tiles over the existing control paths.
+        // ---- QUICK ACTIONS: FIXED horizontal rail
         SectionLabel("QUICK ACTIONS")
-        Row(modifier = Modifier.fillMaxWidth().testTag(AgentControlQuickActionsTag), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            QuickAction.values().forEach { a -> QuickActionTile(a, modifier = Modifier.weight(1f)) { vm.quick(a, onCommand) } }
-        }
+        QuickActionRail(
+            selected = state.selectedQuickAction,
+            enabledFor = { vm.isQuickEnabled(it) },
+            onSelect = { vm.selectQuick(it, onCommand) }
+        )
         Spacer(Modifier.height(22.dp))
 
-        // ---- RECENT / SUGGESTED: real Control state — current FOCUS · needs you · working · ready.
+        // ---- RECENT / SUGGESTED heading: FIXED
         SectionLabel("RECENT / SUGGESTED")
-        val rows = state.suggested
-        if (rows.isEmpty()) {
-            Text("Nothing to control right now", fontSize = 13.sp, color = Neutral500, modifier = Modifier.testTag(AgentControlFocusTag).padding(vertical = 4.dp))
-        }
-        Column(modifier = Modifier.fillMaxWidth().testTag(AgentControlSuggestedTag), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            rows.forEach { item ->
-                // The current-focus row keeps its own outer identity for tests (one testTag per node).
-                if (item.streamId == state.currentFocus?.streamId) Box(Modifier.fillMaxWidth().testTag(AgentControlFocusTag).semantics { contentDescription = item.description }) { SuggestedRow(item, expanded = item.streamId == state.expandedItemId, vm = vm) }
-                else SuggestedRow(item, expanded = item.streamId == state.expandedItemId, vm = vm)
+
+        val listScroll = rememberScrollState()
+        Column(
+            modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds()
+                .scrollEdgeFade(listScroll, VirlinColors.Background)
+                .verticalScroll(listScroll)
+        ) {
+            val rows = state.suggested
+            if (rows.isEmpty()) {
+                Text("Nothing to control right now", fontSize = 13.sp, color = Neutral500,
+                    modifier = Modifier.testTag(AgentControlFocusTag).padding(vertical = 4.dp))
             }
+            Column(modifier = Modifier.fillMaxWidth().testTag(AgentControlSuggestedTag), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                rows.forEach { item ->
+                    val selected = item.streamId == state.selectedTargetId
+                    val row = @Composable {
+                        SuggestedRow(item, selected = selected, vm = vm)
+                    }
+                    if (item.streamId == state.currentFocus?.streamId) {
+                        Box(Modifier.fillMaxWidth().testTag(AgentControlFocusTag).semantics { contentDescription = item.description }) { row() }
+                    } else row()
+                }
+            }
+            Spacer(Modifier.height(ControlListBottomInset))
         }
     }
 }
 
 @Composable
 private fun SectionLabel(text: String) {
-    Text(text, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp, color = Neutral400, modifier = Modifier.padding(bottom = 10.dp, start = 2.dp))
+    Text(text, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp, color = Neutral400,
+        modifier = Modifier.padding(bottom = 10.dp, start = 2.dp))
 }
 
-// ---------------------------------------------------------------- Quick Actions
+// ---------------------------------------------------------------- Quick Actions rail
 
-private data class QuickLook(val top: Color, val bottom: Color, val border: Color, val icon: ImageVector, val tint: Color, val filled: Color?)
+@Composable
+private fun QuickActionRail(
+    selected: QuickAction?,
+    enabledFor: (QuickAction) -> Boolean,
+    onSelect: (QuickAction) -> Unit
+) {
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
 
-private fun lookOf(a: QuickAction) = when (a) {
-    QuickAction.FOCUS -> QuickLook(Color(0xFFECFDF5), Color(0x99D1FAE5), Color(0xFFD1FAE5), Icons.Rounded.Description, Color(0xFF047857), null)          // mint / Virlin green
-    QuickAction.LEAVE -> QuickLook(Color(0xFFFFFBEB), Color(0x80FEF3C7), Color(0xFFFEF3C7), Icons.Rounded.Bolt, Color.White, Color(0xFFF59E0B))           // soft amber
-    QuickAction.HAND_OFF -> QuickLook(Color(0xFFEEF6F3), Color(0x80DDEFE7), Color(0xFFDDEFE7), Icons.Rounded.Groups, Color(0xFF2F7A62), null)            // cool mint neutral (no blue token)
-    QuickAction.BLOCK -> QuickLook(Color(0xFFFFF1F2), Color(0x80FFE4E6), Color(0xFFFFE4E6), Icons.Rounded.Close, Color.White, Color(0xFFF43F5E))        // soft rose
+    LaunchedEffect(selected) {
+        val idx = selected?.let { QuickAction.rail.indexOf(it) } ?: return@LaunchedEffect
+        if (idx >= 0) listState.animateScrollToItem(idx)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(AgentControlQuickActionsTag)
+            .clipToBounds()
+            .drawWithContent {
+                drawContent()
+                // Soft trailing fade — cue that more actions exist horizontally.
+                val fade = 28.dp.toPx()
+                drawRect(
+                    brush = Brush.horizontalGradient(
+                        0f to Color.Transparent,
+                        1f to VirlinColors.Background,
+                        startX = size.width - fade,
+                        endX = size.width
+                    )
+                )
+            }
+    ) {
+        LazyRow(
+            state = listState,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(end = 20.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(QuickAction.rail, key = { it.name }) { a ->
+                val enabled = enabledFor(a)
+                QuickActionTile(
+                    a = a,
+                    selected = a == selected,
+                    enabled = enabled,
+                    onClick = {
+                        if (!enabled) return@QuickActionTile
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onSelect(a)
+                        scope.launch {
+                            val i = QuickAction.rail.indexOf(a)
+                            if (i >= 0) listState.animateScrollToItem(i)
+                        }
+                    }
+                )
+            }
+        }
+    }
 }
 
 @Composable
-private fun QuickActionTile(a: QuickAction, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val l = lookOf(a)
+private fun QuickActionTile(
+    a: QuickAction,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val l = ControlQuickRegistry.look(a)
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = when {
+            pressed -> 0.94f
+            selected -> 1.06f
+            else -> 1f
+        },
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+        label = "quickScale"
+    )
+    val alpha by animateFloatAsState(if (enabled) 1f else 0.42f, tween(160), label = "quickAlpha")
+    val borderColor by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) l.selectedBorder else l.border,
+        animationSpec = tween(180),
+        label = "quickBorder"
+    )
+    val topColor by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) l.selectedTop else l.containerTop,
+        animationSpec = tween(180),
+        label = "quickTop"
+    )
+    val bottomColor by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) l.selectedBottom else l.containerBottom,
+        animationSpec = tween(180),
+        label = "quickBottom"
+    )
+    val iconFg = if (l.badgeFill != null) l.badgeIconColor else l.iconColor
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.testTag(quickActionTag(a)).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = "Quick action ${a.label}" }
+        modifier = Modifier
+            .width(64.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale; this.alpha = alpha }
+            .testTag(quickActionTag(a))
+            .semantics {
+                contentDescription = buildString {
+                    append("Quick action ${a.label}")
+                    if (selected) append(", selected")
+                    if (!enabled) append(", unavailable for selected target")
+                }
+                this.selected = selected
+                if (!enabled) disabled()
+            }
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        tryAwaitRelease()
+                        pressed = false
+                    },
+                    onTap = { onClick() }
+                )
+            }
     ) {
         Box(
             modifier = Modifier.size(58.dp)
-                .background(Brush.verticalGradient(listOf(l.top, l.bottom)), RoundedCornerShape(16.dp))
-                .border(1.dp, l.border, RoundedCornerShape(16.dp)),
+                .background(Brush.verticalGradient(listOf(topColor, bottomColor)), RoundedCornerShape(16.dp))
+                .border(if (selected) 1.5.dp else 1.dp, borderColor, RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.Center
         ) {
-            if (l.filled != null) Box(Modifier.size(24.dp).background(l.filled, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(l.icon, contentDescription = null, tint = l.tint, modifier = Modifier.size(14.dp))
-            } else Icon(l.icon, contentDescription = null, tint = l.tint, modifier = Modifier.size(24.dp))
+            if (l.badgeFill != null) Box(
+                Modifier.size(24.dp).background(l.badgeFill, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(l.icon, contentDescription = null, tint = iconFg, modifier = Modifier.size(14.dp))
+            } else Icon(l.icon, contentDescription = null, tint = l.iconColor, modifier = Modifier.size(24.dp))
+            if (selected) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).padding(4.dp).size(14.dp)
+                        .background(l.selectedBorder, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(10.dp))
+                }
+            }
         }
         Spacer(Modifier.height(6.dp))
-        Text(a.label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Neutral800, maxLines = 1)
+        Text(
+            a.label,
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+            color = Neutral800,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -179,33 +358,53 @@ private fun tileOf(kind: ControlKind) = when (kind) {
     ControlKind.BLOCKED -> TileLook(Color(0xFFFFF1F2), Color(0xFFFFE4E6), Icons.Rounded.Block, Color(0xFFBE123C))
 }
 
-/** Icon tile · title · concise state · chevron. Tap = reveal this item's existing structured controls. */
 @Composable
-private fun SuggestedRow(item: ControlItem, expanded: Boolean, vm: AgentControlViewModel, modifier: Modifier = Modifier) {
+private fun SuggestedRow(item: ControlItem, selected: Boolean, vm: AgentControlViewModel, modifier: Modifier = Modifier) {
     val t = tileOf(item.kind)
+    val haptics = LocalHapticFeedback.current
+    val scale by animateFloatAsState(if (selected) 1.01f else 1f, spring(stiffness = Spring.StiffnessMedium), label = "targetScale")
+    val bg = if (selected) Color(0xFFF3FAF6) else Color.White
+    val border = if (selected) VirlinColors.Emerald.copy(alpha = 0.55f) else CardBorder
+
     Column(
         modifier = modifier.fillMaxWidth()
-            .background(Color.White, RoundedCornerShape(16.dp))
-            .border(1.dp, if (expanded) VirlinColors.Emerald.copy(alpha = 0.45f) else CardBorder, RoundedCornerShape(16.dp))
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .background(bg, RoundedCornerShape(16.dp))
+            .border(if (selected) 1.5.dp else 1.dp, border, RoundedCornerShape(16.dp))
             .testTag(controlItemTag(item.streamId))
-            .semantics { contentDescription = item.description; this.selected = expanded }
+            .semantics {
+                contentDescription = item.description + if (selected) ", selected target" else ""
+                this.selected = selected
+            }
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { vm.toggleItem(item.streamId) }.padding(start = 10.dp, end = 16.dp, top = 10.dp, bottom = 10.dp)
+            modifier = Modifier.fillMaxWidth()
+                .clickable(role = Role.Button) {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    vm.selectTarget(item.streamId)
+                }
+                .padding(start = 10.dp, end = 16.dp, top = 10.dp, bottom = 10.dp)
         ) {
             Box(Modifier.size(44.dp).background(t.bg, RoundedCornerShape(12.dp)).border(1.dp, t.border, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
                 Icon(t.icon, contentDescription = null, tint = t.tint, modifier = Modifier.size(22.dp))
             }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(listOfNotNull(item.title, item.projectTitle?.takeIf { it != item.title }).joinToString(" · "), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Neutral900, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(listOfNotNull(item.taskTitle, item.detail).joinToString(" · "), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Neutral400, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(listOfNotNull(item.title, item.projectTitle?.takeIf { it != item.title }).joinToString(" · "),
+                    fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Neutral900, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(listOfNotNull(item.taskTitle, item.detail).joinToString(" · "),
+                    fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Neutral400, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Neutral400, modifier = Modifier.size(18.dp))
+            if (selected) {
+                Box(Modifier.size(22.dp).background(VirlinColors.Emerald.copy(alpha = 0.15f), CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.Check, contentDescription = null, tint = VirlinColors.Emerald, modifier = Modifier.size(14.dp))
+                }
+            } else {
+                Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Neutral400, modifier = Modifier.size(18.dp))
+            }
         }
-        if (expanded) {
-            // The item's existing structured controls (identical semantics to Now / the previous cards).
+        if (selected) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                 item.actions.forEach { a ->
                     val primary = a != ControlAction.TASKS && a != ControlAction.DEFER && a != ControlAction.COMPLETE

@@ -27,6 +27,11 @@ data class Project(
     val priority: Priority = Priority.NORMAL,
     val dueAt: Instant? = null,
     val estimatedEffort: Duration? = null,
+    /**
+     * Default execution mode for descendants that INHERIT. Projects never INHERIT —
+     * they are the hierarchy root default. Not an attention/executable state.
+     */
+    val defaultExecutionMode: EffectiveExecutionMode = EffectiveExecutionMode.HUMAN,
     val createdAt: Instant,
     val updatedAt: Instant,
     val completedAt: Instant? = null
@@ -70,6 +75,12 @@ data class Task(
     val reminderAt: Instant? = null,
     val priority: Priority = Priority.NORMAL,
     val notes: String? = null,
+    /**
+     * Execution preference for this Task. INHERIT walks parent Tasks → WorkStream → Project.
+     * Standalone Project Tasks may store a preference for structure; they are not independently
+     * focusable attention objects today.
+     */
+    val executionPreference: ExecutionPreference = ExecutionPreference.INHERIT,
     val createdAt: Instant,
     val updatedAt: Instant,
     val completedAt: Instant? = null

@@ -9,10 +9,12 @@ import com.virlin.app.domain.action.CreateTask
 import com.virlin.app.domain.action.CreateWorkStream
 import com.virlin.app.domain.action.DomainError
 import com.virlin.app.domain.action.VirlinActions
+import com.virlin.app.domain.model.EffectiveExecutionMode
+import com.virlin.app.domain.model.ExecutionModeResolver
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStream
-import com.virlin.app.domain.model.WorkStreamMode
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.ui.hierarchy.HierarchyPresentation
 import com.virlin.app.ui.hierarchy.TaskRow
@@ -47,7 +49,13 @@ data class AgentCreateForm(
     val title: String = "",
     /** Project picker: null = No Project (valid). */
     val projectId: String? = null,
-    val mode: WorkStreamMode = WorkStreamMode.HUMAN,
+    /**
+     * WorkStream / Task execution preference. Projectless WorkStreams never use INHERIT
+     * (UI hides that chip). Tasks default to INHERIT.
+     */
+    val executionPreference: ExecutionPreference = ExecutionPreference.HUMAN,
+    /** Project create only — root default for descendants. */
+    val projectDefaultExecution: EffectiveExecutionMode = EffectiveExecutionMode.HUMAN,
     val ownerKind: TaskOwnerKind = TaskOwnerKind.WORKSTREAM,
     val workStreamId: String? = null,
     val parentTaskId: String? = null,
@@ -63,6 +71,7 @@ data class AgentCreateState(
     val form: AgentCreateForm,
     val projects: List<Project>,
     val workStreams: List<WorkStream>,
+    val tasks: List<Task> = emptyList(),
     /** Task rows of the selected owner (WorkStream or standalone Project tasks) for the parent picker. */
     val parentRows: List<TaskRow>,
     val selectedProjectTitle: String?,
@@ -96,7 +105,7 @@ class AgentCreateViewModel(
             TaskOwnerKind.PROJECT -> f.projectId?.let { pid -> HierarchyPresentation.rows(t.filter { it.projectId == pid && it.workStreamId == null }, null, null, f.expanded) }
         }.orEmpty()
         return AgentCreateState(
-            form = f, projects = p, workStreams = streams, parentRows = rows,
+            form = f, projects = p, workStreams = streams, tasks = t, parentRows = rows,
             selectedProjectTitle = f.projectId?.let { id -> p.firstOrNull { it.id == id }?.title },
             selectedWorkStreamTitle = f.workStreamId?.let { id -> s.firstOrNull { it.id == id }?.title },
             selectedParentTitle = f.parentTaskId?.let { id -> t.firstOrNull { it.id == id }?.title }
@@ -105,11 +114,27 @@ class AgentCreateViewModel(
 
     // ------------------------------------------------------------------ form edits (ephemeral)
 
-    fun choose(kind: CreateKind) { _form.update { AgentCreateForm(kind = kind) } }
+    fun choose(kind: CreateKind) {
+        _form.update {
+            AgentCreateForm(
+                kind = kind,
+                executionPreference = if (kind == CreateKind.TASK) ExecutionPreference.INHERIT else ExecutionPreference.HUMAN
+            )
+        }
+    }
     fun reset() { _form.value = AgentCreateForm() }
     fun setTitle(v: String) { _form.update { it.copy(title = v, error = null) } }
-    fun setProject(id: String?) { _form.update { it.copy(projectId = id, parentTaskId = null, error = null) } }
-    fun setMode(m: WorkStreamMode) { _form.update { it.copy(mode = m) } }
+    fun setProject(id: String?) {
+        _form.update { f ->
+            val pref = if (id == null && f.executionPreference == ExecutionPreference.INHERIT)
+                ExecutionPreference.HUMAN else f.executionPreference
+            f.copy(projectId = id, parentTaskId = null, executionPreference = pref, error = null)
+        }
+    }
+    fun setExecutionPreference(p: ExecutionPreference) { _form.update { it.copy(executionPreference = p) } }
+    /** Compatibility for tests / older call sites that pass HUMAN/EXTERNAL only. */
+    fun setMode(m: EffectiveExecutionMode) { setExecutionPreference(m.toPreference()) }
+    fun setProjectDefaultExecution(m: EffectiveExecutionMode) { _form.update { it.copy(projectDefaultExecution = m) } }
     fun setOwnerKind(k: TaskOwnerKind) { _form.update { it.copy(ownerKind = k, parentTaskId = null, error = null) } }
     fun setWorkStream(id: String?) {
         val ws = id?.let { wid -> repository.streams.value.firstOrNull { it.id == wid } }
@@ -144,14 +169,14 @@ class AgentCreateViewModel(
         if (title.isBlank()) { _form.update { it.copy(error = "Give it a name first") }; return }
         viewModelScope.launch {
             when (kind) {
-                CreateKind.PROJECT -> report(actions.createProject(CreateProject(title = title))) { Created.ProjectCreated(it) }
-                CreateKind.WORKSTREAM -> report(actions.createWorkStream(CreateWorkStream(title = title, projectId = f.projectId, mode = f.mode))) { Created.WorkStreamCreated(it) }
+                CreateKind.PROJECT -> report(actions.createProject(CreateProject(title = title, defaultExecutionMode = f.projectDefaultExecution))) { Created.ProjectCreated(it) }
+                CreateKind.WORKSTREAM -> report(actions.createWorkStream(CreateWorkStream(title = title, projectId = f.projectId, executionPreference = f.executionPreference))) { Created.WorkStreamCreated(it) }
                 CreateKind.TASK -> {
                     val effort = f.estimateMinutes.toLongOrNull()?.takeIf { it > 0 }?.let(Duration::ofMinutes)
                     val request = when {
-                        f.parentTaskId != null -> CreateTask(title = title, parentTaskId = f.parentTaskId, estimatedEffort = effort)
-                        f.ownerKind == TaskOwnerKind.WORKSTREAM && f.workStreamId != null -> CreateTask(title = title, workStreamId = f.workStreamId, estimatedEffort = effort)
-                        f.ownerKind == TaskOwnerKind.PROJECT && f.projectId != null -> CreateTask(title = title, projectId = f.projectId, estimatedEffort = effort)
+                        f.parentTaskId != null -> CreateTask(title = title, parentTaskId = f.parentTaskId, estimatedEffort = effort, executionPreference = f.executionPreference)
+                        f.ownerKind == TaskOwnerKind.WORKSTREAM && f.workStreamId != null -> CreateTask(title = title, workStreamId = f.workStreamId, estimatedEffort = effort, executionPreference = f.executionPreference)
+                        f.ownerKind == TaskOwnerKind.PROJECT && f.projectId != null -> CreateTask(title = title, projectId = f.projectId, estimatedEffort = effort, executionPreference = f.executionPreference)
                         else -> null
                     }
                     if (request == null) { _form.update { it.copy(error = "Couldn't create that · Choose a WorkStream or Project") }; return@launch }
@@ -178,7 +203,42 @@ class AgentCreateViewModel(
         DomainError.CyclicParent, DomainError.SelfParent -> "Couldn't create that · invalid parent"
         DomainError.TaskAlreadyClosed -> "Couldn't create that · the parent task is closed"
         DomainError.ProjectAlreadyDone -> "Couldn't create that · the Project is done"
+        DomainError.InheritRequiresProject -> "Choose Human or External · Inherit needs a Project"
+        DomainError.CannotChangeExecutionWhileProcessing -> "Finish or reconcile processing first"
+        DomainError.NotExternalExecution -> "That work is human — hand off needs external execution"
         else -> "Couldn't create that"
+    }
+
+    /** Resolved label for INHERIT chips, e.g. "Inherit — External". */
+    fun inheritLabel(form: AgentCreateForm, projects: List<Project>, streams: List<WorkStream>, tasks: List<Task>): String {
+        val resolved = when (form.kind) {
+            CreateKind.WORKSTREAM -> {
+                val default = form.projectId?.let { id -> projects.firstOrNull { it.id == id }?.defaultExecutionMode }
+                ExecutionModeResolver.resolveWorkStream(
+                    WorkStream(
+                        id = "_", title = "_", projectId = form.projectId,
+                        executionPreference = ExecutionPreference.INHERIT,
+                        state = com.virlin.app.domain.model.WorkStreamState.READY,
+                        createdAt = java.time.Instant.EPOCH, updatedAt = java.time.Instant.EPOCH
+                    ),
+                    default
+                )
+            }
+            CreateKind.TASK -> {
+                val parent = form.parentTaskId?.let { id -> tasks.firstOrNull { it.id == id } }
+                val ws = (parent?.workStreamId ?: form.workStreamId)?.let { id -> streams.firstOrNull { it.id == id } }
+                val projectDefault = (ws?.projectId ?: form.projectId ?: parent?.projectId)
+                    ?.let { id -> projects.firstOrNull { it.id == id }?.defaultExecutionMode }
+                val probe = Task(
+                    id = "_", title = "_", projectId = form.projectId, workStreamId = form.workStreamId,
+                    parentTaskId = form.parentTaskId, executionPreference = ExecutionPreference.INHERIT,
+                    createdAt = java.time.Instant.EPOCH, updatedAt = java.time.Instant.EPOCH
+                )
+                ExecutionModeResolver.resolveTask(probe, tasks.associateBy { it.id }, ws, projectDefault)
+            }
+            else -> EffectiveExecutionMode.HUMAN
+        }
+        return "Inherit — ${resolved.name.lowercase().replaceFirstChar(Char::uppercase)}"
     }
 
     // ------------------------------------------------------------------ after-create actions (explicit only)
