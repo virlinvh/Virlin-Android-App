@@ -1,10 +1,14 @@
 package com.virlin.app.domain.repository
 
+import com.virlin.app.domain.model.AttachmentDocument
+import com.virlin.app.domain.model.VoiceDocument
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
 import com.virlin.app.domain.model.FocusSession
+import com.virlin.app.domain.model.NoteDocument
 import com.virlin.app.domain.model.Project
+import com.virlin.app.domain.model.PromptDocument
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskHierarchy
 import com.virlin.app.domain.model.WorkStream
@@ -38,6 +42,14 @@ class InMemoryWorkStreamRepository(
     private val snapshots = mutableListOf<ContextSnapshot>()
     private val events = mutableListOf<WorkStreamEvent>()
     private val captureMap = LinkedHashMap<String, CaptureItem>()
+    private val noteByCapture = LinkedHashMap<String, NoteDocument>()
+    private val noteById = LinkedHashMap<String, NoteDocument>()
+    private val promptByCapture = LinkedHashMap<String, PromptDocument>()
+    private val promptById = LinkedHashMap<String, PromptDocument>()
+    private val attachmentByCapture = LinkedHashMap<String, AttachmentDocument>()
+    private val attachmentById = LinkedHashMap<String, AttachmentDocument>()
+    private val voiceByCapture = LinkedHashMap<String, VoiceDocument>()
+    private val voiceById = LinkedHashMap<String, VoiceDocument>()
 
     private val _streams = MutableStateFlow(streamMap.values.toList())
     override val streams: StateFlow<List<WorkStream>> = _streams.asStateFlow()
@@ -48,6 +60,14 @@ class InMemoryWorkStreamRepository(
     private val _captures = MutableStateFlow<List<CaptureItem>>(emptyList())
     override val captures: StateFlow<List<CaptureItem>> = _captures.asStateFlow()
     override suspend fun getCapture(id: String) = lock.withLock { captureMap[id] }
+    override suspend fun getNoteByCaptureId(captureItemId: String) = lock.withLock { noteByCapture[captureItemId] }
+    override suspend fun getNoteDocument(id: String) = lock.withLock { noteById[id] }
+    override suspend fun getPromptByCaptureId(captureItemId: String) = lock.withLock { promptByCapture[captureItemId] }
+    override suspend fun getPromptDocument(id: String) = lock.withLock { promptById[id] }
+    override suspend fun getAttachmentByCaptureId(captureItemId: String) = lock.withLock { attachmentByCapture[captureItemId] }
+    override suspend fun getAttachmentDocument(id: String) = lock.withLock { attachmentById[id] }
+    override suspend fun getVoiceByCaptureId(captureItemId: String) = lock.withLock { voiceByCapture[captureItemId] }
+    override suspend fun getVoiceDocument(id: String) = lock.withLock { voiceById[id] }
 
     override suspend fun getProject(id: String) = lock.withLock { projectMap[id] }
     override suspend fun getTask(id: String) = lock.withLock { taskMap[id] }
@@ -82,6 +102,22 @@ class InMemoryWorkStreamRepository(
         if (staged.tasks.isNotEmpty()) _tasks.value = taskMap.values.toList()
         staged.captures.forEach { (id, c) -> captureMap[id] = c }
         if (staged.captures.isNotEmpty()) _captures.value = captureMap.values.toList().newestFirst()
+        staged.notes.values.forEach { n ->
+            noteById[n.id] = n
+            noteByCapture[n.captureItemId] = n
+        }
+        staged.prompts.values.forEach { p ->
+            promptById[p.id] = p
+            promptByCapture[p.captureItemId] = p
+        }
+        staged.attachments.values.forEach { a ->
+            attachmentById[a.id] = a
+            attachmentByCapture[a.captureItemId] = a
+        }
+        staged.voices.values.forEach { v ->
+            voiceById[v.id] = v
+            voiceByCapture[v.captureItemId] = v
+        }
         result
     }
 
@@ -97,9 +133,33 @@ class InMemoryWorkStreamRepository(
         val snapshots = mutableListOf<ContextSnapshot>()
         val events = mutableListOf<WorkStreamEvent>()
         val captures = LinkedHashMap<String, CaptureItem>()
+        val notes = LinkedHashMap<String, NoteDocument>()
+        val prompts = LinkedHashMap<String, PromptDocument>()
+        val attachments = LinkedHashMap<String, AttachmentDocument>()
+        val voices = LinkedHashMap<String, VoiceDocument>()
 
         override suspend fun getCapture(id: String) = captures[id] ?: captureMap[id]
         override suspend fun saveCapture(capture: CaptureItem) { captures[capture.id] = capture }
+        override suspend fun getNoteByCaptureId(captureItemId: String) =
+            notes.values.firstOrNull { it.captureItemId == captureItemId }
+                ?: noteByCapture[captureItemId]
+        override suspend fun saveNoteDocument(note: NoteDocument) { notes[note.id] = note }
+        override suspend fun getPromptByCaptureId(captureItemId: String) =
+            prompts.values.firstOrNull { it.captureItemId == captureItemId }
+                ?: promptByCapture[captureItemId]
+        override suspend fun savePromptDocument(prompt: PromptDocument) { prompts[prompt.id] = prompt }
+        override suspend fun getAttachmentByCaptureId(captureItemId: String) =
+            attachments.values.firstOrNull { it.captureItemId == captureItemId }
+                ?: attachmentByCapture[captureItemId]
+        override suspend fun saveAttachmentDocument(attachment: AttachmentDocument) {
+            attachments[attachment.id] = attachment
+        }
+        override suspend fun getVoiceByCaptureId(captureItemId: String) =
+            voices.values.firstOrNull { it.captureItemId == captureItemId }
+                ?: voiceByCapture[captureItemId]
+        override suspend fun saveVoiceDocument(voice: VoiceDocument) {
+            voices[voice.id] = voice
+        }
         override suspend fun getStream(id: String) = streams[id] ?: streamMap[id]
         override suspend fun getActiveFocus(): WorkStream? {
             val merged = LinkedHashMap(streamMap).apply { putAll(streams) }
@@ -122,6 +182,7 @@ class InMemoryWorkStreamRepository(
         override suspend fun getProject(id: String) = projects[id] ?: projectMap[id]
         override suspend fun getTask(id: String) = tasks[id] ?: taskMap[id]
         override suspend fun allTasks(): List<Task> = LinkedHashMap(taskMap).apply { putAll(tasks) }.values.toList()
+        override suspend fun allStreams(): List<WorkStream> = LinkedHashMap(streamMap).apply { putAll(streams) }.values.toList()
         override suspend fun saveProject(project: Project) { projects[project.id] = project }
         override suspend fun saveTask(task: Task) { tasks[task.id] = task }
         override suspend fun saveStream(stream: WorkStream) { streams[stream.id] = stream }

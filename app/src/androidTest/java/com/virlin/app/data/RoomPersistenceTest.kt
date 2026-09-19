@@ -26,6 +26,7 @@ import com.virlin.app.domain.model.TaskHierarchy
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.effectiveAttentionState
 import com.virlin.app.domain.progress.ProgressCalculator
@@ -62,11 +63,11 @@ class RoomPersistenceTest {
     private lateinit var clock: TestClock
     private lateinit var actions: DefaultVirlinActions
 
-    private fun open(): RoomWorkStreamRepository {
+    private fun open(): RoomWorkStreamRepository = runBlocking {
         db = androidx.room.Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName).build()
-        repo = RoomWorkStreamRepository(db)
+        repo = RoomWorkStreamRepository.create(db)
         actions = DefaultVirlinActions(repo, clock, Ids())
-        return repo
+        repo
     }
 
     /** PHASE B: destroy every in-memory object and reconstruct purely from the file. */
@@ -76,7 +77,7 @@ class RoomPersistenceTest {
     @After fun tearDown() { db.close(); ctx.deleteDatabase(dbName) }
 
     private fun ws(id: String, title: String, state: WorkStreamState, project: String?, mode: WorkStreamMode = WorkStreamMode.HUMAN, active: String? = null) =
-        WorkStream(id = id, title = title, projectId = project, mode = mode, state = state, activeTaskId = active,
+        WorkStream(id = id, title = title, projectId = project, executionPreference = mode.toPreference(), state = state, activeTaskId = active,
             nextHumanAction = "next-$id", createdAt = t0, updatedAt = t0)
     private fun task(id: String, title: String, ws: String?, project: String?, parent: String?, status: TaskStatus = TaskStatus.TODO, order: Int = 0) =
         Task(id, title, projectId = project, workStreamId = ws, parentTaskId = parent, status = status, order = order,
@@ -117,7 +118,7 @@ class RoomPersistenceTest {
         assertEquals(Duration.ofHours(40), p.estimatedEffort); assertEquals(t0.plusSeconds(86400), p.dueAt); assertEquals(ProjectStatus.ACTIVE, p.status)
         // Project-backed stream + deep active task
         val s4 = r.getStream("s4")!!
-        assertEquals("p1", s4.projectId); assertEquals(WorkStreamMode.EXTERNAL, s4.mode); assertEquals("Antigravity", s4.tool)
+        assertEquals("p1", s4.projectId); assertEquals(ExecutionPreference.EXTERNAL, s4.executionPreference); assertEquals("Antigravity", s4.tool)
         assertEquals("t_daypart", s4.activeTaskId)
         assertEquals(listOf("t_daypart", "t_nl", "t_rem", "t_create"), r.getAncestry("t_daypart")!!.map { it.id })   // derived, not stored
         assertEquals(t0.minusSeconds(600), s4.processingStartedAt); assertEquals(t0.plusSeconds(1800), s4.checkAt)
@@ -308,7 +309,7 @@ class RoomPersistenceTest {
     }
 
     private suspend fun snapshot(r: WorkStreamRepository): List<String> = buildList {
-        r.streams.value.sortedBy { it.id }.forEach { add("${it.id}:${it.state}:${it.snoozeReason}:${it.activeTaskId}:${it.projectId}:${it.mode}:${it.checkAt}:${it.snoozedUntil}") }
+        r.streams.value.sortedBy { it.id }.forEach { add("${it.id}:${it.state}:${it.snoozeReason}:${it.activeTaskId}:${it.projectId}:${it.executionPreference}:${it.checkAt}:${it.snoozedUntil}") }
         r.tasks.value.sortedBy { it.id }.forEach { add("${it.id}:${it.title}:${it.status}:${it.parentTaskId}:${it.workStreamId}:${it.projectId}") }
         r.projects.value.forEach { add("${it.id}:${it.title}") }
         add("h-events:" + r.getEvents("h").map { it.type })

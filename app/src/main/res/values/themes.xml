@@ -3,5 +3,7 @@
     <style name="Theme.Virlin" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">#F8F7F4</item>
         <item name="android:windowLightStatusBar">true</item>
+        <!-- Starting window fill until the first Compose frame (setContent is immediate). -->
+        <item name="android:windowBackground">#F8F7F4</item>
     </style>
 </resources>

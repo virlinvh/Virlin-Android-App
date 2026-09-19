@@ -1,5 +1,7 @@
 package com.virlin.app.domain.command
 
+import com.virlin.app.domain.model.ExecutionPreference
+
 import com.virlin.app.domain.action.ActionResult
 import com.virlin.app.domain.action.CaptureContext
 import com.virlin.app.domain.action.CaptureTaskTarget
@@ -67,11 +69,17 @@ class CommandExecutor(
         is ResolvedCommand.CompleteStream -> map(actions.completeStream(c.streamId), c) { "${it.title} completed" }
 
         is ResolvedCommand.CreateProject -> map(actions.createProject(CreateProject(title = c.title)), c) { "Created project · ${it.title}" }
-        is ResolvedCommand.CreateWorkStream -> map(actions.createWorkStream(CreateWorkStream(title = c.title, projectId = c.projectId, mode = c.mode)), c) { "Created WorkStream · ${it.title}" }
+        is ResolvedCommand.CreateWorkStream -> map(actions.createWorkStream(CreateWorkStream(title = c.title, projectId = c.projectId, executionPreference = c.mode.toPreference())), c) { "Created WorkStream · ${it.title}" }
         is ResolvedCommand.CreateTask -> map(actions.createTask(CreateTask(title = c.title, workStreamId = c.workStreamId, projectId = c.projectId, parentTaskId = c.parentTaskId, estimatedEffort = c.estimate)), c) { "Created task · ${it.title}" }
 
         is ResolvedCommand.CreateCapture -> map(actions.createCapture(CreateCapture(type = c.type, content = c.content, sourceUrl = c.url, context = CaptureContext(c.projectId, c.workStreamId, c.taskId))), c) {
-            when (it.type) { CaptureType.NOTE -> "Saved to Inbox"; CaptureType.PROMPT -> "Saved prompt"; CaptureType.LINK -> "Saved link" } }
+            when (it.type) {
+                CaptureType.NOTE -> "Saved to Inbox"
+                CaptureType.PROMPT -> "Saved prompt"
+                CaptureType.LINK -> "Saved link"
+                CaptureType.FILE -> "Saved file"
+                CaptureType.VOICE -> "Saved voice"
+            } }
         is ResolvedCommand.ArchiveCapture -> map(actions.archiveCapture(c.captureId), c) { "Archived" }
         is ResolvedCommand.AttachCapture -> map(actions.attachCapture(c.captureId, CaptureContext(c.projectId, c.workStreamId, c.taskId)), c) { if (it.hasContext) "Attached" else "Context cleared" }
         is ResolvedCommand.ConvertCaptureToTask -> map(actions.convertCaptureToTask(c.captureId, CaptureTaskTarget(workStreamId = c.workStreamId, projectId = c.projectId, parentTaskId = c.parentTaskId)), c) { "Task created · ${it.title}" }
@@ -146,6 +154,7 @@ class CommandExecutor(
         DomainError.EmptyTitle -> "Give it a name first"
         DomainError.EmptyCapture -> "Nothing to save yet"
         DomainError.InvalidLink -> "Enter a full link starting with http:// or https://"
+        DomainError.NotATextNote, DomainError.NotAPrompt, DomainError.NotAnAttachment, DomainError.NotAVoiceNote -> "Wrong capture type"
         DomainError.OwnershipMismatch -> "Choose a WorkStream or Project"
         DomainError.CaptureAlreadyOrganized -> "Already turned into a task"
         is DomainError.TaskNotFound -> "That task no longer exists"

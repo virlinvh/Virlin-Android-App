@@ -24,6 +24,7 @@ import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskHierarchy
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamMode.EXTERNAL
 import com.virlin.app.domain.model.WorkStreamMode.HUMAN
 import com.virlin.app.domain.model.WorkStreamState
@@ -66,8 +67,8 @@ class CreateNaturalTest {
         fun stream(title: String) = streams().single { it.title == title }
     }
 
-    private fun ws(id: String, title: String, project: String? = null, mode: WorkStreamMode = HUMAN, state: WorkStreamState = READY, active: String? = null) =
-        WorkStream(id = id, title = title, state = state, projectId = project, mode = mode, activeTaskId = active, createdAt = t0, updatedAt = t0)
+    private fun ws(id: String, title: String, project: String? = null, mode: WorkStreamMode = WorkStreamMode.HUMAN, state: WorkStreamState = READY, active: String? = null) =
+        WorkStream(id = id, title = title, state = state, projectId = project, executionPreference = mode.toPreference(), activeTaskId = active, createdAt = t0, updatedAt = t0)
     private fun task(id: String, title: String, stream: String?, project: String? = null, parent: String? = null) =
         Task(id = id, title = title, projectId = project, workStreamId = stream, parentTaskId = parent, createdAt = t0, updatedAt = t0)
 
@@ -137,22 +138,22 @@ class CreateNaturalTest {
     @Test fun workstreams_mode_explicit_or_asked_never_inferred() = runTest {
         val w = world()
         w.create("Create external workstream Claude Build 2")
-        w.stream("Claude Build 2").let { assertEquals(EXTERNAL, it.mode); assertNull(it.projectId) }                 // projectless
-        w.create("Create human workstream Claude Work"); assertEquals(HUMAN, w.stream("Claude Work").mode)               // explicit wins over "Claude"
-        w.create("Create external workstream Psychology Reading"); assertEquals(EXTERNAL, w.stream("Psychology Reading").mode)
+        w.stream("Claude Build 2").let { assertEquals(ExecutionPreference.EXTERNAL, it.executionPreference); assertNull(it.projectId) }                 // projectless
+        w.create("Create human workstream Claude Work"); assertEquals(ExecutionPreference.HUMAN, w.stream("Claude Work").executionPreference)               // explicit wins over "Claude"
+        w.create("Create external workstream Psychology Reading"); assertEquals(ExecutionPreference.EXTERNAL, w.stream("Psychology Reading").executionPreference)
         // mode omitted → asks; choice continues the SAME command (title preserved)
         val c = w.clarify("Create workstream Claude Build 3")
         assertEquals(Clarification.Kind.MISSING_MODE, c.kind); assertEquals(listOf("HUMAN", "EXTERNAL"), c.candidates.map { it.value })
         assertEquals(Create.CreateWorkStream("Claude Build 3", null, EXTERNAL), c.choose("EXTERNAL"))
         val o = w.engine.choose(c, "EXTERNAL")
-        assertTrue(o is Outcome.Done); assertEquals(EXTERNAL, w.stream("Claude Build 3").mode)
+        assertTrue(o is Outcome.Done); assertEquals(ExecutionPreference.EXTERNAL, w.stream("Claude Build 3").executionPreference)
         // project-backed
         w.create("Create external workstream Claude Build 4 under Virlin Android App"); assertEquals("p1", w.stream("Claude Build 4").projectId)
         w.create("Create human workstream Unit 23 under Psychology"); assertEquals("p2", w.stream("Unit 23").projectId)      // Project only: the Psychology WorkStream/Task are not owners
         val c2 = w.clarify("Create workstream Testing under Career")
         assertEquals(Clarification.Kind.MISSING_MODE, c2.kind)
         assertEquals(Create.CreateWorkStream("Testing", TargetRef.ById("p3"), HUMAN), c2.choose("HUMAN"))                 // owner already resolved
-        w.engine.choose(c2, "HUMAN"); w.stream("Testing").let { assertEquals("p3", it.projectId); assertEquals(HUMAN, it.mode) }
+        w.engine.choose(c2, "HUMAN"); w.stream("Testing").let { assertEquals("p3", it.projectId); assertEquals(ExecutionPreference.HUMAN, it.executionPreference) }
         assertEquals(Clarification.Kind.TARGET_NOT_FOUND, w.clarify("Create workstream X under Nowhere").kind)
     }
 
@@ -163,7 +164,7 @@ class CreateNaturalTest {
         val c = w.clarify("Create external workstream Claude Build 5 under Virlin")
         assertEquals(Clarification.Kind.AMBIGUOUS_TARGET, c.kind); assertEquals(listOf("p4", "p5"), c.candidates.map { it.value })        // WorkStream "Virlin" is not a candidate
         assertEquals(Create.CreateWorkStream("Claude Build 5", TargetRef.ById("p5"), EXTERNAL), c.choose("p5"))
-        w.engine.choose(c, "p5"); w.stream("Claude Build 5").let { assertEquals("p5", it.projectId); assertEquals(EXTERNAL, it.mode) }
+        w.engine.choose(c, "p5"); w.stream("Claude Build 5").let { assertEquals("p5", it.projectId); assertEquals(ExecutionPreference.EXTERNAL, it.executionPreference) }
         // ambiguous Project + missing mode: two steps, title carried through both, no reparse
         val s1 = w.clarify("Create workstream Testing under Virlin")
         assertEquals(Clarification.Kind.AMBIGUOUS_TARGET, s1.kind)
@@ -172,7 +173,7 @@ class CreateNaturalTest {
         assertEquals(Create.CreateWorkStream("Testing", TargetRef.ById("p4"), EXTERNAL), step2.clarification.choose("EXTERNAL"))
         val ready = w.engine.resolve(step2.clarification.choose("EXTERNAL")!!) as CommandResolution.Ready
         val pv = ready.command as ResolvedCommand.CreateWorkStream
-        assertEquals("p4", pv.projectId); assertEquals("Testing", pv.title); assertEquals(EXTERNAL, pv.mode)
+        assertEquals("p4", pv.projectId); assertEquals("Testing", pv.title); assertEquals(WorkStreamMode.EXTERNAL, pv.mode)
         w.engine.execute(pv); assertEquals("p4", w.stream("Testing").projectId)
     }
 

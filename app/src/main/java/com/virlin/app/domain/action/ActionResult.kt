@@ -51,8 +51,21 @@ sealed interface DomainError {
     data object TaskNotInWorkStream : DomainError
     data object InvalidEffort : DomainError
 
+    // ---- Execution responsibility
+    /** Hand Off / external-processing verbs require effective EXTERNAL. */
+    data object NotExternalExecution : DomainError
+    /** Preference change would make a PROCESSING stream effective HUMAN. */
+    data object CannotChangeExecutionWhileProcessing : DomainError
+    /** Projectless WorkStreams may not use INHERIT. */
+    data object InheritRequiresProject : DomainError
+
     // ---- Capture (Pass 10)
     data object EmptyCapture : DomainError
+    data class NoteNotFound(val captureItemId: String) : DomainError
+    data object NotATextNote : DomainError
+    data object NotAPrompt : DomainError
+    data object NotAnAttachment : DomainError
+    data object NotAVoiceNote : DomainError
     data object InvalidLink : DomainError
     data class CaptureNotFound(val captureId: String) : DomainError
     data object CaptureAlreadyOrganized : DomainError

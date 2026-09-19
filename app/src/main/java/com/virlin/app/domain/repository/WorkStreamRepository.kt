@@ -58,6 +58,8 @@ interface WorkStreamWriter : CaptureWriter {
     suspend fun getTask(id: String): Task?
     /** Consistent view of every task including staged writes (hierarchy validation). */
     suspend fun allTasks(): List<Task>
+    /** Consistent view of every WorkStream including staged writes. */
+    suspend fun allStreams(): List<WorkStream>
 
     suspend fun saveProject(project: Project)
     suspend fun saveTask(task: Task)

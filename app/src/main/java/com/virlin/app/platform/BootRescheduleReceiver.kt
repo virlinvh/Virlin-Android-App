@@ -17,10 +17,12 @@ import kotlinx.coroutines.launch
 class BootRescheduleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action !in setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_LOCKED_BOOT_COMPLETED)) return
+        com.virlin.app.debug.VirlinStartup.mark("BootReschedule_onReceive", "action=${intent.action}")
         val pending: PendingResult? = goAsync()   // null when invoked directly (tests)
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 VirlinGraph.init(context.applicationContext)
+                VirlinGraph.ensureReady()
                 val n = VirlinGraph.rescheduleAll()
                 Log.d(TAG, "${intent.action}: re-armed $n attention wake-ups")
             } catch (e: Exception) {

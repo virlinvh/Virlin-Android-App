@@ -8,7 +8,7 @@ import java.time.Instant
  * Context (project / WorkStream / task) is optional and always chosen explicitly; nothing is
  * inferred from the content. Content is stored verbatim (line breaks preserved).
  */
-enum class CaptureType { NOTE, PROMPT, LINK }
+enum class CaptureType { NOTE, PROMPT, LINK, FILE, VOICE }
 
 /** Not Task statuses on purpose: capture is preservation, not execution. */
 enum class CaptureStatus {

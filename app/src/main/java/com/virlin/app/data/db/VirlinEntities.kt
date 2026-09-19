@@ -16,6 +16,9 @@ import java.time.Instant
  * V1 relationship policy: ids reference each other by convention (indexed), with NO SQL
  * foreign keys and NO cascades. Virlin values history; there is no delete API yet, and the
  * delete/archive product policy is not finalized — so nothing can be removed accidentally.
+ *
+ * Schema v3: Project.defaultExecutionMode, WorkStream.executionPreference (replaces mode),
+ * Task.executionPreference.
  */
 
 class VirlinConverters {
@@ -34,6 +37,8 @@ data class ProjectEntity(
     val priority: String,
     val dueAt: Instant?,
     val estimatedEffort: Duration?,
+    /** HUMAN | EXTERNAL — Project default for inheriting descendants. */
+    val defaultExecutionMode: String,
     val createdAt: Instant,
     val updatedAt: Instant,
     val completedAt: Instant?
@@ -48,7 +53,8 @@ data class WorkStreamEntity(
     val title: String,
     val projectId: String?,
     val tool: String?,
-    val mode: String,
+    /** INHERIT | HUMAN | EXTERNAL — replaces v1/v2 `mode`. */
+    val executionPreference: String,
     val state: String,
     val priority: String,
     val pinned: Boolean,
@@ -88,6 +94,8 @@ data class TaskEntity(
     val reminderAt: Instant?,
     val priority: String,
     val notes: String?,
+    /** INHERIT | HUMAN | EXTERNAL. */
+    val executionPreference: String,
     val createdAt: Instant,
     val updatedAt: Instant,
     val completedAt: Instant?
@@ -168,6 +176,81 @@ data class EventEntity(
     val seq: Long
 )
 
-/** One-row bookkeeping table: has the demo seed been applied to this database? */
 @Entity(tableName = "meta")
-data class MetaEntity(@PrimaryKey val key: String, val value: String)
+data class MetaEntity(
+    @PrimaryKey val key: String,
+    val value: String
+)
+
+/**
+ * Text Note document (schema v4). Block tree lives in [documentJson] via [com.virlin.app.domain.note.NoteDocumentCodec].
+ * Lifecycle remains on [CaptureEntity]; one note per captureItemId.
+ */
+@Entity(
+    tableName = "note_documents",
+    indices = [Index(value = ["captureItemId"], unique = true)]
+)
+data class NoteDocumentEntity(
+    @PrimaryKey val id: String,
+    val captureItemId: String,
+    val title: String?,
+    val documentJson: String,
+    val createdAt: Instant,
+    val updatedAt: Instant
+)
+
+/**
+ * Prompt document (schema v5). Block tree in [documentJson] via NoteDocumentCodec;
+ * tags in [tagsJson]. Lifecycle remains on [CaptureEntity].
+ */
+@Entity(
+    tableName = "prompt_documents",
+    indices = [Index(value = ["captureItemId"], unique = true)]
+)
+data class PromptDocumentEntity(
+    @PrimaryKey val id: String,
+    val captureItemId: String,
+    val title: String?,
+    val description: String?,
+    val tagsJson: String,
+    val documentJson: String,
+    val createdAt: Instant,
+    val updatedAt: Instant
+)
+
+/**
+ * File/Image attachment metadata (schema v6). Original bytes live under managed storage;
+ * [relativePath] is relative to filesDir/attachments/. Lifecycle remains on [CaptureEntity].
+ */
+@Entity(
+    tableName = "attachment_documents",
+    indices = [Index(value = ["captureItemId"], unique = true)]
+)
+data class AttachmentDocumentEntity(
+    @PrimaryKey val id: String,
+    val captureItemId: String,
+    val displayName: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val relativePath: String,
+    val kind: String,
+    val createdAt: Instant,
+    val updatedAt: Instant
+)
+
+/**
+ * Voice note document (schema v7). Clip metadata in [clipsJson] via VoiceDocumentCodec;
+ * audio bytes under managed filesDir/voices/. Lifecycle remains on [CaptureEntity].
+ */
+@Entity(
+    tableName = "voice_documents",
+    indices = [Index(value = ["captureItemId"], unique = true)]
+)
+data class VoiceDocumentEntity(
+    @PrimaryKey val id: String,
+    val captureItemId: String,
+    val title: String?,
+    val clipsJson: String,
+    val createdAt: Instant,
+    val updatedAt: Instant
+)

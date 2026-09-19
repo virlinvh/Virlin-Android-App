@@ -33,7 +33,8 @@ class AttentionSchedulerInstrumentedTest {
     private fun stream(id: String) = runBlocking { VirlinGraph.repository.getStream(id)!! }
 
     @Before fun setUp() {
-        VirlinGraph.init(ctx); VirlinGraph.start()
+        VirlinGraph.init(ctx)
+        runBlocking { VirlinGraph.ensureReady() }
         android = AndroidAttentionScheduler(ctx)
         runBlocking {
             // Known baseline regardless of test order: s1/s2/s7 READY (via validated actions), then s1 in Focus.

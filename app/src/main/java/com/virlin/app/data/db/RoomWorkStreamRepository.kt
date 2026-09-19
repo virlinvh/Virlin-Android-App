@@ -14,10 +14,10 @@ import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamEvent
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.domain.repository.WorkStreamWriter
+import com.virlin.app.domain.repository.newestFirst
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -30,22 +30,40 @@ import kotlinx.coroutines.sync.withLock
  * successful transaction it re-reads the affected tables and updates its StateFlows. No
  * polling, no Room `Flow` needed, and observers never see a half-applied hand-off.
  *
- * Nothing here decides product behaviour. Nothing here writes ticks: durations are derived
- * from the persisted timestamps by whoever displays them.
+ * Initial table reads happen in [create] (suspend / IO) — never via `runBlocking` on the
+ * main thread during construction.
  */
-class RoomWorkStreamRepository(private val db: VirlinDatabase) : WorkStreamRepository {
+class RoomWorkStreamRepository private constructor(
+    private val db: VirlinDatabase,
+    initialStreams: List<WorkStream>,
+    initialProjects: List<Project>,
+    initialTasks: List<Task>,
+    initialCaptures: List<CaptureItem>
+) : WorkStreamRepository {
 
     private val lock = Mutex()
 
-    private val _streams = MutableStateFlow(runBlocking { db.workStreams().all().map { it.toDomain() } })
-    private val _projects = MutableStateFlow(runBlocking { db.projects().all().map { it.toDomain() } })
-    private val _tasks = MutableStateFlow(runBlocking { db.tasks().all().map { it.toDomain() } })
+    private val _streams = MutableStateFlow(initialStreams)
+    private val _projects = MutableStateFlow(initialProjects)
+    private val _tasks = MutableStateFlow(initialTasks)
     override val streams: StateFlow<List<WorkStream>> = _streams.asStateFlow()
     override val projects: StateFlow<List<Project>> = _projects.asStateFlow()
     override val tasks: StateFlow<List<Task>> = _tasks.asStateFlow()
-    private val _captures = MutableStateFlow(runBlocking { db.captures().all().map { it.toDomain() } })
+    private val _captures = MutableStateFlow(initialCaptures)
     override val captures: StateFlow<List<CaptureItem>> = _captures.asStateFlow()
     override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()
+    override suspend fun getNoteByCaptureId(captureItemId: String) =
+        db.noteDocuments().byCaptureId(captureItemId)?.toDomain()
+    override suspend fun getNoteDocument(id: String) = db.noteDocuments().byId(id)?.toDomain()
+    override suspend fun getPromptByCaptureId(captureItemId: String) =
+        db.promptDocuments().byCaptureId(captureItemId)?.toDomain()
+    override suspend fun getPromptDocument(id: String) = db.promptDocuments().byId(id)?.toDomain()
+    override suspend fun getAttachmentByCaptureId(captureItemId: String) =
+        db.attachmentDocuments().byCaptureId(captureItemId)?.toDomain()
+    override suspend fun getAttachmentDocument(id: String) = db.attachmentDocuments().byId(id)?.toDomain()
+    override suspend fun getVoiceByCaptureId(captureItemId: String) =
+        db.voiceDocuments().byCaptureId(captureItemId)?.toDomain()
+    override suspend fun getVoiceDocument(id: String) = db.voiceDocuments().byId(id)?.toDomain()
 
     override suspend fun getStream(id: String) = db.workStreams().byId(id)?.toDomain()
     override suspend fun getActiveFocus() = db.workStreams().activeFocus()?.toDomain()
@@ -75,7 +93,7 @@ class RoomWorkStreamRepository(private val db: VirlinDatabase) : WorkStreamRepos
         if (writer.touchedStreams) _streams.value = db.workStreams().all().map { it.toDomain() }
         if (writer.touchedProjects) _projects.value = db.projects().all().map { it.toDomain() }
         if (writer.touchedTasks) _tasks.value = db.tasks().all().map { it.toDomain() }
-        if (writer.touchedCaptures) _captures.value = db.captures().all().map { it.toDomain() }
+        if (writer.touchedCaptures) _captures.value = db.captures().all().map { it.toDomain() }.newestFirst()
         result
     }
 
@@ -85,6 +103,26 @@ class RoomWorkStreamRepository(private val db: VirlinDatabase) : WorkStreamRepos
 
         override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()
         override suspend fun saveCapture(capture: CaptureItem) { db.captures().upsert(capture.toEntity()); touchedCaptures = true }
+        override suspend fun getNoteByCaptureId(captureItemId: String) =
+            db.noteDocuments().byCaptureId(captureItemId)?.toDomain()
+        override suspend fun saveNoteDocument(note: com.virlin.app.domain.model.NoteDocument) {
+            db.noteDocuments().upsert(note.toEntity()); touchedCaptures = true
+        }
+        override suspend fun getPromptByCaptureId(captureItemId: String) =
+            db.promptDocuments().byCaptureId(captureItemId)?.toDomain()
+        override suspend fun savePromptDocument(prompt: com.virlin.app.domain.model.PromptDocument) {
+            db.promptDocuments().upsert(prompt.toEntity()); touchedCaptures = true
+        }
+        override suspend fun getAttachmentByCaptureId(captureItemId: String) =
+            db.attachmentDocuments().byCaptureId(captureItemId)?.toDomain()
+        override suspend fun saveAttachmentDocument(attachment: com.virlin.app.domain.model.AttachmentDocument) {
+            db.attachmentDocuments().upsert(attachment.toEntity()); touchedCaptures = true
+        }
+        override suspend fun getVoiceByCaptureId(captureItemId: String) =
+            db.voiceDocuments().byCaptureId(captureItemId)?.toDomain()
+        override suspend fun saveVoiceDocument(voice: com.virlin.app.domain.model.VoiceDocument) {
+            db.voiceDocuments().upsert(voice.toEntity()); touchedCaptures = true
+        }
 
         override suspend fun getStream(id: String) = db.workStreams().byId(id)?.toDomain()
         override suspend fun getActiveFocus() = db.workStreams().activeFocus()?.toDomain()
@@ -94,6 +132,7 @@ class RoomWorkStreamRepository(private val db: VirlinDatabase) : WorkStreamRepos
         override suspend fun getProject(id: String) = db.projects().byId(id)?.toDomain()
         override suspend fun getTask(id: String) = db.tasks().byId(id)?.toDomain()
         override suspend fun allTasks() = db.tasks().all().map { it.toDomain() }
+        override suspend fun allStreams() = db.workStreams().all().map { it.toDomain() }
 
         override suspend fun saveProject(project: Project) { db.projects().upsert(project.toEntity()); touchedProjects = true }
         override suspend fun saveTask(task: Task) { db.tasks().upsert(task.toEntity()); touchedTasks = true }
@@ -108,5 +147,16 @@ class RoomWorkStreamRepository(private val db: VirlinDatabase) : WorkStreamRepos
         }
         override suspend fun saveSnapshot(snapshot: ContextSnapshot) { db.snapshots().insert(snapshot.toEntity(db.snapshots().maxSeq() + 1)) }
         override suspend fun appendEvent(event: WorkStreamEvent) { db.events().insert(event.toEntity(db.events().maxSeq() + 1)) }
+    }
+
+    companion object {
+        /** Load initial StateFlow snapshots off the caller’s thread (use Dispatchers.IO). */
+        suspend fun create(db: VirlinDatabase): RoomWorkStreamRepository {
+            val streams = db.workStreams().all().map { it.toDomain() }
+            val projects = db.projects().all().map { it.toDomain() }
+            val tasks = db.tasks().all().map { it.toDomain() }
+            val captures = db.captures().all().map { it.toDomain() }.newestFirst()
+            return RoomWorkStreamRepository(db, streams, projects, tasks, captures)
+        }
     }
 }
