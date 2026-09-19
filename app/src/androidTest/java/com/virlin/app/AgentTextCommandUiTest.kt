@@ -25,6 +25,7 @@ import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.WorkStreamMode
 import com.virlin.app.domain.model.WorkStreamState
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.ui.agent.AgentComposerTestTag
 import com.virlin.app.ui.agent.AgentSubmitTestTag
 import com.virlin.app.ui.agent.CaptureSaveInboxTestTag
@@ -128,7 +129,7 @@ class AgentTextCommandUiTest {
         touch(commandCandidateTag("EXTERNAL"), 800)
         tag(CommandPreviewTag).assertExists()
         touch(CommandPreviewCreateTag, 1000)
-        repo().streams.value.first { it.title == "Claude Build" }.let { check(it.mode == WorkStreamMode.EXTERNAL && it.projectId == null && it.state == WorkStreamState.READY) { "$it" } }
+        repo().streams.value.first { it.title == "Claude Build" }.let { check(it.executionPreference == ExecutionPreference.EXTERNAL && it.projectId == null && it.state == WorkStreamState.READY) { "$it" } }
 
         // 6–7. "complete current workstream" → confirmation; cancel = no mutation; confirm = completes.
         runBlocking { VirlinGraph.actions.focusStream("s7") }; pump(500)

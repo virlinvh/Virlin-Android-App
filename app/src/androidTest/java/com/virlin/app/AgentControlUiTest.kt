@@ -78,27 +78,30 @@ class AgentControlUiTest {
         runBlocking { VirlinGraph.actions.checkDue(id) }; pump(800)
     }
 
-    /** Stitch Control UI: no Orb / tabs inside Control; Quick Actions map to the existing paths; ← returns to the entry selector. */
+    /** Stitch Control UI: horizontal Quick Actions rail; ACTION+TARGET; ← returns to entry. */
     @Test fun control_stitch_quickActions_rows_back() {
         pump(300); openAgent()
         tag(com.virlin.app.ui.agent.control.AgentControlQuickActionsTag).assertIsDisplayed()
-        com.virlin.app.ui.agent.control.QuickAction.values().forEach { tag(com.virlin.app.ui.agent.control.quickActionTag(it)).assertIsDisplayed() }
-        composeRule.onNodeWithTag(com.virlin.app.ui.screens.AgentOrbSlotTestTag).assertDoesNotExist()                 // no Orb slot in Control
+        // Leading actions visible; trailing ones exist in the LazyRow (may need scroll).
+        tag(com.virlin.app.ui.agent.control.quickActionTag(com.virlin.app.ui.agent.control.QuickAction.FOCUS)).assertIsDisplayed()
+        tag(com.virlin.app.ui.agent.control.quickActionTag(com.virlin.app.ui.agent.control.QuickAction.LEAVE)).assertIsDisplayed()
+        tag(com.virlin.app.ui.agent.control.quickActionTag(com.virlin.app.ui.agent.control.QuickAction.TASKS)).assertExists()
+        composeRule.onNodeWithTag(com.virlin.app.ui.screens.AgentOrbSlotTestTag).assertDoesNotExist()
         composeRule.onNodeWithTag(com.virlin.app.ui.screens.agentModeTag(com.virlin.app.ui.orb.AgentMode.CREATE)).assertDoesNotExist()
         composeRule.onNodeWithTag(com.virlin.app.ui.screens.agentModeTag(com.virlin.app.ui.orb.AgentMode.CAPTURE)).assertDoesNotExist()
-        // rows are real state: seeded focus Psychology first, Antigravity (check due) present
         tag(controlItemTag("s1")).assertContentDescriptionContains("In focus", substring = true)
         tag(controlItemTag("s2")).assertExists()
-        // Quick Leave with no expanded row acts on the current focus through the shared chooser
-        touch(com.virlin.app.ui.agent.control.quickActionTag(com.virlin.app.ui.agent.control.QuickAction.LEAVE), 900)
+        // ACTION then TARGET: Leave + Psychology → shared Leave chooser (selection alone does not mutate)
+        touch(com.virlin.app.ui.agent.control.quickActionTag(com.virlin.app.ui.agent.control.QuickAction.LEAVE), 600)
+        touch(controlItemTag("s1"), 900)
         tag(NowChooserTag).assertIsDisplayed(); touch("leave_5m", 1200)
         check(stream("s1").state == WorkStreamState.SNOOZED) { "${stream("s1")}" }
-        // Quick Focus with no row selected → existing typed clarification (which WorkStream?)
+        // Focus with no target, re-tap → typed clarification
+        touch(com.virlin.app.ui.agent.control.quickActionTag(com.virlin.app.ui.agent.control.QuickAction.FOCUS), 600)
         touch(com.virlin.app.ui.agent.control.quickActionTag(com.virlin.app.ui.agent.control.QuickAction.FOCUS), 900)
         tag(com.virlin.app.ui.agent.command.CommandClarifyTag).assertExists()
         touch(com.virlin.app.ui.agent.command.commandCandidateTag("s1"), 1500)
         check(stream("s1").state == WorkStreamState.FOCUS) { "${stream("s1")}" }
-        // ← back returns to "How can I help?"
         touch(com.virlin.app.ui.screens.AgentBackTestTag, 600)
         composeRule.onNodeWithTag(com.virlin.app.ui.screens.AgentEntryTestTag).assertIsDisplayed()
     }

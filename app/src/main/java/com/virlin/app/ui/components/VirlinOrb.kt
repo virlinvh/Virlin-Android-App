@@ -274,10 +274,9 @@ fun VirlinOrb(
                 }
                 // Gesture node only while interactive: inside the open Agent the Orb is identity (and hidden in
                 // Control) and must never win hit-testing over the sheet content beneath it.
-                .pointerInput(interactive) {
-                    if (!interactive) return@pointerInput
+                .then(if (interactive) Modifier.pointerInput(Unit) {
                     detectTapGestures(onPress = { onPress(); val completed = tryAwaitRelease(); onRelease(completed) })
-                }
+                } else Modifier)
         ) {
             val d = this.size.minDimension
             val radius = d / 2f

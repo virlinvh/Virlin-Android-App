@@ -40,6 +40,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -54,6 +57,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.virlin.app.model.CaptureType
@@ -68,6 +72,12 @@ const val AgentCloseTestTag = "virlin_agent_close"
 const val AgentBackTestTag = "virlin_agent_back"
 const val AgentStatusTestTag = "virlin_agent_status"
 const val AgentOrbSlotTestTag = "virlin_agent_orb_slot"
+/** Bounded entry action cards (Control · Create · Capture) — no vertical scroll. */
+const val AgentEntryCardsTestTag = "virlin_agent_entry_cards"
+const val AgentEntryTitleTestTag = "virlin_agent_entry_title"
+const val AgentEntrySubtitleTestTag = "virlin_agent_entry_subtitle"
+/** Entry command block ("Or just tell me…" + Ask anything). */
+const val AgentEntryCommandTestTag = "virlin_agent_entry_command"
 fun agentModeTag(mode: AgentMode) = "agent_mode_${mode.name.lowercase()}"
 fun createTypeTag(type: CreateType) = "create_type_${type.name.lowercase()}"
 fun controlContextTag(id: String) = "control_context_$id"
@@ -79,11 +89,64 @@ private val Hairline = VirlinColors.TextPrimary.copy(alpha = 0.08f)
 private val ScrollEdgeFadeHeight = 28.dp
 
 /**
+ * Vertical density for the Agent Entry launcher. Compresses whitespace / Orb slot / card
+ * padding so Control · Create · Capture · composer all fit without scrolling.
+ * Breakpoints use the content column height (above the pinned composer).
+ */
+private enum class EntryDensity { Comfortable, Compact, Tight }
+
+private data class EntryMetrics(
+    val density: EntryDensity,
+    val topSpacer: Dp,
+    val orbSlot: Dp,
+    val showOrbGlow: Boolean,
+    val afterOrb: Dp,
+    val afterIdentity: Dp,
+    val cardGap: Dp,
+    val cardPadV: Dp,
+    val cardPadH: Dp,
+    val cardIcon: Dp,
+    val cardIconGlyph: Dp,
+    val composerBottom: Dp,
+    val composerLabelGap: Dp
+) {
+    companion object {
+        fun forContentHeight(height: Dp): EntryMetrics = when {
+            height >= 400.dp -> EntryMetrics(
+                EntryDensity.Comfortable,
+                topSpacer = 10.dp, orbSlot = 64.dp, showOrbGlow = true,
+                afterOrb = 12.dp, afterIdentity = 6.dp,
+                cardGap = 10.dp, cardPadV = 12.dp, cardPadH = 14.dp,
+                cardIcon = 44.dp, cardIconGlyph = 22.dp,
+                composerBottom = 20.dp, composerLabelGap = 10.dp
+            )
+            height >= 320.dp -> EntryMetrics(
+                EntryDensity.Compact,
+                topSpacer = 6.dp, orbSlot = 56.dp, showOrbGlow = true,
+                afterOrb = 8.dp, afterIdentity = 4.dp,
+                cardGap = 6.dp, cardPadV = 8.dp, cardPadH = 12.dp,
+                cardIcon = 40.dp, cardIconGlyph = 20.dp,
+                composerBottom = 12.dp, composerLabelGap = 6.dp
+            )
+            else -> EntryMetrics(
+                EntryDensity.Tight,
+                topSpacer = 4.dp, orbSlot = 52.dp, showOrbGlow = false,
+                afterOrb = 4.dp, afterIdentity = 2.dp,
+                cardGap = 4.dp, cardPadV = 6.dp, cardPadH = 10.dp,
+                cardIcon = 36.dp, cardIconGlyph = 18.dp,
+                composerBottom = 8.dp, composerLabelGap = 4.dp
+            )
+        }
+    }
+}
+
+/**
  * Fades the bottom edge of a scroll viewport toward [background] while more content lies
  * below, so a clipped element reads as "scrollable" rather than "hidden underneath the
  * pinned region". Reads scroll state at draw time only — no recomposition per frame.
+ * Also used by the CONTROL workspace's own middle-list scroll region.
  */
-private fun Modifier.scrollEdgeFade(scrollState: ScrollState, background: Color): Modifier =
+fun Modifier.scrollEdgeFade(scrollState: ScrollState, background: Color): Modifier =
     drawWithContent {
         drawContent()
         if (scrollState.canScrollForward) {
@@ -138,6 +201,8 @@ fun AgentShell(
     modifier: Modifier = Modifier,
     /** ← on a workspace: back to the entry selector (the Agent stays open). */
     onBackToEntry: () -> Unit = {},
+    /** Entry Orb slot size (dp) so VirlinApp can centre the living Orb in a compact slot. */
+    onEntryOrbSlotSize: (Dp) -> Unit = {},
     /** Real CONTROL content (Pass 8). Null renders the original display-only context strip. */
     controlContent: (@Composable () -> Unit)? = null,
     /** Real CREATE content (Pass 9). Null renders the original display-only create strip. */
@@ -156,6 +221,7 @@ fun AgentShell(
     val interactive = state.isAgentInteractive
     val selectedContext = controlContexts.firstOrNull { it.id == workspace.selectedControlContextId }
     val selectedDestination = destinations.firstOrNull { it.id == workspace.createDestinationId }
+    val entryMetricsHolder = remember { mutableStateOf(EntryMetrics.forContentHeight(400.dp)) }
 
     Column(
         modifier = modifier
@@ -164,32 +230,109 @@ fun AgentShell(
     ) {
         // =====================================================================
         // LAYOUT CONTRACT — three regions, each owning its own space:
-        //   1. scrollable mode content   (weight 1f: ONLY the remaining viewport)
+        //   1. mode content (weight 1f): on ENTRY = no-scroll launcher (responsive density);
+        //      on CONTROL/CREATE/CAPTURE with real content = fixed header + mode-owned body;
+        //      otherwise whole-region scroll (legacy fallback only)
         //   2. pinned transient region   (clarification / receipt; reserves its height)
-        //   3. composer region           (always reachable)
-        // The scroll region clips to its bounds and fades its bottom edge while more
-        // content is available, so nothing ever appears to sit underneath a pinned surface.
+        //   3. composer region           (always reachable; never overlays entry cards)
         // =====================================================================
         val scrollState = rememberScrollState()
+        // CONTROL / CAPTURE / CREATE (with injected real content) and ENTRY own layout inside the
+        // content region — shell must NOT wrap them in whole-region verticalScroll.
+        val controlOwnsScroll = !entry && mode == AgentMode.CONTROL && controlContent != null
+        val captureFixedLayout = !entry && mode == AgentMode.CAPTURE && captureContent != null
+        val createFixedLayout = !entry && mode == AgentMode.CREATE && createContent != null
+        val entryFixedLayout = entry
+        val contentOwnsLayout = controlOwnsScroll || captureFixedLayout || createFixedLayout || entryFixedLayout
 
-        // ---------- 1. Scrollable mode content (identity, modes, context)
+        // ---------- 1. Mode content (identity, modes, workspace)
+        if (entryFixedLayout) {
+            // ENTRY launcher: measure content height → density → fit Orb/identity/cards with
+            // NO vertical scroll. Composer is a sibling below (region 3).
+            BoxWithConstraints(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clipToBounds()
+                    .padding(horizontal = 20.dp)
+            ) {
+                val metrics = EntryMetrics.forContentHeight(maxHeight)
+                androidx.compose.runtime.SideEffect {
+                    entryMetricsHolder.value = metrics
+                    onEntryOrbSlotSize(metrics.orbSlot)
+                }
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Spacer(Modifier.height(metrics.topSpacer))
+
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Box(
+                            modifier = Modifier.align(Alignment.Center).width(44.dp).height(6.dp)
+                                .background(Color(0xFFD6D3D1), RoundedCornerShape(3.dp))
+                        )
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .size(44.dp)
+                                .testTag(AgentCloseTestTag)
+                                .clickable(interactionSource = MutableInteractionSource(), indication = null, role = Role.Button, onClick = onDismiss)
+                                .semantics { contentDescription = "Close Virlin Agent" },
+                            contentAlignment = Alignment.Center
+                        ) { Icon(Icons.Rounded.Close, contentDescription = null, tint = VirlinColors.TextSecondary, modifier = Modifier.size(18.dp)) }
+                    }
+
+                    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            modifier = Modifier
+                                .size(metrics.orbSlot)
+                                .drawBehind {
+                                    if (metrics.showOrbGlow) drawCircle(
+                                        brush = Brush.radialGradient(
+                                            colors = listOf(Color(0xD9D7ECC7), Color(0x8CC7E8B8), Color(0x00D7ECC7)),
+                                            center = center, radius = size.minDimension * 0.82f
+                                        ),
+                                        radius = size.minDimension * 0.82f
+                                    )
+                                }
+                                .testTag(AgentOrbSlotTestTag)
+                                .onGloballyPositioned { onOrbSlotPositioned(it.positionInRoot()) }
+                        )
+                        Box(Modifier.testTag(AgentStatusTestTag).semantics { contentDescription = state.statusText; stateDescription = state.statusText })
+                    }
+
+                    Spacer(Modifier.height(metrics.afterOrb))
+                    AgentEntryIdentity()
+                    Spacer(Modifier.height(metrics.afterIdentity))
+                    AgentEntryModeCards(
+                        onModeSelected = onModeSelected,
+                        enabled = interactive,
+                        metrics = metrics,
+                        modifier = Modifier.testTag(AgentEntryCardsTestTag)
+                    )
+                    Spacer(Modifier.weight(1f, fill = true))
+                }
+            }
+        } else {
         Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .clipToBounds()
-                .scrollEdgeFade(scrollState, if (entry) Color.White else VirlinColors.Background)
-                .verticalScroll(scrollState)
+                .then(
+                    if (contentOwnsLayout) Modifier
+                    else Modifier
+                        .scrollEdgeFade(scrollState, VirlinColors.Background)
+                        .verticalScroll(scrollState)
+                )
                 .padding(horizontal = 20.dp)
         ) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(if (captureFixedLayout) 6.dp else 10.dp))
 
             Box(modifier = Modifier.fillMaxWidth()) {
                 Box(
-                    modifier = Modifier.align(Alignment.Center).width(if (entry) 44.dp else 36.dp).height(if (entry) 6.dp else 4.dp)
-                        .background(if (entry) Color(0xFFD6D3D1) else VirlinColors.TextPrimary.copy(alpha = 0.12f), RoundedCornerShape(if (entry) 3.dp else 2.dp))
+                    modifier = Modifier.align(Alignment.Center).width(36.dp).height(4.dp)
+                        .background(VirlinColors.TextPrimary.copy(alpha = 0.12f), RoundedCornerShape(2.dp))
                 )
-                if (!entry) Box(
+                Box(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
                         .size(44.dp)
@@ -209,39 +352,35 @@ fun AgentShell(
                 ) { Icon(Icons.Rounded.Close, contentDescription = null, tint = VirlinColors.TextSecondary, modifier = Modifier.size(18.dp)) }
             }
 
-            // Identity: the compact Orb. Drawn by VirlinApp at this slot — an anchor, never a second Orb.
-            // The slot sits at the same place on both steps so the Orb never jumps between them.
-            // No "Virlin" / "Ready" text: the status is exposed as a non-motion semantics channel (Rule 8).
-            val controlWorkspace = !entry   // Stitch workspaces (Control · Create · Capture): no Orb, centred identity
+            // Workspace steps: no Orb in Control/Create/Capture (Stitch).
+            val controlWorkspace = true
             Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (!controlWorkspace) Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .drawBehind {
-                            if (entry) drawCircle(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(Color(0xD9D7ECC7), Color(0x8CC7E8B8), Color(0x00D7ECC7)),
-                                    center = center, radius = size.minDimension * 0.82f
-                                ),
-                                radius = size.minDimension * 0.82f
-                            )
-                        }
-                        .testTag(AgentOrbSlotTestTag)
-                        .onGloballyPositioned { onOrbSlotPositioned(it.positionInRoot()) }
-                )
                 Box(Modifier.testTag(AgentStatusTestTag).semantics { contentDescription = state.statusText; stateDescription = state.statusText })
             }
 
-            Spacer(Modifier.height(12.dp))
+            // Capture launcher: compress header chrome slightly so five equal cards + composer
+            // fit; Control/Create keep the spacious Stitch spacing.
+            Spacer(Modifier.height(if (captureFixedLayout) 8.dp else 12.dp))
 
-            if (entry) {
-                // Agent entry: "How can I help?" — one card per mode; choosing one transforms the sheet.
-                AgentEntryPicker(onModeSelected = onModeSelected, enabled = interactive)
-            } else {
             WorkspaceHeader(mode, centered = controlWorkspace)
 
-            Spacer(Modifier.height(if (controlWorkspace) 20.dp else 14.dp))
+            Spacer(
+                Modifier.height(
+                    when {
+                        captureFixedLayout -> 12.dp
+                        controlWorkspace -> 20.dp
+                        else -> 14.dp
+                    }
+                )
+            )
 
+            if (controlOwnsScroll) {
+                Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) { controlContent!!() }
+            } else if (captureFixedLayout) {
+                Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) { captureContent!!() }
+            } else if (createFixedLayout) {
+                Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) { createContent!!() }
+            } else {
             when (mode) {
                 AgentMode.CONTROL -> if (controlContent != null) controlContent() else ControlContextArea(controlContexts, workspace.selectedControlContextId, onControlContextSelected)
                 AgentMode.CREATE -> if (createContent != null) createContent() else CreateContextArea(workspace.createType, destinations, workspace.createDestinationId, onCreateTypeSelected, onCreateDestinationSelected)
@@ -249,9 +388,8 @@ fun AgentShell(
             }
             }
 
-            // End-of-content inset so the last actionable element can always be scrolled fully
-            // clear of the edge fade and the pinned composer (Pass 9 correction).
-            Spacer(Modifier.height(72.dp))
+            if (!contentOwnsLayout) Spacer(Modifier.height(72.dp))
+        }
         }
 
         // ---------- 2. Pinned transient region. Reserves its own height (the scroll region
@@ -285,10 +423,17 @@ fun AgentShell(
 
         // ---------- Universal composer, pinned. Stays reachable with the keyboard open.
         // Entry step: the Stitch "Or just tell me…" pill input; submit picks the workspace (VirlinApp).
-        if (entry) EntryComposer(
-            text = composerText, enabled = interactive, onTextChanged = onComposerTextChanged, onSubmit = onSubmit,
-            modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 20.dp)
-        ) else if (mode == AgentMode.CAPTURE) EntryComposer(
+        if (entry) {
+            val metrics = entryMetricsHolder.value
+            EntryComposer(
+                text = composerText, enabled = interactive, onTextChanged = onComposerTextChanged, onSubmit = onSubmit,
+                metrics = metrics,
+                modifier = Modifier
+                    .testTag(AgentEntryCommandTestTag)
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = metrics.composerBottom)
+            )
+        } else if (mode == AgentMode.CAPTURE) EntryComposer(
             // Stitch Capture composer: the same pill; → is the existing SAVE TO INBOX path (raw text, never interpreted).
             text = composerText, enabled = interactive, onTextChanged = onComposerTextChanged, onSubmit = onSubmit,
             placeholder = "What would you like to capture…", label = null, submitTag = CaptureSaveInboxTestTag, submitDescription = "Save to Inbox",
@@ -336,11 +481,20 @@ private val Slate900 = Color(0xFF0F172A)
 @Composable
 private fun EntryComposer(
     text: String, enabled: Boolean, onTextChanged: (String) -> Unit, onSubmit: () -> Unit, modifier: Modifier = Modifier,
-    placeholder: String = "Ask anything…", label: String? = "Or just tell me…", submitTag: String = AgentSubmitTestTag, submitDescription: String = "Send to Virlin"
+    placeholder: String = "Ask anything…", label: String? = "Or just tell me…", submitTag: String = AgentSubmitTestTag, submitDescription: String = "Send to Virlin",
+    metrics: EntryMetrics = EntryMetrics.forContentHeight(400.dp)
 ) {
     val canSubmit = enabled && text.isNotBlank()
     Column(modifier = modifier.fillMaxWidth()) {
-        if (label != null) Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Slate500, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+        if (label != null) Text(
+            label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = Slate500,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(start = 4.dp, bottom = metrics.composerLabelGap)
+        )
         Box(
             modifier = Modifier.fillMaxWidth()
                 .background(Color(0xFFF8F9FA), RoundedCornerShape(50))
@@ -357,7 +511,7 @@ private fun EntryComposer(
                 modifier = Modifier.fillMaxWidth().padding(end = 48.dp, top = 8.dp, bottom = 8.dp)
                     .testTag(AgentComposerTestTag).semantics { contentDescription = "Message to Virlin" },
                 decorationBox = { inner ->
-                    Box { if (text.isEmpty()) Text(placeholder, fontSize = 14.sp, color = Slate400); inner() }
+                    Box { if (text.isEmpty()) Text(placeholder, fontSize = 14.sp, color = Slate400, maxLines = 1, softWrap = false); inner() }
                 }
             )
             Box(
@@ -394,19 +548,51 @@ private fun WorkspaceHeader(mode: AgentMode, centered: Boolean = false) {
     }
 }
 
+/** Fixed entry copy — never scrolls; part of the no-scroll launcher composition. */
+@Composable
+private fun AgentEntryIdentity() {
+    Column(
+        modifier = Modifier.fillMaxWidth().testTag(AgentEntryTestTag),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            "How can I help?",
+            fontSize = 21.sp,
+            fontWeight = FontWeight.Bold,
+            color = Slate900,
+            letterSpacing = (-0.3).sp,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.fillMaxWidth().testTag(AgentEntryTitleTestTag),
+            textAlign = TextAlign.Center
+        )
+        Text(
+            "Turn your thoughts into action.",
+            fontSize = 13.5.sp,
+            color = Slate500,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.fillMaxWidth().testTag(AgentEntrySubtitleTestTag),
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
 /**
- * Compact entry sheet content: heading + one row per mode (icon · title · subtitle · chevron).
- * Rows carry the SAME `agentModeTag(mode)` as the mode tabs and call the SAME [onModeSelected],
- * so this is only a first step into the existing workspaces — never a second Agent.
+ * Entry mode cards (Control · Create · Capture). Always fully visible on the launcher —
+ * density compresses padding/gaps; there is no vertical scroll.
  */
 @Composable
-private fun AgentEntryPicker(onModeSelected: (AgentMode) -> Unit, enabled: Boolean) {
-    Column(modifier = Modifier.fillMaxWidth().testTag(AgentEntryTestTag), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("How can I help?", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Slate900, letterSpacing = (-0.3).sp,
-            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-        Text("Turn your thoughts into action.", fontSize = 13.5.sp, color = Slate500,
-            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-        Spacer(Modifier.height(6.dp))
+private fun AgentEntryModeCards(
+    onModeSelected: (AgentMode) -> Unit,
+    enabled: Boolean,
+    metrics: EntryMetrics,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(metrics.cardGap)
+    ) {
         EntryRows.forEach { r ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -416,15 +602,18 @@ private fun AgentEntryPicker(onModeSelected: (AgentMode) -> Unit, enabled: Boole
                     .testTag(agentModeTag(r.mode))
                     .clickable(enabled = enabled, role = Role.Button) { onModeSelected(r.mode) }
                     .semantics { contentDescription = "${r.title}, ${r.subtitle}" }
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .padding(horizontal = metrics.cardPadH, vertical = metrics.cardPadV)
             ) {
-                Box(modifier = Modifier.size(44.dp).background(r.badge, CircleShape), contentAlignment = Alignment.Center) {
-                    Icon(r.icon, contentDescription = null, tint = r.tint, modifier = Modifier.size(22.dp))
+                Box(
+                    modifier = Modifier.size(metrics.cardIcon).background(r.badge, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(r.icon, contentDescription = null, tint = r.tint, modifier = Modifier.size(metrics.cardIconGlyph))
                 }
                 Spacer(Modifier.width(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(r.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Slate900)
-                    Text(r.subtitle, fontSize = 12.sp, color = Slate500)
+                    Text(r.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Slate900, maxLines = 1, softWrap = false)
+                    Text(r.subtitle, fontSize = 12.sp, color = Slate500, maxLines = 1, softWrap = false)
                 }
                 Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Slate400, modifier = Modifier.size(18.dp))
             }

@@ -18,6 +18,7 @@ import com.virlin.app.data.db.VirlinDatabase
 import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.ui.orb.AgentMode
 import com.virlin.app.ui.agent.create.AgentCreateErrorTag
@@ -106,11 +107,11 @@ class AgentCreateUiTest {
         // C. ADD WORKSTREAM (chained; project preselected) with explicit EXTERNAL mode.
         touch(CreateNextAddWorkStream)
         tag(createProjectTag(project.id)).assertContentDescriptionContains("selected", substring = true)
-        touch(createModeTag(WorkStreamMode.EXTERNAL))
+        touch(createModeTag(ExecutionPreference.EXTERNAL))
         type("Literature run"); submit()
         tag(AgentCreateSuccessTag).assertContentDescriptionContains("Created WorkStream · Literature run", substring = true)
         val ws = repo().streams.value.first { it.title == "Literature run" }
-        check(ws.projectId == project.id && ws.mode == WorkStreamMode.EXTERNAL && ws.state == WorkStreamState.READY && ws.activeTaskId == null) { "$ws" }
+        check(ws.projectId == project.id && ws.executionPreference == ExecutionPreference.EXTERNAL && ws.state == WorkStreamState.READY && ws.activeTaskId == null) { "$ws" }
         check(runBlocking { VirlinGraph.repository.getStream("s1") }!!.state == WorkStreamState.FOCUS) { "creation must not touch focus" }
 
         // D. ADD TASK (chained; stream preselected) → root task; SET CURRENT is explicit.
@@ -155,14 +156,14 @@ class AgentCreateUiTest {
         // I. Projectless WorkStream (No Project) + FOCUS NOW → focusStream with displacement.
         touch(createKindTag(CreateKind.WORKSTREAM)); touch(createProjectTag(null)); type("Walk"); submit()
         val walk = repo().streams.value.first { it.title == "Walk" }
-        check(walk.projectId == null && walk.mode == WorkStreamMode.HUMAN)
+        check(walk.projectId == null && walk.executionPreference == ExecutionPreference.HUMAN)
         touch(CreateNextFocusNow, 1200)
         check(runBlocking { repo().getStream(walk.id) }!!.state == WorkStreamState.FOCUS)
         check(runBlocking { repo().getStream("s1") }!!.state == WorkStreamState.READY) { "displacement" }
 
-        // J. The last control scrolls fully above the pinned composer (§46).
+        // J. CREATE / controls stay above the pinned composer (fixed control row — no scroll needed).
         touch(createKindTag(CreateKind.TASK)); touch(createOwnerTag(TaskOwnerKind.WORKSTREAM)); touch(createStreamTag("s1"))
-        tag(AgentCreateSubmitTag).performScrollTo(); pump(600)
+        tag(AgentCreateSubmitTag).assertIsDisplayed()
         val submitBottom = tag(AgentCreateSubmitTag).fetchSemanticsNode().boundsInRoot.bottom
         val pinnedTop = composeRule.onNodeWithTag(com.virlin.app.ui.agent.AgentComposerTestTag).fetchSemanticsNode().boundsInRoot.top
         check(submitBottom <= pinnedTop) { "CREATE chip ($submitBottom) must sit above the pinned composer ($pinnedTop)" }
@@ -173,7 +174,7 @@ class AgentCreateUiTest {
         try {
             runBlocking {
                 check(db.projects().byId(project.id)?.title == "UI Thesis")
-                check(db.workStreams().byId(ws.id)?.mode == "EXTERNAL")
+                check(db.workStreams().byId(ws.id)?.executionPreference == "EXTERNAL")
                 check(db.tasks().byId(grand.id)?.parentTaskId == child.id)
                 check(db.tasks().byId(standalone.id)?.workStreamId == null)
             }

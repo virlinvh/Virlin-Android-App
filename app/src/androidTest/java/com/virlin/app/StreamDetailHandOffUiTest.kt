@@ -35,7 +35,7 @@ class StreamDetailHandOffUiTest {
 
     @Test fun handOff_opensSharedChooser_noSilentHandOff() {
         VirlinGraph.init(ApplicationProvider.getApplicationContext())
-        VirlinGraph.start()
+        runBlocking { VirlinGraph.ensureReady() }
         runBlocking { VirlinGraph.actions.focusStream("s1") }
         val before = runBlocking { VirlinGraph.repository.getStream("s1")!! }
         check(before.state == WorkStreamState.FOCUS)

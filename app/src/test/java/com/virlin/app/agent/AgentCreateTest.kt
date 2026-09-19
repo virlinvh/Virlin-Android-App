@@ -13,6 +13,7 @@ import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
+import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.model.WorkStreamState.*
 import com.virlin.app.domain.progress.ProgressCalculator
@@ -56,7 +57,7 @@ class AgentCreateTest {
     private lateinit var vm: AgentCreateViewModel
 
     private fun ws(id: String, title: String, state: WorkStreamState, project: String?, mode: WorkStreamMode = WorkStreamMode.HUMAN, active: String? = null) =
-        WorkStream(id = id, title = title, state = state, projectId = project, mode = mode, activeTaskId = active, createdAt = t0, updatedAt = t0)
+        WorkStream(id = id, title = title, state = state, projectId = project, executionPreference = mode.toPreference(), activeTaskId = active, createdAt = t0, updatedAt = t0)
 
     @Before fun setUp() {
         Dispatchers.setMain(dispatcher)
@@ -116,7 +117,7 @@ class AgentCreateTest {
     @Test fun workstream_in_project_human_mode() = runTest(dispatcher) {
         vm.choose(CreateKind.WORKSTREAM); vm.setProject("p1"); vm.setMode(WorkStreamMode.HUMAN); submit("Write chapter"); advanceUntilIdle()
         val w = s(createdStream().id)
-        assertEquals("p1", w.projectId); assertEquals(WorkStreamMode.HUMAN, w.mode); assertEquals(READY, w.state); assertNull(w.activeTaskId)
+        assertEquals("p1", w.projectId); assertEquals(ExecutionPreference.HUMAN, w.executionPreference); assertEquals(READY, w.state); assertNull(w.activeTaskId)
     }
 
     @Test fun workstream_without_project_is_valid() = runTest(dispatcher) {
@@ -128,9 +129,9 @@ class AgentCreateTest {
     @Test fun workstream_external_mode_is_explicit_not_inferred() = runTest(dispatcher) {
         // A title that "sounds" external stays HUMAN unless the mode is chosen.
         vm.choose(CreateKind.WORKSTREAM); submit("Claude training run"); advanceUntilIdle()
-        assertEquals(WorkStreamMode.HUMAN, s(createdStream().id).mode)
+        assertEquals(ExecutionPreference.HUMAN, s(createdStream().id).executionPreference)
         vm.reset(); vm.choose(CreateKind.WORKSTREAM); vm.setMode(WorkStreamMode.EXTERNAL); submit("Walk the dog"); advanceUntilIdle()
-        assertEquals(WorkStreamMode.EXTERNAL, s(createdStream().id).mode)
+        assertEquals(ExecutionPreference.EXTERNAL, s(createdStream().id).executionPreference)
     }
 
     @Test fun workstream_defaults_ready_no_focus_no_alarm() = runTest(dispatcher) {
