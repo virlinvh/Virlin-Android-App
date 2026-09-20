@@ -26,6 +26,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.runtime.derivedStateOf
@@ -577,32 +584,34 @@ fun NeedsYouCard(
     onCheck: (String) -> Unit = onFocus,
     onDefer: (String) -> Unit = {}
 ) {
-    // Everything time-related derives from ONE timestamp: the card is "due now" for its first
-    // minute of waiting and "overdue" after — no index-based fakes. derivedStateOf means the
-    // palette only recomposes when the boolean actually flips, not every second.
-    val dueNow by remember(waitingSince, now) {
+    // Everything time-related derives from ONE timestamp. The urgency LEVEL is a pure function of
+    // the waiting duration (Phase 2); derivedStateOf means the palette recomposes only when the
+    // level actually changes (at 1:00 / 3:00 / 5:00 / 10:00), never on an ordinary tick.
+    val level by remember(waitingSince, now) {
         derivedStateOf {
             val since = waitingSince; val n = now
-            since == null || n == null || WaitingTime.elapsedSeconds(since, n.value) < 60
+            if (since == null || n == null) UrgencyLevel.ATTENTION
+            else UrgencyLevel.of(WaitingTime.elapsedSeconds(since, n.value))
         }
     }
-    val isDueNow = dueNow
+    val isDueNow = level == UrgencyLevel.ATTENTION
+    val pal = NeedsYouUrgency.palette(level)
 
-    // ── Color tokens (unchanged) ────────────────────────────────────
-    val baseBg       = if (isDueNow) Color(0xFFFFFDF4) else Color(0xFFFFF7F2)
-    val attentionBg  = if (isDueNow) Color(0xFFFEF6C8) else Color(0xFFFFE8DA)
-
-    val restBorder   = if (isDueNow) Color(0xFFFFE29A) else Color(0xFFFFD0BB)
-    val peakBorder   = if (isDueNow) Color(0xFFFACC15) else Color(0xFFFB923C)
-
-    val badgeBg      = if (isDueNow) Color(0xFFFEF3C7) else Color(0xFFFFEDD5)
-    val badgeFg      = if (isDueNow) Color(0xFF92400E) else Color(0xFF9A3412)
-    val badgeBorder  = if (isDueNow) Color(0xFFFDE68A) else Color(0xFFFED7AA)
-
-    val beaconCoreColor  = if (isDueNow) Color(0xFFFFC928) else Color(0xFFFF7A45)
-    val beaconRingColor  = if (isDueNow) Color(0xFFFFF8DE) else Color(0xFFFFF1EB)
-    val beaconRingBorder = if (isDueNow) Color(0xFFFFAA22) else Color(0xFFFF9A55)
-    val beaconOuterColor = if (isDueNow) Color(0xFFFFE278) else Color(0xFFFFC09C)
+    // ── Colour tokens: one coordinated palette per level, cross-faded (not flashed) on a
+    // threshold crossing. The timer itself never restarts — only these colours move.
+    val paletteTween = tween<Color>(durationMillis = 350)
+    val baseBg       by animateColorAsState(pal.cardBg, paletteTween, label = "ny_bg")
+    val attentionBg  by animateColorAsState(pal.cardBgAttention, paletteTween, label = "ny_bg_peak")
+    val restBorder   by animateColorAsState(pal.border, paletteTween, label = "ny_border")
+    val peakBorder   by animateColorAsState(pal.borderPeak, paletteTween, label = "ny_border_peak")
+    val badgeBg      by animateColorAsState(pal.chipBg, paletteTween, label = "ny_chip_bg")
+    val badgeFg      by animateColorAsState(pal.chipFg, paletteTween, label = "ny_chip_fg")
+    val badgeBorder  by animateColorAsState(pal.chipBorder, paletteTween, label = "ny_chip_border")
+    val beaconCoreColor  by animateColorAsState(pal.indicator, paletteTween, label = "ny_beacon")
+    val glowColor        by animateColorAsState(pal.glow, paletteTween, label = "ny_glow")
+    val beaconRingColor  = badgeBg
+    val beaconRingBorder = beaconCoreColor.copy(alpha = 0.75f)
+    val beaconOuterColor = beaconCoreColor.copy(alpha = 0.55f)
 
     // ── Single master progress 0→1 ──────────────────────────────────
     // Due Now:  7000ms cycle,  no offset
@@ -636,6 +645,21 @@ fun NeedsYouCard(
     //  0.68–1.00  REST
     //
     val p = attentionProgress
+
+    // ── Living glow (Phase 2): a very slow breathing halo OUTSIDE the card. Same transition
+    // object (no per-tick allocation), 2.6–3.4 s cycle by level, deterministic phase offset per
+    // item, alpha only — nothing scales or moves. Reduced motion → static half-strength halo.
+    val reducedMotion = rememberNowReducedMotion()
+    val glowBreath by infiniteTransition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = NeedsYouUrgency.glowCycleMillis(level), easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+            initialStartOffset = StartOffset(NeedsYouUrgency.glowPhaseOffsetMillis(index), StartOffsetType.FastForward)
+        ),
+        label = "glow_breath"
+    )
+    val glowAlpha = NeedsYouUrgency.glowAlpha(level, if (reducedMotion) 0f else glowBreath, reducedMotion)
 
     // Surface color: slow single warm pulse
     val surfaceIntensity = when {
@@ -689,6 +713,23 @@ fun NeedsYouCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .drawBehind {
+                // Soft halo: two feathered strokes just outside the card edge (cheap; no blur/shader).
+                if (glowAlpha > 0.005f) {
+                    val r = 16.dp.toPx()
+                    val w1 = 10.dp.toPx(); val w2 = 4.dp.toPx()
+                    drawRoundRect(
+                        color = glowColor.copy(alpha = glowAlpha * 0.45f),
+                        topLeft = Offset(-w1 / 2f, -w1 / 2f), size = Size(size.width + w1, size.height + w1),
+                        cornerRadius = CornerRadius(r + w1 / 2f), style = Stroke(width = w1)
+                    )
+                    drawRoundRect(
+                        color = glowColor.copy(alpha = glowAlpha),
+                        topLeft = Offset(-w2 / 2f, -w2 / 2f), size = Size(size.width + w2, size.height + w2),
+                        cornerRadius = CornerRadius(r + w2 / 2f), style = Stroke(width = w2)
+                    )
+                }
+            }
             .background(bgColor, RoundedCornerShape(16.dp))
             .border(borderWidthFloat.dp, borderColor.copy(alpha = borderAlpha), RoundedCornerShape(16.dp))
             .padding(10.dp),
@@ -813,6 +854,15 @@ fun NeedsYouCard(
                 }
             }
         }
+    }
+}
+
+/** Reduced motion for Now cards: the system animator duration scale is 0 (animations disabled). */
+@Composable
+private fun rememberNowReducedMotion(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return remember {
+        android.provider.Settings.Global.getFloat(context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
     }
 }
 
