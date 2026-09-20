@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
@@ -764,24 +765,27 @@ fun NeedsYouCard(
 
         Spacer(modifier = Modifier.width(12.dp))
 
+        // Hierarchy (Phase 3): 1. the task that needs me · 3. its project/source · 5. why (context).
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = stream.title,
-                fontSize = 12.sp,
+                text = stream.subtitle,                      // WHAT needs me
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = Charcoal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                lineHeight = 16.sp
             )
             Text(
-                text = stream.subtitle,
-                fontSize = 11.5.sp,
+                text = stream.title,                         // source: "Claude · Virlin"
+                fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = Charcoal.copy(alpha = 0.9f),
+                color = Charcoal.copy(alpha = 0.72f),
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 1.dp)
             )
-            // Human return vs external check vs result ready are worded differently on purpose.
+            // WHY it needs me — human return vs external check vs result ready are distinct.
             val sub2 = when (kind) {
                 AttentionKind.RETURN_DUE -> "Ready to continue"
                 AttentionKind.RESULT_READY -> "Result ready"
@@ -790,10 +794,10 @@ fun NeedsYouCard(
             }
             if (sub2 != null) Text(
                 text = sub2,
-                modifier = Modifier.testTag("needs_you_kind_${stream.id}"),
+                modifier = Modifier.testTag("needs_you_kind_${stream.id}").padding(top = 1.dp),
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.Normal,
-                color = Charcoal.copy(alpha = 0.7f),
+                color = Charcoal.copy(alpha = 0.6f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -807,34 +811,32 @@ fun NeedsYouCard(
                 streamId = stream.id, waitingSince = waitingSince, now = now,
                 background = badgeBg, foreground = badgeFg, border = badgeBorder
             )
-            Spacer(modifier = Modifier.height(8.dp))
 
+            // Action (Phase 3): a light tonal pill in the card's urgency palette — visibly smaller
+            // than the timer chip's weight, but with a 44dp-tall hit box (+ the card padding above
+            // and below it ≈ 48dp of touch). Same callbacks, same test tag, same semantics.
             var pressed by remember { mutableStateOf(false) }
-            val scale by animateFloatAsState(
-                targetValue = if (pressed) 0.96f else 1f,
-                animationSpec = tween(140),
-                label = "check_scale"
-            )
+            val pressAlpha by animateFloatAsState(if (pressed) 1f else 0f, tween(120), label = "check_press")
 
             val primary = when (kind) {
-                AttentionKind.RETURN_DUE -> "RESUME"
-                AttentionKind.RESULT_READY -> "FOCUS NOW"
-                else -> "CHECK"
+                AttentionKind.RETURN_DUE -> "Resume"
+                AttentionKind.RESULT_READY -> "Focus now"
+                else -> "Check"
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (kind == AttentionKind.RETURN_DUE || kind == AttentionKind.RESULT_READY) {
                     // Defer the return without changing why it exists.
-                    Text("+5m", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Charcoal.copy(alpha = 0.75f),
+                    Text("+5m", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Charcoal.copy(alpha = 0.7f),
                         modifier = Modifier.testTag("needs_you_defer_${stream.id}")
                             .clickable(role = Role.Button) { onDefer(stream.id) }
-                            .padding(horizontal = 8.dp, vertical = 4.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 12.dp))
+                    Spacer(modifier = Modifier.width(2.dp))
                 }
-                Row(
+                Box(
                     modifier = Modifier
-                        .scale(scale)
-                        .background(Charcoal, RoundedCornerShape(16.dp))
+                        .height(44.dp)
                         .testTag("needs_you_primary_${stream.id}")
+                        .semantics { role = Role.Button; contentDescription = "$primary, ${stream.subtitle}" }
                         .pointerInput(stream.id, kind) {
                             detectTapGestures(
                                 onPress = {
@@ -844,13 +846,20 @@ fun NeedsYouCard(
                                 },
                                 onTap = { if (kind == AttentionKind.CHECK_DUE || kind == null) onCheck(stream.id) else onFocus(stream.id) }
                             )
-                        }
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        },
+                    contentAlignment = Alignment.CenterEnd
                 ) {
-                    Text(primary, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("→", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Row(
+                        modifier = Modifier
+                            .background(lerpColor(badgeBg.copy(alpha = 0.55f), badgeBg, pressAlpha), RoundedCornerShape(14.dp))
+                            .border(1.dp, lerpColor(badgeBorder, badgeFg.copy(alpha = 0.6f), pressAlpha), RoundedCornerShape(14.dp))
+                            .padding(horizontal = 11.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(primary, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = badgeFg, maxLines = 1)
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text("→", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = badgeFg)
+                    }
                 }
             }
         }
@@ -885,15 +894,19 @@ private fun WaitingTimerChip(
     val spoken = WaitingTime.describe(elapsed)
     Text(
         text = label,
-        fontSize = 9.5.sp,
+        fontSize = 12.sp,
         fontWeight = FontWeight.Bold,
         color = foreground,
+        // Tabular figures: −09:59 → −10:00 never changes width, so nothing around it jitters.
+        style = androidx.compose.ui.text.TextStyle(fontFeatureSettings = "tnum"),
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier
             .background(background, RoundedCornerShape(12.dp))
             .border(1.dp, border, RoundedCornerShape(12.dp))
             .testTag("needs_you_timer_$streamId")
             .semantics { contentDescription = spoken }
-            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .padding(horizontal = 9.dp, vertical = 3.dp)
     )
 }
 
