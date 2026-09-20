@@ -64,6 +64,25 @@ object NowPresentation {
         )
     }
 
+    /**
+     * When each CHECK stream started waiting for the user — the persisted timestamp that the
+     * Needs You timer, ordering and (later) urgency all derive from. Pure.
+     *
+     * - CHECK_DUE (came from PROCESSING): `checkAt`, the scheduled check moment — the item has been
+     *   waiting since the check fell due, even if the app noticed later on reopen.
+     * - RETURN_DUE / RESULT_READY (came from SNOOZED): `checkDue` clears `snoozedUntil`, so the
+     *   transition stamp `updatedAt` is the moment it became due (any `checkAt` left over from an
+     *   earlier cycle is deliberately ignored).
+     * - Fallback in every case: `updatedAt` (always present, persisted in Room).
+     */
+    fun waitingSince(streams: List<WorkStream>): Map<String, java.time.Instant> =
+        streams.filter { it.state == WorkStreamState.CHECK }.associate { s ->
+            s.id to when (s.snoozeReason) {
+                null -> s.checkAt ?: s.updatedAt
+                else -> s.updatedAt
+            }
+        }
+
     /** Streams currently in CHECK, classified. Pure; nothing is scheduled or mutated here. */
     fun attention(streams: List<WorkStream>): Map<String, AttentionKind> =
         streams.filter { it.state == WorkStreamState.CHECK }.associate { s ->

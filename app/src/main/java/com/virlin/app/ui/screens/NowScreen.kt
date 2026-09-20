@@ -26,6 +26,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -109,10 +112,15 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val currentFocus by nowViewModel.currentFocus.collectAsState()
     val pendingCompletion by nowViewModel.pendingWorkStreamCompletion.collectAsState()
     val attention by nowViewModel.attention.collectAsState()
+    val waitingSince by nowViewModel.waitingSince.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
 
     val focusStream = streams.find { it.state == StreamState.FOCUS }
-    val needsYouStreams = streams.filter { it.state == StreamState.NEEDS_YOU }
+    // Needs You order = how urgently it needs me: the item waiting LONGEST first (earliest
+    // waitingSince), unknown timestamps last; ties keep their existing (stable) order. The
+    // comparator depends only on persisted timestamps, never on the ticking clock, so the
+    // list never re-sorts on a tick. (No explicit priority field exists on the display model.)
+    val needsYouStreams = WaitingTime.orderLongestWaitingFirst(streams.filter { it.state == StreamState.NEEDS_YOU }) { waitingSince[it.id] }
     val processingStreams = streams.filter { it.state == StreamState.PROCESSING }
     val readyStreams = streams.filter { it.state == StreamState.READY }
 
@@ -230,11 +238,16 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                 Text("Your attention required", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
             }
             Spacer(modifier = Modifier.height(10.dp))
+            // ONE per-second time source for every card's live timer (lifecycle-aware, drift-free).
+            // Only the timer texts read it, so the rest of Now never recomposes on a tick.
+            val nowTick = rememberSecondTicker()
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 needsYouStreams.forEachIndexed { index, stream ->
                     NeedsYouCard(
                         stream = stream, index = index,
                         kind = attention[stream.id],
+                        waitingSince = waitingSince[stream.id],
+                        now = nowTick,
                         onFocus = nowViewModel::focus,
                         onCheck = nowViewModel::openCheck,
                         onDefer = { id -> nowViewModel.deferReturn(id, 5) }
@@ -556,11 +569,24 @@ fun NeedsYouCard(
     stream: WorkStream,
     index: Int,
     kind: AttentionKind? = null,
+    /** When this stream started waiting (domain timestamp). Null = treated as just due (00:00). */
+    waitingSince: java.time.Instant? = null,
+    /** Shared per-second clock from the section; null renders a static 00:00 (previews/tests). */
+    now: androidx.compose.runtime.State<java.time.Instant>? = null,
     onFocus: (String) -> Unit = {},
     onCheck: (String) -> Unit = onFocus,
     onDefer: (String) -> Unit = {}
 ) {
-    val isDueNow = index == 0
+    // Everything time-related derives from ONE timestamp: the card is "due now" for its first
+    // minute of waiting and "overdue" after — no index-based fakes. derivedStateOf means the
+    // palette only recomposes when the boolean actually flips, not every second.
+    val dueNow by remember(waitingSince, now) {
+        derivedStateOf {
+            val since = waitingSince; val n = now
+            since == null || n == null || WaitingTime.elapsedSeconds(since, n.value) < 60
+        }
+    }
+    val isDueNow = dueNow
 
     // ── Color tokens (unchanged) ────────────────────────────────────
     val baseBg       = if (isDueNow) Color(0xFFFFFDF4) else Color(0xFFFFF7F2)
@@ -571,7 +597,6 @@ fun NeedsYouCard(
 
     val badgeBg      = if (isDueNow) Color(0xFFFEF3C7) else Color(0xFFFFEDD5)
     val badgeFg      = if (isDueNow) Color(0xFF92400E) else Color(0xFF9A3412)
-    val badgeText    = if (isDueNow) "DUE NOW" else "1M OVERDUE"
     val badgeBorder  = if (isDueNow) Color(0xFFFDE68A) else Color(0xFFFED7AA)
 
     val beaconCoreColor  = if (isDueNow) Color(0xFFFFC928) else Color(0xFFFF7A45)
@@ -720,9 +745,9 @@ fun NeedsYouCard(
                 AttentionKind.RETURN_DUE -> "Ready to continue"
                 AttentionKind.RESULT_READY -> "Result ready"
                 AttentionKind.CHECK_DUE -> "Check due"
-                null -> if (isDueNow) "Authentication redirect" else "Route structure decision"
+                null -> null   // no fabricated context line
             }
-            Text(
+            if (sub2 != null) Text(
                 text = sub2,
                 modifier = Modifier.testTag("needs_you_kind_${stream.id}"),
                 fontSize = 10.5.sp,
@@ -736,15 +761,10 @@ fun NeedsYouCard(
         Spacer(modifier = Modifier.width(12.dp))
 
         Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = badgeText,
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold,
-                color = badgeFg,
-                modifier = Modifier
-                    .background(badgeBg, RoundedCornerShape(12.dp))
-                    .border(1.dp, badgeBorder, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            // Live negative waiting timer — replaces the static DUE NOW / 1M OVERDUE badge.
+            WaitingTimerChip(
+                streamId = stream.id, waitingSince = waitingSince, now = now,
+                background = badgeBg, foreground = badgeFg, border = badgeBorder
             )
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -794,6 +814,37 @@ fun NeedsYouCard(
             }
         }
     }
+}
+
+/**
+ * The card's waiting timer: `00:00` at the due moment, then `−mm:ss` / `−h:mm:ss` elapsed.
+ * Reads the shared ticker HERE (and only here) so a tick recomposes just this chip. Its
+ * semantics carry the human-readable form ("Waiting for 3 minutes 42 seconds").
+ */
+@Composable
+private fun WaitingTimerChip(
+    streamId: String,
+    waitingSince: java.time.Instant?,
+    now: androidx.compose.runtime.State<java.time.Instant>?,
+    background: Color,
+    foreground: Color,
+    border: Color
+) {
+    val elapsed = if (waitingSince == null || now == null) 0L else WaitingTime.elapsedSeconds(waitingSince, now.value)
+    val label = WaitingTime.format(elapsed)
+    val spoken = WaitingTime.describe(elapsed)
+    Text(
+        text = label,
+        fontSize = 9.5.sp,
+        fontWeight = FontWeight.Bold,
+        color = foreground,
+        modifier = Modifier
+            .background(background, RoundedCornerShape(12.dp))
+            .border(1.dp, border, RoundedCornerShape(12.dp))
+            .testTag("needs_you_timer_$streamId")
+            .semantics { contentDescription = spoken }
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+    )
 }
 
 @Composable
