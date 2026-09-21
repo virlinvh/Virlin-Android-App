@@ -570,6 +570,105 @@ vertical card scroll, pinned composer). Unit: `AgentControlQuickActionsTest` +
 `AgentControlTest`. Roborazzi still blocked by WAC on this host — do not re-record goldens
 blindly.
 
+## AGENT FIRST-LEVEL SHEET UX RULE (2026-09-20)
+
+The initial Orb Agent sheet ("How can I help?") is a **compact, content-driven command
+launcher** — not a large workspace surface:
+
+- It must NOT use full-screen / fixed-percentage height distribution. The sheet wraps its
+  content (`AgentShell` root is `fillMaxWidth()` on the entry step; `VirlinApp` gives the entry
+  sheet `heightIn(max = maxHeight)` and rises it by its MEASURED height, not a percentage).
+- Control, Create, Capture and the direct composer form ONE interaction cluster.
+- **No weighted spacer between Capture and the composer** — the entry column ends with a fixed
+  `EntryMetrics.afterCards` gap (28 / 20 / 12dp by density), i.e. the 20–32dp band on normal phones.
+- Responsive through Compose constraints + insets, never device checks or screen-height percentages.
+- On constrained-height devices the entry content scrolls (`verticalScroll` inside the bounded
+  launcher) rather than compressing critical controls; density tiers still apply.
+- IME must keep the composer accessible; the window resizes (no hardcoded keyboard offsets).
+- Deeper Control / Create / Capture workspaces keep their own larger layouts (0.90/520 for the
+  Capture launcher, 0.86/440 for Control and Create).
+- Do not change this behaviour without an explicit UX requirement.
+
+## Needs You Attention System — Phases 1–3 (2026-09-20, branch `feature/needs-you-attention-system`)
+
+Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
+
+- **Waiting time (Phase 1):** `NowPresentation.waitingSince` — `checkAt` for CHECK_DUE (came from
+  PROCESSING), the CHECK transition stamp `updatedAt` for RETURN_DUE / RESULT_READY. Live timer
+  `WaitingTime.format`: `00:00` then `−mm:ss` / `−h:mm:ss` (U+2212), semantics "Waiting for …".
+  ONE `rememberSecondTicker()` per section (`produceState` + `repeatOnLifecycle(RESUMED)`, aligned
+  to second boundaries, re-reads `VirlinGraph.clock`); only the timer chip recomposes per tick.
+  Order: `WaitingTime.orderLongestWaitingFirst` (earliest `waitingSince` first, unknown last, stable) —
+  timestamp-only, never re-sorts on a tick. The old `index == 0` DUE NOW / 1M OVERDUE fakes and the
+  fabricated context strings are gone; the kind line (Check due / Ready to continue / Result ready) stays.
+- **Urgency (Phase 2):** `UrgencyLevel.of(seconds)` — ATTENTION <1:00 · WAITING 1:00–2:59 ·
+  ELEVATED 3:00–4:59 · HIGH 5:00–9:59 · CRITICAL ≥10:00 (`NeedsYouUrgency.kt`). One low-saturation
+  palette per level (card / border / chip / indicator / glow); colours cross-fade 350 ms, the timer never
+  restarts. Living glow: two feathered strokes drawn behind the card, alpha-only, 3.4→2.6 s breathing by
+  level with a per-item phase offset, on the card's existing `InfiniteTransition`. Reduced motion
+  (animator scale 0) → static half-strength halo. Levels 1 and 3 keep the previously approved surfaces.
+- **Card (Phase 3):** hierarchy task (13sp bold, 2 lines) → source → why; the timer chip (12sp, tabular
+  digits, no width jitter at −09:59 → −10:00) is the status; CHECK is now a light tonal "Check →" pill in
+  the card's palette (Resume / Focus now for returns) with a 44dp hit box (+card padding ≈ 48dp), pressed
+  state = tonal darkening; +5m defer unchanged; callbacks and test tags (`needs_you_primary_*`,
+  `needs_you_kind_*`, `needs_you_timer_*`) unchanged. Verified on Pixel 8 and at ~335dp width / 1.3× font.
+- **Tests:** `WaitingTimeTest` 36, `NeedsYouUrgencyTest` 20, `AttentionExitUiTest` ✓. Roborazzi could not
+  run on this machine (Application Control blocks `robolectric-nativeruntime.dll`); expected golden diffs are
+  confined to `now_screen_hierarchy.png` and the three `needsYou*` AttentionExit goldens — not re-recorded.
+
+## Project Identity Icons (2026-09-21, branch `feature/project-icons`)
+
+- **Model:** the Project OWNS its icon — `Project.iconPath` (relative path in the managed
+  `filesDir/project-icons/<projectId>/` store, null = fallback), Room v8 (additive `MIGRATION_7_8`),
+  `ProjectUpdate.iconPath` (Set / Clear) through `VirlinActions.updateProject`. WorkStreams / Tasks never
+  copy it; every surface resolves `ProjectIdentity.resolve(projectId, projects)`.
+- **Storage:** `ProjectIconStore` — PNG / JPEG / WebP validated (bounds decode) then streamed unchanged
+  into the store; one file per project (replace deletes the old); `decodeForDisplay` downsamples and never
+  throws. No permissions: `ProjectIconPicker` uses the Photo Picker. Deleting a project's files on
+  project deletion is deferred (no delete-project action exists yet).
+- **Fallback:** `ProjectIdentity.initials(name)` + stable hue from the project id
+  (`ProjectIconFallback`) — "Virlin Development" → VD, "App Fix" → AF, "MBA Project" → MP.
+- **Presentation:** `ui/components/ProjectIcon` — custom image centre-cropped in a circle, cached per
+  `path|mtime|size` (process LRU) so repeated rows and ticks never re-decode; missing / corrupt → fallback,
+  never a broken image; `decorative = true` where the row already names the project.
+- **Needs You integration:** the generic beacon is replaced by `ProjectIcon(28dp)` inside the same 36dp
+  footprint, wrapped by a 1.5dp urgency ring in the level colour (cross-fades with the palette) and the
+  existing soft outer pulse. The image is never tinted or animated. Identity = the owning Project (initials
+  from the project title, shared by all its streams); projectless streams fall back to their own name.
+  Not tappable in this phase. **Project Edit entry point:** infrastructure ready; editing entry point
+  requires a future Project Edit UI (none exists — the picker is not mounted anywhere yet).
+- **Tests:** `ProjectIdentityTest` 17, `ProjectIconStoreTest` 5, `ProjectIconUiTest` 5,
+  `NeedsYouProjectIconUiTest` 5 (custom / fallback / corrupt / same-project / urgency+tick stability),
+  `VirlinMigrationTest` 8 (incl. 7→8), `AttentionExitUiTest` (Check / Resume / Focus-now) ✓.
+- **Roborazzi:** the native runtime is intermittently blocked by Windows Application Control; in the one run
+  that loaded, `now_screen_hierarchy.png` differed — but its "new" side is the app's async startup
+  placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
+  that golden cannot currently validate Needs You and was not re-recorded.
+
+## Project Icon Editor + Built-in Icon Library (2026-09-21, branch `feature/project-icons`)
+
+- **Persistence:** one additive nullable column `projects.iconId` (Room v8 → v9, `MIGRATION_8_9`) holding a
+  STABLE semantic id from `ProjectIconCatalog` (24 ids: code · terminal · laptop · mobile · web · ai · brain ·
+  research · book · education · writing · design · palette · analytics · database · cloud · automation · rocket ·
+  business · target · lab · folder · tools · idea). `iconPath` (custom image) is untouched. Resource ids are
+  never stored; `BuiltInProjectIcons` maps id → Material vector + fixed low-saturation surface/symbol colours.
+- **Priority (`ProjectIconSelection.of`):** custom image → chosen built-in → automatic built-in → initials.
+  `ProjectIconCatalog.autoIconId(title, id)` = generic word-start keyword rules (development/code/app → code,
+  psychology → brain, research → research, skills/education → education, mba/business → business, fix → tools,
+  design, cloud, automation, …) else a deterministic generic icon from the id hash — identical on every launch.
+- **Editing:** Project Detail heading = `[ProjectIcon 52dp + ✎] TITLE / progress`; tapping it
+  ("Change <project> icon") opens `ProjectIconEditorSheet`: preview · name · the built-in grid (58dp tiles,
+  `FlowRow` — 5 per row on Pixel 8, 4 on ~335dp) · CUSTOM Choose/Change image (Photo Picker) · Remove custom
+  image · Use automatic icon. Every tap applies immediately through `VirlinActions.updateProject`
+  (`HierarchyViewModel.selectBuiltInIcon / setCustomIcon / removeCustomIcon / useAutoIcon`); choosing a
+  built-in or Auto also deletes the custom file from the store.
+- **Surfaces:** Streams project rows show the same `ProjectIcon` (38dp); Needs You cards pass `iconId` so
+  every WorkStream of a project updates together through the existing project flow (verified on device:
+  Detail → Streams → both Virlin Development Needs You cards, custom image and built-in, no restart).
+- **Tests:** `ProjectIconCatalogTest` 8 (library, auto rules, priority, persistence A–G), `ProjectIconUiTest` 6,
+  `NeedsYouProjectIconUiTest` 5 (updated to the new priority), `ProjectIconEditorUiTest` 1 journey (H–N),
+  `VirlinMigrationTest` 9 (incl. 8→9 with a surviving custom path, O).
+
 ## Repository boundary
 
 One cohesive `WorkStreamRepository` with `transaction { WorkStreamWriter }` so hand-offs
