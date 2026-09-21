@@ -145,7 +145,7 @@ interface VoiceDocumentDao {
         CaptureEntity::class, NoteDocumentEntity::class, PromptDocumentEntity::class,
         AttachmentDocumentEntity::class, VoiceDocumentEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
@@ -273,7 +273,13 @@ abstract class VirlinDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `projects` ADD COLUMN `iconPath` TEXT")
             }
         }
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+        /** v8 → v9: additive nullable `projects.iconId` (chosen built-in project icon). */
+        val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `projects` ADD COLUMN `iconId` TEXT")
+            }
+        }
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

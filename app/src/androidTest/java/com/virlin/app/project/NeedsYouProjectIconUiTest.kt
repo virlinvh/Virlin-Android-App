@@ -17,6 +17,7 @@ import com.virlin.app.domain.model.Project
 import com.virlin.app.mock.MockData
 import com.virlin.app.model.StreamState
 import com.virlin.app.ui.components.ProjectIconFallbackTestTag
+import com.virlin.app.ui.components.projectIconBuiltInTag
 import com.virlin.app.ui.components.ProjectIconImageTestTag
 import com.virlin.app.ui.screens.AttentionKind
 import com.virlin.app.ui.screens.NeedsYouCard
@@ -57,16 +58,16 @@ class NeedsYouProjectIconUiTest {
 
     @Test fun B_noCustomIcon_rendersProjectInitials() {
         composeRule.setContent { VirlinTheme { NeedsYouCard(display("s9", "Codex · MBA Research", "Methodology research", "p2"), 0, AttentionKind.CHECK_DUE, project = project("p2", "MBA Project")) } }
-        composeRule.onNodeWithTag(ProjectIconFallbackTestTag, useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onAllNodesWithText("MP", useUnmergedTree = true).assertCountEquals(1)
+        composeRule.onNodeWithTag(projectIconBuiltInTag("business"), useUnmergedTree = true).assertIsDisplayed()   // automatic built-in
+        composeRule.onAllNodesWithTag(ProjectIconImageTestTag, useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test fun C_corruptReference_fallsBack() {
         ProjectIconStore.resolve(context, "pN/icon-bad.png").also { it.parentFile!!.mkdirs(); it.writeBytes(ByteArray(40) { 3 }) }
         composeRule.setContent { VirlinTheme { NeedsYouCard(display("s9", "Antigravity", "Auth redirect", "pN"), 0, AttentionKind.CHECK_DUE, project = project("pN", "App Fix", "pN/icon-bad.png")) } }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag(ProjectIconFallbackTestTag, useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onAllNodesWithText("AF", useUnmergedTree = true).assertCountEquals(1)
+        composeRule.onNodeWithTag(projectIconBuiltInTag("tools"), useUnmergedTree = true).assertIsDisplayed()      // corrupt → automatic icon, never broken
+        composeRule.onAllNodesWithTag(ProjectIconImageTestTag, useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test fun D_E_sameProjectSameIdentity_differentProjectsDiffer() {
@@ -80,17 +81,16 @@ class NeedsYouProjectIconUiTest {
                 }
             }
         }
-        composeRule.onAllNodesWithText("VD", useUnmergedTree = true).assertCountEquals(2)   // same project → same identity
-        composeRule.onAllNodesWithText("MP", useUnmergedTree = true).assertCountEquals(1)   // different project → different identity
+        composeRule.onAllNodesWithTag(projectIconBuiltInTag("code"), useUnmergedTree = true).assertCountEquals(2)       // same project → same identity
+        composeRule.onAllNodesWithTag(projectIconBuiltInTag("business"), useUnmergedTree = true).assertCountEquals(1)   // different project → different identity
     }
 
     @Test fun F_G_urgencyAndTicks_doNotChangeIdentity() {
         val since = Instant.now().minusSeconds(590)                      // HIGH, about to become CRITICAL
         val now = mutableStateOf(Instant.now())
         composeRule.setContent { VirlinTheme { NeedsYouCard(display("s9", "Claude · Virlin", "Decision", "p1"), 0, AttentionKind.CHECK_DUE, waitingSince = since, now = now, project = project("p1", "Virlin Development")) } }
-        composeRule.onAllNodesWithText("VD", useUnmergedTree = true).assertCountEquals(1)
+        composeRule.onAllNodesWithTag(projectIconBuiltInTag("code"), useUnmergedTree = true).assertCountEquals(1)
         repeat(15) { now.value = now.value.plusSeconds(1); composeRule.waitForIdle() }   // ticks across the 10:00 threshold
-        composeRule.onAllNodesWithText("VD", useUnmergedTree = true).assertCountEquals(1)
-        composeRule.onNodeWithTag(ProjectIconFallbackTestTag, useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onAllNodesWithTag(projectIconBuiltInTag("code"), useUnmergedTree = true).assertCountEquals(1)
     }
 }

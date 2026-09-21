@@ -719,6 +719,7 @@ fun NeedsYouCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .testTag("needs_you_card_${stream.id}")
             .drawBehind {
                 // Soft halo: two feathered strokes just outside the card edge (cheap; no blur/shader).
                 if (glowAlpha > 0.005f) {
@@ -764,6 +765,7 @@ fun NeedsYouCard(
                     projectId = project?.id ?: stream.id,
                     name = project?.title ?: stream.title,
                     iconPath = project?.iconPath,
+                    iconId = project?.iconId,
                     size = 28.dp,
                     decorative = true
                 )

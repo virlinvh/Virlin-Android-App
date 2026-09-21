@@ -17,6 +17,7 @@ import com.virlin.app.data.projecticon.ProjectIconStore
 import com.virlin.app.ui.components.ProjectIcon
 import com.virlin.app.ui.components.ProjectIconChooseTestTag
 import com.virlin.app.ui.components.ProjectIconFallbackTestTag
+import com.virlin.app.ui.components.projectIconBuiltInTag
 import com.virlin.app.ui.components.ProjectIconImageTestTag
 import com.virlin.app.ui.components.ProjectIconPicker
 import com.virlin.app.ui.components.ProjectIconRemoveTestTag
@@ -51,19 +52,24 @@ class ProjectIconUiTest {
         composeRule.onNodeWithTag(ProjectIconTestTag).assertContentDescriptionContains("Claude · Virlin project icon")
     }
 
-    @Test fun noIcon_rendersDeterministicInitials() {
-        composeRule.setContent { VirlinTheme { ProjectIcon(projectId = "p1", name = "Codex · MBA Research", iconPath = null) } }
-        composeRule.onNodeWithTag(ProjectIconFallbackTestTag, useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithText("CM", useUnmergedTree = true).assertIsDisplayed()
+    @Test fun noIcon_rendersDeterministicAutomaticBuiltIn() {
+        // Priority: custom → chosen built-in → AUTOMATIC built-in (initials only if no built-in resolves).
+        composeRule.setContent { VirlinTheme { ProjectIcon(projectId = "p2", name = "MBA Project", iconPath = null) } }
+        composeRule.onNodeWithTag(projectIconBuiltInTag("business"), useUnmergedTree = true).assertIsDisplayed()
         composeRule.onAllNodesWithTag(ProjectIconImageTestTag, useUnmergedTree = true).assertCountEquals(0)
+        composeRule.onAllNodesWithTag(ProjectIconFallbackTestTag, useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    @Test fun chosenBuiltIn_beatsAutomatic() {
+        composeRule.setContent { VirlinTheme { ProjectIcon(projectId = "p2", name = "MBA Project", iconPath = null, iconId = "rocket") } }
+        composeRule.onNodeWithTag(projectIconBuiltInTag("rocket"), useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test fun corruptOrMissingReference_fallsBackSafely() {
         ProjectIconStore.resolve(context, "pU/icon-bad.png").also { it.parentFile!!.mkdirs(); it.writeBytes(ByteArray(64) { 1 }) }
-        composeRule.setContent { VirlinTheme { ProjectIcon(projectId = "pU", name = "Antigravity", iconPath = "pU/icon-bad.png") } }
+        composeRule.setContent { VirlinTheme { ProjectIcon(projectId = "pU", name = "App Fix", iconPath = "pU/icon-bad.png") } }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag(ProjectIconFallbackTestTag, useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithText("A", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag(projectIconBuiltInTag("tools"), useUnmergedTree = true).assertIsDisplayed()   // safe fallback = automatic icon
         composeRule.onAllNodesWithTag(ProjectIconImageTestTag, useUnmergedTree = true).assertCountEquals(0)
     }
 

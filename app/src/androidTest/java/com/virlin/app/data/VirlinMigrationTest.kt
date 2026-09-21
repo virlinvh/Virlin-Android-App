@@ -219,6 +219,25 @@ class VirlinMigrationTest {
         }
     }
 
+    @Test fun migrate8To9_addsIconId_preservesCustomIconPath() {
+        helper.createDatabase(dbName, 8).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt,iconPath) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL,'p1/icon-1.png')")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 9, true, VirlinDatabase.MIGRATION_8_9).close()
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                val p = db.projects().byId("p1")!!
+                assertEquals("p1/icon-1.png", p.iconPath)                       // O: custom icon survives
+                assertEquals(null, p.iconId)                                    // automatic until chosen
+                db.projects().upsert(p.copy(iconId = "rocket"))
+                assertEquals("rocket", db.projects().byId("p1")!!.iconId)       // C: reload reads it back
+            }
+        } finally { db.close() }
+    }
+
     @Test fun migrate7To8_addsProjectIconPath_preservesProjects() {
         helper.createDatabase(dbName, 7).apply {
             execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL)")
@@ -273,7 +292,7 @@ class VirlinMigrationTest {
         }
     }
 
-    @Test fun freshInstall_isV8_andNoMigrationNeeded() {
+    @Test fun freshInstall_isV9_andNoMigrationNeeded() {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         ctx.deleteDatabase("virlin-fresh-test.db")
         val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, "virlin-fresh-test.db").addMigrations(*VirlinDatabase.MIGRATIONS).build()
@@ -285,7 +304,7 @@ class VirlinMigrationTest {
                 assertEquals(0, db.attachmentDocuments().count())
                 assertEquals(0, db.voiceDocuments().count())
             }
-            assertEquals(8, db.openHelper.readableDatabase.version)
+            assertEquals(9, db.openHelper.readableDatabase.version)
         } finally { db.close(); ctx.deleteDatabase("virlin-fresh-test.db") }
     }
 }

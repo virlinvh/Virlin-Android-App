@@ -126,10 +126,14 @@ fun StreamsScreen(navController: NavController) {
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Project rows ARE projects: the same identity icon as Project Detail / Needs You.
+                        com.virlin.app.ui.components.ProjectIcon(project = ps.project, size = 38.dp, decorative = true)
+                        Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(ps.project.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Charcoal)
+                            Text(ps.project.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Charcoal, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text("${ps.streamCount} WorkStreams", fontSize = 12.sp, color = CharcoalMuted)
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(ps.progress.text, fontSize = 13.sp, fontWeight = FontWeight.Black,
                             color = if (ps.progress.fraction == null) CharcoalLight else Charcoal)
                     }

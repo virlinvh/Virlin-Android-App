@@ -34,6 +34,7 @@ import kotlinx.coroutines.withContext
 const val ProjectIconTestTag = "project_icon"
 const val ProjectIconImageTestTag = "project_icon_image"
 const val ProjectIconFallbackTestTag = "project_icon_fallback"
+fun projectIconBuiltInTag(id: String) = "project_icon_builtin_$id"
 
 /**
  * Deterministic fallback avatar colours for a project: a soft tinted container with dark
@@ -65,6 +66,15 @@ private object ProjectIconCache {
  * [decorative] = true where the surrounding row already speaks the project name, so a screen
  * reader does not announce it twice.
  */
+/** Convenience: render a [com.virlin.app.domain.model.Project]'s identity with the standard priority. */
+@Composable
+fun ProjectIcon(
+    project: com.virlin.app.domain.model.Project,
+    size: Dp = 32.dp,
+    modifier: Modifier = Modifier,
+    decorative: Boolean = false
+) = ProjectIcon(projectId = project.id, name = project.title, iconPath = project.iconPath, iconId = project.iconId, size = size, modifier = modifier, decorative = decorative)
+
 @Composable
 fun ProjectIcon(
     projectId: String,
@@ -72,7 +82,9 @@ fun ProjectIcon(
     iconPath: String?,
     size: Dp = 32.dp,
     modifier: Modifier = Modifier,
-    decorative: Boolean = false
+    decorative: Boolean = false,
+    /** Chosen built-in icon id; null = automatic (`ProjectIconCatalog.autoIconId`). */
+    iconId: String? = null
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -101,6 +113,11 @@ fun ProjectIcon(
         contentAlignment = Alignment.Center
     ) {
         val bmp = image
+        // Priority: custom image → chosen built-in → automatic built-in → initials (last safety net).
+        val builtIn = BuiltInProjectIcons.lookOf(
+            if (com.virlin.app.domain.model.ProjectIconCatalog.isKnown(iconId)) iconId
+            else com.virlin.app.domain.model.ProjectIconCatalog.autoIconId(name, projectId)
+        )
         if (custom && bmp != null) {
             Image(
                 bitmap = bmp,
@@ -108,6 +125,19 @@ fun ProjectIcon(
                 contentScale = ContentScale.Crop,        // never stretched; transparent PNG/WebP keeps alpha
                 modifier = Modifier.size(size).testTag(ProjectIconImageTestTag)
             )
+        } else if (builtIn != null) {
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .background(builtIn.surface, CircleShape)
+                    .testTag(projectIconBuiltInTag(builtIn.id)),
+                contentAlignment = Alignment.Center
+            ) {
+                androidx.compose.material3.Icon(
+                    builtIn.icon, contentDescription = null, tint = builtIn.symbol,
+                    modifier = Modifier.size(size * 0.54f)
+                )
+            }
         } else {
             Box(
                 modifier = Modifier

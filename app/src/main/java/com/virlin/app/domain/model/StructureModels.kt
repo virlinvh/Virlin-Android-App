@@ -41,7 +41,13 @@ data class Project(
      * avatar (`ProjectIdentity`). The Project OWNS its icon — WorkStreams and Tasks resolve it via
      * `projectId` and never copy it. Other icon sources (emoji, app identity) can extend this later.
      */
-    val iconPath: String? = null
+    val iconPath: String? = null,
+    /**
+     * Chosen built-in icon id from `ProjectIconCatalog` (stable semantic string, never a resource
+     * id), or null. Priority everywhere: custom image → this → automatic → initials
+     * (`ProjectIconSelection.of`).
+     */
+    val iconId: String? = null
 )
 
 /** Deliberately simpler than WorkStream state: no PROCESSING/CHECK/SNOOZED/BLOCKED here. */

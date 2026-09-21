@@ -63,6 +63,7 @@ internal class StructureActions(
             estimatedEffort = u.estimatedEffort.applyTo(p.estimatedEffort),
             defaultExecutionMode = nextDefault,
             iconPath = u.iconPath.applyTo(p.iconPath)?.takeIf { it.isNotBlank() },
+            iconId = u.iconId.applyTo(p.iconId)?.takeIf { com.virlin.app.domain.model.ProjectIconCatalog.isKnown(it) },
             updatedAt = clock.now()
         )
         saveProject(updated)
