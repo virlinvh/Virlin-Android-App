@@ -340,7 +340,9 @@ data class ProjectUpdate(
     val priority: Field<Priority> = Field.Keep,
     val dueAt: Field<Instant> = Field.Keep,
     val estimatedEffort: Field<Duration> = Field.Keep,
-    val defaultExecutionMode: Field<EffectiveExecutionMode> = Field.Keep
+    val defaultExecutionMode: Field<EffectiveExecutionMode> = Field.Keep,
+    /** Custom icon reference (relative path in the managed store). `Clear` returns to the fallback avatar. */
+    val iconPath: Field<String> = Field.Keep
 )
 
 data class CreateWorkStream(

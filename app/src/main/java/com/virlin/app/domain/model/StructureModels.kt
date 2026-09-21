@@ -34,7 +34,14 @@ data class Project(
     val defaultExecutionMode: EffectiveExecutionMode = EffectiveExecutionMode.HUMAN,
     val createdAt: Instant,
     val updatedAt: Instant,
-    val completedAt: Instant? = null
+    val completedAt: Instant? = null,
+    /**
+     * Project identity icon (2026-09-21): a path RELATIVE to the managed `project-icons/` store
+     * (`ProjectIconStore`) for a user-chosen custom image, or null for the deterministic fallback
+     * avatar (`ProjectIdentity`). The Project OWNS its icon — WorkStreams and Tasks resolve it via
+     * `projectId` and never copy it. Other icon sources (emoji, app identity) can extend this later.
+     */
+    val iconPath: String? = null
 )
 
 /** Deliberately simpler than WorkStream state: no PROCESSING/CHECK/SNOOZED/BLOCKED here. */

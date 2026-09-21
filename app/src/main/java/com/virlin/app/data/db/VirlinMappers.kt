@@ -31,12 +31,12 @@ object VirlinMappers {
 
     fun Project.toEntity() = ProjectEntity(
         id, title, description, status.name, priority.name, dueAt, estimatedEffort,
-        defaultExecutionMode.name, createdAt, updatedAt, completedAt
+        defaultExecutionMode.name, createdAt, updatedAt, completedAt, iconPath
     )
     fun ProjectEntity.toDomain() = Project(
         id, title, description, ProjectStatus.valueOf(status), Priority.valueOf(priority),
         dueAt, estimatedEffort, EffectiveExecutionMode.valueOf(defaultExecutionMode),
-        createdAt, updatedAt, completedAt
+        createdAt, updatedAt, completedAt, iconPath
     )
 
     fun WorkStream.toEntity() = WorkStreamEntity(
