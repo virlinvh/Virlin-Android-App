@@ -108,6 +108,11 @@ class NowViewModel(
     fun focus(streamId: String) = intents.focus(streamId)
     /** Move a Needs You item to a 1-based queue position; the others shift automatically (Phase 1 rule). */
     fun reorderNeedsYou(streamId: String, position: Int) = intents.reorderNeedsYou(streamId, position)
+    /** Priority editor SAVE (Phase 04): move now + remember the preference according to its scope. */
+    fun setNeedsYouPriority(streamId: String, position: Int, scope: com.virlin.app.domain.attention.PriorityScope) =
+        intents.setNeedsYouPriority(streamId, position, scope)
+    /** Stored preference for an item (in memory; Phase 04 has no persistence). */
+    fun priorityPreference(streamId: String) = actions.priorityPreference(streamId)
     /** A planned check/return time arrived (the in-app ticker's scheduling stand-in). */
     fun checkDue(streamId: String) = intents.checkDue(streamId)
     /** "Still running — give it N more minutes." From CHECK or PROCESSING. */

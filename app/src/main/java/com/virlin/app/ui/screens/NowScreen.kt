@@ -277,10 +277,15 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                     }
                 }
             }
-            positionPicker?.takeIf { id -> needsYouStreams.any { it.id == id } }?.let { id ->
-                NeedsYouPositionSheet(
-                    streamId = id, streams = needsYouStreams,
-                    onSelect = { pos -> positionPicker = null; nowViewModel.reorderNeedsYou(id, pos) },
+            // Priority editor (Phase 04): preview state inside the sheet; the queue changes on SAVE only.
+            positionPicker?.let { id ->
+                val edited = needsYouStreams.firstOrNull { it.id == id }
+                NeedsYouPriorityEditor(
+                    stream = edited,
+                    currentPosition = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 },
+                    queueSize = needsYouQueue.size,
+                    existing = remember(id) { nowViewModel.priorityPreference(id) },
+                    onSave = { pos, scope -> positionPicker = null; nowViewModel.setNeedsYouPriority(id, pos, scope) },
                     onDismiss = { positionPicker = null }
                 )
             }

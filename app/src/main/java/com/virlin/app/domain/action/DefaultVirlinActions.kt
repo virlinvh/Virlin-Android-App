@@ -1,6 +1,10 @@
 package com.virlin.app.domain.action
 
+import com.virlin.app.domain.attention.InMemoryPriorityPreferences
 import com.virlin.app.domain.attention.NeedsYouOrder
+import com.virlin.app.domain.attention.PriorityPreference
+import com.virlin.app.domain.attention.PriorityPreferences
+import com.virlin.app.domain.attention.PriorityScope
 import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
@@ -34,7 +38,9 @@ import java.time.Instant
 class DefaultVirlinActions(
     private val repository: WorkStreamRepository,
     private val clock: VirlinClock,
-    private val ids: IdProvider
+    private val ids: IdProvider,
+    /** Phase 04 priority preferences (in memory; persistence-ready behind the interface). */
+    private val preferences: PriorityPreferences = InMemoryPriorityPreferences()
 ) : VirlinActions {
 
     private val structure = StructureActions(repository, clock, ids)
@@ -277,6 +283,9 @@ class DefaultVirlinActions(
         val updated = stream.copy(state = CHECK, snoozedUntil = null, updatedAt = now)
         persist(updated)
         event(stream, EventType.CHECK_DUE, now, from = stream.state, to = CHECK, cycleId = stream.currentCycleId)
+        // Phase 04 policy application: an item with an ACTIVE preference re-enters at its preferred
+        // position instead of appending. Ordering still happens only through the queue engine.
+        applyPreferenceOnEntry(streamId, now)
         ActionResult.Success(updated)
     }
 
@@ -502,6 +511,33 @@ class DefaultVirlinActions(
         // Ranks only — `updatedAt` is deliberately untouched so waiting time / urgency never move.
         move.changed.forEach { saveStream(it) }
         ActionResult.Success(move.order)
+    }
+
+    override suspend fun setNeedsYouPriority(streamId: String, position: Int, scope: PriorityScope): ActionResult<List<WorkStream>> {
+        val moved = reorderNeedsYou(streamId, position)
+        if (moved !is ActionResult.Success) return moved
+        // The stored position is what the user asked for, clamped to the queue that accepted it.
+        val effective = NeedsYouOrder.effectiveRank(moved.value, streamId) ?: position
+        when (scope) {
+            PriorityScope.OneTime -> preferences.remove(streamId)      // this occurrence only: remember nothing
+            else -> preferences.put(PriorityPreference(streamId, effective, scope, clock.now()))
+        }
+        return moved
+    }
+
+    override fun priorityPreference(streamId: String): PriorityPreference? = preferences.get(streamId)
+
+    /**
+     * Re-entry policy: place a returning item at its preferred position when its preference is
+     * still active, then drop an expired one. Conflicts are resolved by the queue itself — the
+     * item being inserted gets the position it asks for and everyone else shifts, so two items may
+     * both prefer position 1 while effective ranks stay unique.
+     */
+    private suspend fun WorkStreamWriter.applyPreferenceOnEntry(streamId: String, now: Instant) {
+        val pref = preferences.get(streamId) ?: return
+        if (!pref.isActiveAt(now)) { preferences.remove(streamId); return }
+        val move = NeedsYouOrder.planMove(allStreams(), streamId, pref.preferredPosition) ?: return
+        move.changed.forEach { saveStream(it) }
     }
 
     // ------------------------------------------------------------------ Shared mechanics

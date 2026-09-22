@@ -8,6 +8,8 @@ import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.CaptureType
+import com.virlin.app.domain.attention.PriorityPreference
+import com.virlin.app.domain.attention.PriorityScope
 import com.virlin.app.domain.model.WorkStream
 import java.time.Duration
 import java.time.Instant
@@ -128,6 +130,18 @@ interface VirlinActions {
      * Rule + examples: `NeedsYouOrder`.
      */
     suspend fun reorderNeedsYou(streamId: String, position: Int): ActionResult<List<WorkStream>>
+
+    /**
+     * Phase 04 priority editor SAVE: move the item to [position] now AND record what should happen
+     * next time. The move itself is [reorderNeedsYou] — there is no second ordering path.
+     *
+     * `OneTime` clears any stored preference (the move stands, nothing is remembered); the other
+     * scopes store a [PriorityPreference] that re-applies when the item returns to Needs You.
+     */
+    suspend fun setNeedsYouPriority(streamId: String, position: Int, scope: PriorityScope): ActionResult<List<WorkStream>>
+
+    /** The stored preference for an item, if any (Phase 04: in memory only). */
+    fun priorityPreference(streamId: String): PriorityPreference?
 
     // ================================================================ Structure: Project
 

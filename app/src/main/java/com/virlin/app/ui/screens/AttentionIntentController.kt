@@ -85,6 +85,9 @@ class AttentionIntentController(
     fun completeStream(streamId: String) = run(streamId, { t -> "$t completed" }) { actions.completeStream(streamId) }
     /** Needs You queue position (Phase 1 `reorderNeedsYou`): ordering only — never timers, urgency or `updatedAt`. */
     fun reorderNeedsYou(streamId: String, position: Int) = run(streamId, { t -> "$t → #$position" }) { actions.reorderNeedsYou(streamId, position) }
+    /** Priority editor SAVE: the same Phase 03 move, plus the typed preference for later occurrences. */
+    fun setNeedsYouPriority(streamId: String, position: Int, scope: com.virlin.app.domain.attention.PriorityScope) =
+        run(streamId, { t -> "$t → #$position" }) { actions.setNeedsYouPriority(streamId, position, scope) }
 
     override fun customMinutes(streamId: String, intent: TimedIntent, minutes: Long): Boolean {
         if (minutes <= 0) return false

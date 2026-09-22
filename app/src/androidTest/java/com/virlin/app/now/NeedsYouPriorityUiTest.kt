@@ -29,9 +29,9 @@ import com.virlin.app.model.StreamState
 import com.virlin.app.ui.components.projectIconBuiltInTag
 import com.virlin.app.ui.screens.AttentionKind
 import com.virlin.app.ui.screens.NeedsYouCard
-import com.virlin.app.ui.screens.NeedsYouPositionSheet
-import com.virlin.app.ui.screens.NeedsYouPositionSheetTag
-import com.virlin.app.ui.screens.needsYouPositionTag
+import com.virlin.app.ui.screens.NeedsYouPriorityEditor
+import com.virlin.app.ui.screens.PriorityEditorTag
+import com.virlin.app.ui.screens.priorityPositionTag
 import com.virlin.app.ui.screens.needsYouRankTag
 import com.virlin.app.ui.theme.VirlinTheme
 import org.junit.Assert.assertEquals
@@ -88,22 +88,23 @@ class NeedsYouPriorityUiTest {
     @Test fun N_sheet_showsExactlyCurrentCount_currentSelected_tapApplies() {
         val chosen = mutableListOf<Int>()
         var dismissed = 0
-        composeRule.setContent { VirlinTheme { NeedsYouPositionSheet(streamId = "d", streams = four(), onSelect = { chosen += it }, onDismiss = { dismissed++ }) } }
-        composeRule.waitUntil(5_000) { composeRule.onAllNodesWithTag(NeedsYouPositionSheetTag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
-        (1..4).forEach { composeRule.onNodeWithTag(needsYouPositionTag(it), useUnmergedTree = true).assertExists() }
-        composeRule.onAllNodesWithTag(needsYouPositionTag(5), useUnmergedTree = true).assertCountEquals(0)
-        composeRule.onNodeWithTag(needsYouPositionTag(4), useUnmergedTree = true).assertIsSelected().assertContentDescriptionContains("Current position 4", substring = true)
-        composeRule.onNodeWithTag(needsYouPositionTag(2), useUnmergedTree = true).assertIsNotSelected().assertContentDescriptionContains("Move to position 2, Second", substring = true)
-        composeRule.onNode(hasTestTag(needsYouPositionTag(1)) and hasAnyDescendant(hasText("Navigation · Route structure decision")), useUnmergedTree = true).assertExists()
-        composeRule.onNodeWithTag(needsYouPositionTag(2), useUnmergedTree = true).performClick()
+        composeRule.setContent { VirlinTheme { NeedsYouPriorityEditor(stream = four()[3], currentPosition = 4, queueSize = 4, now = t0, onSave = { pos, _ -> chosen += pos }, onDismiss = { dismissed++ }) } }
+        composeRule.waitUntil(5_000) { composeRule.onAllNodesWithTag(PriorityEditorTag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        (1..4).forEach { composeRule.onNodeWithTag(priorityPositionTag(it), useUnmergedTree = true).assertExists() }
+        composeRule.onAllNodesWithTag(priorityPositionTag(5), useUnmergedTree = true).assertCountEquals(0)
+        composeRule.onNodeWithTag(priorityPositionTag(4), useUnmergedTree = true).assertIsSelected().assertContentDescriptionContains("Priority position 4", substring = true)
+        composeRule.onNodeWithTag(priorityPositionTag(2), useUnmergedTree = true).assertIsNotSelected().assertContentDescriptionContains("Priority position 2", substring = true)
+        composeRule.onNodeWithTag(priorityPositionTag(2), useUnmergedTree = true).performClick()
+        assertTrue("preview only until SAVE", chosen.isEmpty())
+        composeRule.onNodeWithTag(com.virlin.app.ui.screens.PriorityEditorSaveTag, useUnmergedTree = true).performClick()
         assertEquals(listOf(2), chosen)
     }
 
     @Test fun N2_singleItem_onlyPositionOne() {
-        composeRule.setContent { VirlinTheme { NeedsYouPositionSheet(streamId = "a", streams = four().take(1), onSelect = {}, onDismiss = {}) } }
-        composeRule.waitUntil(5_000) { composeRule.onAllNodesWithTag(needsYouPositionTag(1), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
-        composeRule.onAllNodesWithTag(needsYouPositionTag(2), useUnmergedTree = true).assertCountEquals(0)
-        composeRule.onNodeWithTag(needsYouPositionTag(1), useUnmergedTree = true).assertIsSelected()
+        composeRule.setContent { VirlinTheme { NeedsYouPriorityEditor(stream = four()[0], currentPosition = 1, queueSize = 1, now = t0, onSave = { _, _ -> }, onDismiss = {}) } }
+        composeRule.waitUntil(5_000) { composeRule.onAllNodesWithTag(priorityPositionTag(1), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        composeRule.onAllNodesWithTag(priorityPositionTag(2), useUnmergedTree = true).assertCountEquals(0)
+        composeRule.onNodeWithTag(priorityPositionTag(1), useUnmergedTree = true).assertIsSelected()
     }
 
     @Test fun K_positionDoesNotChangeUrgency_orTimer() {

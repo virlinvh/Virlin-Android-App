@@ -645,6 +645,43 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## NEEDS YOU PHASE 04 COMPLETE — priority editor (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+The rank badge is the priority editor's ONLY entry point (no three-dot menu, no long press, no
+drag). Tapping it opens `NeedsYouPriorityEditor` — a compact `ModalBottomSheet`
+(`ui/screens/NeedsYouPriorityEditor.kt`): what is being changed (badge · title · context), the live
+queue count ("12 activities waiting"), POSITION (1..min(10,N) as coloured chips, 11..N in a compact
+scrolling row), APPLY (scope) and CANCEL / SAVE.
+
+- **Preview only.** Position and scope live in sheet state; nothing is written until SAVE. CANCEL,
+  back and swipe-dismiss never mutate the queue or store a preference. The sheet opens on the item's
+  CURRENT effective rank, never on 1.
+- **SAVE** calls `VirlinActions.setNeedsYouPriority(id, position, scope)`, which performs the move
+  through the Phase 03 `reorderNeedsYou` (no second ordering path) and then records the preference.
+  Phase 02 visuals follow automatically.
+- **Three separate concepts:** EFFECTIVE RANK (current queue position) · PREFERRED POSITION (what a
+  policy wants) · SCOPE (how long it applies). A preference never owns a rank.
+- **Scopes** (`domain/attention/PriorityPreference.kt`, typed — never UI labels):
+  - `OneTime` — "This time", the DEFAULT. Applies to this occurrence; clears any stored preference;
+    after the item leaves and returns it appends normally.
+  - `Always` — "Always prioritize here". On re-entry (`checkDue`) the item is inserted at its
+    preferred position and the others shift.
+  - `CurrentTerm` — "This term". Stored and behaves like `Always`: Virlin has no term/semester
+    boundary in the domain, so expiration is deliberately UNRESOLVED rather than faked.
+  - `Until(expiresAt)` — "Custom" (Today / Tomorrow / Next week). Applies while unexpired; an
+    expired preference is dropped on the next entry and the item appends.
+- **Conflicts:** two items may both prefer position 1. The item being (re)introduced takes the
+  position, everyone else shifts, and effective ranks stay unique — no conflict engine.
+- **Persistence:** NONE. `InMemoryPriorityPreferences` is process-local and does not survive process
+  death; the model is persistence-ready behind the `PriorityPreferences` interface. No Room/Supabase.
+- **Untouched:** card geometry and rank palette (frozen), timers (a move never resets one), CHECK
+  (independent action), the rest of Now. Sorting / mixer controls are NOT implemented.
+- **Superseded:** the earlier simple "Move to position" sheet was removed — the editor replaces it,
+  so there is one entry point and one flow.
+- **Tests:** `PriorityPreferenceTest` (18 — the specified cases incl. scopes, re-entry, expiry,
+  conflicts, clamping, item-gone, queue-shrank) and instrumented `PriorityEditorUiTest` (flows
+  A–G). Reorder motion: still none (the section is a `Column`; see Phase 03).
+
 ## NEEDS YOU PHASE 03 COMPLETE — ordered attention queue (2026-09-22, branch `feature/needs-you-priority-ranking`)
 
 Needs You is now a real ORDERED ATTENTION QUEUE with one canonical owner.
