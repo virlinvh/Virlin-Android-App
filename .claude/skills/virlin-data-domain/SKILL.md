@@ -89,6 +89,17 @@ Load on demand. UI rules live in `virlin-android-compose`; verification in `virl
 - Time only from `VirlinClock`; ids only from `IdProvider`. Tests use `FakeClock` and
   `SequentialIdProvider` — no sleeps, no real time.
 
+## Needs You attention queue (Phase 03)
+
+`NeedsYouOrder.queue(streams)` is the ONE canonical Needs You ordering: CHECK items, explicit
+`attentionRank` block first then longest-waiting, each entry carrying its EFFECTIVE rank (dense
+1..N position). Identity is the stream id and never depends on position. `VirlinActions.
+reorderNeedsYou(id, rank)` is the only move: it shifts the displaced items, re-densifies the whole
+queue in one transaction, clamps out-of-range targets, and never touches `updatedAt`, `checkAt` or
+the waiting basis. Leaving CHECK clears that item's rank and re-densifies the rest. New arrivals are
+unranked and append. UI (`NowViewModel.needsYouQueue`) only reads this projection — never compute an
+order or a rank in a composable, and never add a second ordering source.
+
 ## Boundaries
 
 - `WorkStreamRepository` (which also implements the small `CaptureRepository`, same transaction

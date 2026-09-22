@@ -38,6 +38,38 @@ object NeedsYouOrder {
     fun order(streams: List<WorkStream>): List<WorkStream> =
         streams.filter { it.state == WorkStreamState.CHECK }.sortedWith(comparator)
 
+    /** One queue entry: the item and its EFFECTIVE rank — its 1-based position in the queue. */
+    data class Entry(val stream: WorkStream, val rank: Int)
+
+    /**
+     * THE canonical Needs You queue: [order] with each item's effective rank attached.
+     *
+     * Effective rank is always a dense `1..N` over the currently displayed items, whatever the
+     * stored [WorkStream.attentionRank] values look like (an item that never moved has none, and a
+     * removal can leave a gap in the stored keys). Stored rank is only the persisted sort key;
+     * the position IS the rank, so `1, 2, 4, 7` can never reach the UI.
+     *
+     * Identity is [WorkStream.id] and never depends on position: moving an item is a new rank on
+     * the same item, never a new item. Duplicate ids are collapsed (first wins) so a bad upstream
+     * list cannot produce two cards claiming the same position.
+     */
+    fun queue(streams: List<WorkStream>): List<Entry> =
+        order(streams).distinctBy { it.id }.mapIndexed { i, s -> Entry(s, i + 1) }
+
+    /** Effective rank of one item, or null when it is not currently in Needs You. */
+    fun effectiveRank(streams: List<WorkStream>, streamId: String): Int? =
+        queue(streams).firstOrNull { it.stream.id == streamId }?.rank
+
+    /**
+     * Re-densify the stored ranks of the ranked block to `1..k` in the queue's own order, so a
+     * removal (or any exit from CHECK) closes the gap it left behind. Returns only the streams
+     * whose stored rank actually changes; ordering, timers and `updatedAt` are never touched.
+     */
+    fun normalize(streams: List<WorkStream>): List<WorkStream> {
+        val ranked = order(streams).filter { it.attentionRank != null }
+        return ranked.mapIndexedNotNull { i, s -> if (s.attentionRank == i + 1) null else s.copy(attentionRank = i + 1) }
+    }
+
     /** Result of [planMove]: the new full order and only the streams whose stored rank must change. */
     data class Move(val order: List<WorkStream>, val changed: List<WorkStream>) {
         val isNoOp: Boolean get() = changed.isEmpty()

@@ -57,10 +57,15 @@ class NowViewModel(
         .map { NowPresentation.waitingSince(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NowPresentation.waitingSince(repository.streams.value))
 
-    /** Needs You display order (ids): explicit rank first, then longest waiting — `NeedsYouOrder`, never computed in UI. */
-    val needsYouOrder: StateFlow<List<String>> = repository.streams
-        .map { s -> com.virlin.app.domain.attention.NeedsYouOrder.order(s).map { it.id } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.virlin.app.domain.attention.NeedsYouOrder.order(repository.streams.value).map { it.id })
+    /**
+     * THE Needs You attention queue: ordered stream ids, index + 1 = the item's effective rank.
+     * Projected once from the domain (`NeedsYouOrder.queue`) — the UI never computes an order or a
+     * rank of its own, so there is exactly one source of truth for "who is #1".
+     */
+    val needsYouQueue: StateFlow<List<String>> = repository.streams
+        .map { s -> com.virlin.app.domain.attention.NeedsYouOrder.queue(s).map { it.stream.id } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            com.virlin.app.domain.attention.NeedsYouOrder.queue(repository.streams.value).map { it.stream.id })
 
     /** The single lightweight chooser open on Now, if any. Never more than one at a time. */
     sealed interface Chooser {

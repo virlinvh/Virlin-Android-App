@@ -645,6 +645,48 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## NEEDS YOU PHASE 03 COMPLETE — ordered attention queue (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+Needs You is now a real ORDERED ATTENTION QUEUE with one canonical owner.
+
+- **Canonical queue:** `domain/attention/NeedsYouOrder.queue(streams)` → `List<Entry(stream, rank)>`.
+  `rank` is the EFFECTIVE rank: the item's 1-based position, always dense `1..N` regardless of the
+  stored keys, so `1, 2, 4, 7` can never reach the UI. `effectiveRank(streams, id)` answers for one
+  item; duplicate ids collapse (first wins).
+- **Identity:** `WorkStream.id`. It never depends on rank, index or position — moving item #8 to #2
+  is a new rank on the SAME item (persistence/sync-ready).
+- **Ordering rule (unchanged):** explicit `attentionRank` block first (ascending), then unranked
+  items longest-waiting first, ties by id. The stored `attentionRank` is only a persisted sort key;
+  the position IS the rank.
+- **State owner:** the existing chain — repository flow → `NowViewModel.needsYouQueue` (ordered ids)
+  → Now. The card receives its rank; it computes nothing. No second ViewModel, no UI-local rank.
+- **Move:** `VirlinActions.reorderNeedsYou(id, targetRank)` — remove + insert, displaced items shift,
+  then the whole queue is re-densified to `1..N` in one transaction. Target clamps to `1` (0, negative)
+  and to `N` (beyond the end); moving to the current position writes nothing; unknown id →
+  `NotFound`; not in Needs You → `Rejected(NotInNeedsYou)`. `updatedAt`, `checkAt` and the waiting
+  basis are never touched.
+- **Insertion:** a new arrival (`checkDue`) is unranked and therefore appends after the ranked block.
+  No "always first" policy exists yet.
+- **Removal:** leaving CHECK (check/resolve, focus, ready, snooze …) clears that item's rank and
+  re-densifies the remaining ranked block (`NeedsYouOrder.normalize`, applied in
+  `DefaultVirlinActions.persist`), so the gap closes in the stored keys as well as on screen.
+- **Visuals:** rank drives everything through Phase 02's `NeedsYouPriority.visualsFor(rank)` — a
+  queue change automatically re-colours badge, icon, border, surface, timer and CHECK, including
+  items crossing the 10 ↔ 11 colour threshold. Zero manual colour work anywhere.
+- **Timer:** independent of position. Queue order never re-sorts by time, and a move never resets a
+  timer (asserted in unit and rendered tests).
+- **Reorder animation:** NOT added — the Needs You section is a plain `Column`, so there is no
+  placement animation to attach; correctness first. Colour still cross-fades as one identity (220ms,
+  Phase 02). Converting the section to a `LazyColumn` for `animateItem` is a later refinement.
+- **NOT implemented (later phases):** the rank-edit popup/policies (Always First, Only This Time,
+  Only This Term), drag-and-drop, sorting / mixer controls. NOTE: the position badge already opens
+  the simple "Move to position" sheet delivered earlier on this branch; the richer Phase 04 editor
+  replaces it. Persistence beyond the existing Room column is unchanged — no new storage was added.
+- **Tests:** `NeedsYouQueueTest` (14: the 15 specified cases incl. 25 items move 23 → 3, duplicates,
+  unknown id, clamping, no-op, removal normalization, timer preservation, 10 ↔ 11 threshold) plus the
+  rendered `NeedsYouQueueUiTest` (12-item queue, L → #1, colours recalculated, no timer reset,
+  before/after PNGs).
+
 ## Needs You compact attention card + rank colour system (2026-09-22, branch `feature/needs-you-priority-ranking`)
 
 **APPROVED CARD — do not redesign without an explicit request.** The Needs You card is ONE compact

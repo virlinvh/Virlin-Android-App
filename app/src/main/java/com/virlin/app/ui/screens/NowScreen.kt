@@ -121,7 +121,7 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val pendingCompletion by nowViewModel.pendingWorkStreamCompletion.collectAsState()
     val attention by nowViewModel.attention.collectAsState()
     val waitingSince by nowViewModel.waitingSince.collectAsState()
-    val needsYouOrder by nowViewModel.needsYouOrder.collectAsState()
+    val needsYouQueue by nowViewModel.needsYouQueue.collectAsState()
     val projects by nowViewModel.projects.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
 
@@ -130,8 +130,9 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     // item waiting LONGEST first; it depends only on persisted fields, never on the ticking clock,
     // so the list never re-sorts on a tick. Display items unknown to the domain keep their
     // incoming order after the domain-ordered ones (stable).
+    // Order AND rank come from the domain queue projection; the display list is only looked up by id.
     val needsYouStreams = streams.filter { it.state == StreamState.NEEDS_YOU }
-        .sortedBy { needsYouOrder.indexOf(it.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
+        .sortedBy { needsYouQueue.indexOf(it.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
     val processingStreams = streams.filter { it.state == StreamState.PROCESSING }
     val readyStreams = streams.filter { it.state == StreamState.READY }
 
@@ -268,7 +269,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                             onFocus = nowViewModel::focus,
                             onCheck = nowViewModel::openCheck,
                             onDefer = { id -> nowViewModel.deferReturn(id, 5) },
-                            position = index + 1,
+                            // Effective rank = position in the domain queue (never the display index).
+                            position = needsYouQueue.indexOf(stream.id).let { if (it < 0) null else it + 1 },
                             total = needsYouStreams.size,
                             onChangePosition = { id -> positionPicker = id }
                         )

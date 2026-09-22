@@ -511,8 +511,14 @@ class DefaultVirlinActions(
      * CHECK membership, so any stream saved in another state leaves unranked (a later return enters
      * Needs You at its longest-waiting position).
      */
-    private suspend fun WorkStreamWriter.persist(stream: WorkStream) =
-        saveStream(if (stream.state == CHECK || stream.attentionRank == null) stream else stream.copy(attentionRank = null))
+    private suspend fun WorkStreamWriter.persist(stream: WorkStream) {
+        val leaving = stream.state != CHECK
+        saveStream(if (leaving && stream.attentionRank != null) stream.copy(attentionRank = null) else stream)
+        // An item leaving Needs You closes the gap it left: the remaining ranked block re-densifies
+        // to 1..k. Effective ranks (positions) are always dense anyway; this keeps the stored keys
+        // dense too, so the persisted queue and what the user sees can never drift apart.
+        if (leaving) NeedsYouOrder.normalize(allStreams()).forEach { saveStream(it) }
+    }
 
     /** Load → run inside one transaction → map unexpected throwables to [ActionResult.Failure]. */
     private suspend fun <T> run(
