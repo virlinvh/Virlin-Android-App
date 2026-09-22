@@ -645,6 +645,37 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## Needs You Priority Ranking — Phase 1: domain / ordering foundation (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+Explicit user priority for Needs You, separate from urgency. **No UI in this phase** (no card
+redesign, no priority popup, no drag-and-drop); the timer, five urgency levels, glow, Check action
+and project icons are untouched.
+
+- **Persisted field:** `WorkStream.attentionRank: Int?` (Room `workstreams.attentionRank INTEGER`,
+  schema **v10**, additive `MIGRATION_9_10`; existing rows read back as `null` = unranked). It is
+  the WorkStream's own row — no second list, no UI state. `Priority` (importance) was NOT reused: it
+  is a coarse enum, not an ordering.
+- **Rule (`domain/attention/NeedsYouOrder`):** ranked block first (rank ascending; ties → longest
+  waiting, then id), then every unranked stream longest-waiting-first (`waitingSince` = the same
+  timestamp the negative timer counts from; ties → id). Depends only on persisted fields — a tick
+  can never re-sort, and waiting time never disturbs an established manual order.
+- **Atomic reorder:** `VirlinActions.reorderNeedsYou(streamId, position)` — remove + insert at the
+  1-based position in the current order, then persist a dense rank `1..n` on every Needs You
+  stream whose rank changed (`updatedAt` untouched, so waiting time / urgency do not move).
+  Out-of-range clamps to first/last; current position = no-op (nothing written); not in CHECK →
+  `DomainError.NotInNeedsYou`. `[A,B,C,D]`: D→2 = `[A,D,B,C]`, A→4 = `[B,C,D,A]`, C→1 = `[C,A,B,D]`.
+- **Membership:** a rank belongs to the current CHECK membership. Every save through a non-CHECK
+  state (`DefaultVirlinActions.persist`) clears it, so a stream that leaves (Focus, still running,
+  snooze, ready, block …) and later returns enters unranked, after the ranked block, by waiting
+  time. New arrivals (`checkDue`) are unranked the same way — the user never renumbers anything.
+- **Now:** `NowViewModel.needsYouOrder` (ids from `NeedsYouOrder.order`) replaces the UI-side
+  `WaitingTime.orderLongestWaitingFirst` call; with no ranks the order is identical to before.
+  `NowPresentation.waitingSince` now delegates to `NeedsYouOrder.waitingSince` (one rule).
+- **Tests:** `NeedsYouOrderTest` (17: A default/ties/snoozed origin, B/C/D moves, E dense &
+  clamped & rejected, F re-read, G enter/leave/return, I timer independence, J no-op);
+  `NeedsYouRankPersistenceTest` (Room file round trip across close/reopen, leave/return);
+  `VirlinMigrationTest.migrate9To10_…` + fresh install v10.
+
 ## Project Icon Editor + Built-in Icon Library (2026-09-21, branch `feature/project-icons`)
 
 - **Persistence:** one additive nullable column `projects.iconId` (Room v8 → v9, `MIGRATION_8_9`) holding a

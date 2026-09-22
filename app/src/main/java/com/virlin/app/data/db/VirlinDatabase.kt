@@ -135,6 +135,7 @@ interface VoiceDocumentDao {
  * v5: + prompt_documents (Capture Prompt documents).
  * v6: + attachment_documents (Capture File/Image metadata; bytes in managed files).
  * v7: + voice_documents (Capture Voice notes; clip audio in managed files).
+ * v10: + workstreams.attentionRank (explicit Needs You position; null = unranked).
  * Every version change ships an explicit [Migration] proven by `VirlinMigrationTest`;
  * there is NO destructive fallback.
  */
@@ -145,7 +146,7 @@ interface VoiceDocumentDao {
         CaptureEntity::class, NoteDocumentEntity::class, PromptDocumentEntity::class,
         AttachmentDocumentEntity::class, VoiceDocumentEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
@@ -279,7 +280,13 @@ abstract class VirlinDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `projects` ADD COLUMN `iconId` TEXT")
             }
         }
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+        /** v9 → v10: additive nullable `workstreams.attentionRank` (explicit Needs You position). */
+        val MIGRATION_9_10: Migration = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `workstreams` ADD COLUMN `attentionRank` INTEGER")
+            }
+        }
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

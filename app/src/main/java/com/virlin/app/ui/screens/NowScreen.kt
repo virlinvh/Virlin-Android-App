@@ -121,15 +121,17 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val pendingCompletion by nowViewModel.pendingWorkStreamCompletion.collectAsState()
     val attention by nowViewModel.attention.collectAsState()
     val waitingSince by nowViewModel.waitingSince.collectAsState()
+    val needsYouOrder by nowViewModel.needsYouOrder.collectAsState()
     val projects by nowViewModel.projects.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
 
     val focusStream = streams.find { it.state == StreamState.FOCUS }
-    // Needs You order = how urgently it needs me: the item waiting LONGEST first (earliest
-    // waitingSince), unknown timestamps last; ties keep their existing (stable) order. The
-    // comparator depends only on persisted timestamps, never on the ticking clock, so the
-    // list never re-sorts on a tick. (No explicit priority field exists on the display model.)
-    val needsYouStreams = WaitingTime.orderLongestWaitingFirst(streams.filter { it.state == StreamState.NEEDS_YOU }) { waitingSince[it.id] }
+    // Needs You order comes from the domain (`NeedsYouOrder`): explicit user rank first, then the
+    // item waiting LONGEST first; it depends only on persisted fields, never on the ticking clock,
+    // so the list never re-sorts on a tick. Display items unknown to the domain keep their
+    // incoming order after the domain-ordered ones (stable).
+    val needsYouStreams = streams.filter { it.state == StreamState.NEEDS_YOU }
+        .sortedBy { needsYouOrder.indexOf(it.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
     val processingStreams = streams.filter { it.state == StreamState.PROCESSING }
     val readyStreams = streams.filter { it.state == StreamState.READY }
 

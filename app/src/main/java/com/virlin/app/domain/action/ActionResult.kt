@@ -36,6 +36,8 @@ sealed interface DomainError {
     data object NotAReturn : DomainError
     data object NotBlocked : DomainError
     data object EmptyNote : DomainError
+    /** Needs You reorder asked for a stream that is not in CHECK. */
+    data object NotInNeedsYou : DomainError
 
     // ---- Structure
     data object EmptyTitle : DomainError
