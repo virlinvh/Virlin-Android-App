@@ -167,6 +167,16 @@ Tapping the large timer inside this screen does nothing by design.
 
 ### Needs You
 
+**Approved compact card (2026-09-22).** ONE row: rank badge (circle, number only) · project icon ·
+task title (1 line, ellipsised) over ONE secondary line (source · reason) · `HH:MM:SS` tabular
+timer · CHECK / RESUME / FOCUS NOW. ~56dp tall, fixed alignment columns. Colour comes from ONE
+call to `NeedsYouPriority.visualsFor(rank)`: ranks 1–10 carry the approved red → pale-yellow
+accents (badge, icon container, border, surface tint, timer, CHECK), rank 11+ and invalid ranks
+are neutral white. NEVER add: a three-dot menu, "#1 of 4" / "Priority 1" labels, sort or filter
+controls, extra description lines. The rank palette is VISUAL only — reordering beyond the
+existing position sheet, sorting and the priority popup are future phases.
+
+
 Represents streams requiring human attention.
 
 Uses:

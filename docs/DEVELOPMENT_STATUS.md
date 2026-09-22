@@ -645,6 +645,61 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## Needs You compact attention card + rank colour system (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+**APPROVED CARD — do not redesign without an explicit request.** The Needs You card is ONE compact
+row (`ui/screens/NeedsYouCard.kt`, ~56dp tall, was ~118dp):
+
+```
+[ 1 ] [project icon]  Navigation · Route structure      01:07:38   CHECK →
+                      Claude · Virlin · Check due
+```
+
+- **Belongs on the card:** rank badge · project icon · task title (1 line, ellipsised) · ONE
+  secondary line (source · reason) · `HH:MM:SS` waiting timer · the single action
+  (CHECK / RESUME / FOCUS NOW, plus `+5m` for a due return).
+- **Must NOT be added:** a three-dot / overflow menu (intentionally absent), priority words
+  ("#1 of 4", "Priority 1", "High priority"), sort or filter controls, descriptions, commands,
+  file paths, debug metadata, a second secondary line, or a giant timer pill.
+- **Grid:** badge (44dp touch, 24dp circle) → 30dp icon container → weighted title column →
+  timer → action. Fixed columns, so no card shifts because a title is longer; long titles
+  ellipsise, never wrap.
+- **Timer:** `WaitingTime.formatClock` → `00:04:19` / `01:07:38` / `12:18:37` / `100:00:00`,
+  rendered with tabular figures (`tnum`). Same semantics as before (elapsed since due; the
+  `−mm:ss` `WaitingTime.format` is retained for other callers/tests). The timer engine is unchanged.
+
+**Rank colour system (`ui/screens/NeedsYouPriority.kt`) — ONE source of truth.** A card asks
+`NeedsYouPriority.visualsFor(rank)` once and uses the returned `PriorityVisuals` for the badge,
+the icon container, the border, the surface tint, the timer ink and the CHECK pill, so a rank
+change re-colours all of them at once.
+
+| rank | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11+ |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| accent | `#D93636` | `#E64A35` | `#EF6332` | `#E89B00` | `#EBAF00` | `#E8C400` | `#E6D43A` | `#E8E05A` | `#F1EA8E` | `#F7F5BC` | neutral white |
+
+Surface = 8% accent over white, container = 22%, border = 38%; `onAccent` flips to Charcoal on
+pale accents; timer/CHECK ink is the accent darkened until it reads on its container. Ranks 11+,
+rank 0/negative and a missing rank all resolve to the ONE neutral identity — nothing is
+interpolated past rank 10. The resolver is a cached list, so it allocates nothing per frame.
+
+**Resolved conflict:** the earlier five-level urgency palette (card tint, border pulse, breathing
+glow) competed with the rank identity. The card now takes its colour ONLY from the rank;
+`UrgencyLevel`, the thresholds and the waiting-time semantics are untouched and still available
+(`NeedsYouUrgency`), but they no longer tint the card, and the attention glow/pulse animation is
+gone — the list is calm and one hierarchy is visible at a time.
+
+**Not implemented (later phases):** priority re-assignment from the badge beyond the existing
+Phase-2 position sheet, sorting / mixer controls, "Always First / Only This Time / Only This
+Term", drag-and-drop. Rank still comes from the existing `attentionRank` + `NeedsYouOrder`
+ordering; this pass changed presentation only.
+
+**Tests:** `NeedsYouPriorityVisualsTest` (9: exact accents 1–10, progression, neutral 11/25/50 and
+invalid ranks, derivation, contrast, HH:MM:SS formatting), instrumented `NeedsYouCardStackUiTest`
+(12 cards ranks 1–12: one alignment grid, one card height, no overlap, narrow 335dp/1.3×, and a
+rendered `needs_you_stack.png`). Roborazzi: 18 goldens were already failing at `70da695` (stale
+from earlier Stitch / execution-selector / icon passes); this pass adds no new failure and no
+golden was re-recorded.
+
 ## Needs You Priority Ranking — Phase 2: card hierarchy + position selection UI (2026-09-22, branch `feature/needs-you-priority-ranking`)
 
 The queue position is now visible and changeable on every Needs You card; ordering still comes ONLY

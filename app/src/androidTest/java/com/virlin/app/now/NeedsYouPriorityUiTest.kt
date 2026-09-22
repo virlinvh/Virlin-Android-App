@@ -67,8 +67,8 @@ class NeedsYouPriorityUiTest {
         }
         composeRule.onNodeWithTag(needsYouRankTag("a")).assertIsDisplayed().assertContentDescriptionContains("Attention position 1 of 4", substring = true)
         composeRule.onNodeWithTag(needsYouRankTag("d")).assertContentDescriptionContains("Attention position 4 of 4. Double tap to change.", substring = true)
-        composeRule.onNode(hasTestTag(needsYouRankTag("a")) and hasAnyDescendant(hasText("#1")), useUnmergedTree = true).assertExists()
-        composeRule.onNode(hasTestTag(needsYouRankTag("d")) and hasAnyDescendant(hasText("#4")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag("a")) and hasAnyDescendant(hasText("1")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag("d")) and hasAnyDescendant(hasText("4")), useUnmergedTree = true).assertExists()
         // touch target ≥ 44dp although the visible pill is smaller
         val h = composeRule.onNodeWithTag(needsYouRankTag("b")).fetchSemanticsNode().let { it.size.height / composeRule.density.density }
         assertTrue("badge hit height $h", h >= 43.5f)
@@ -114,7 +114,7 @@ class NeedsYouPriorityUiTest {
         fun timerText() = composeRule.onNodeWithTag("needs_you_timer_c", useUnmergedTree = true).fetchSemanticsNode().config.toString().substringAfter("Text : ").substringBefore("]")
         val before = timerText()
         position = 1; composeRule.waitForIdle()
-        composeRule.onNode(hasTestTag(needsYouRankTag("c")) and hasAnyDescendant(hasText("#1")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag("c")) and hasAnyDescendant(hasText("1")), useUnmergedTree = true).assertExists()
         assertEquals(before, timerText())                                                                                                    // same waiting text
         repeat(12) { now.value = now.value.plusSeconds(1); composeRule.waitForIdle() }                                                        // crosses 10:00 → CRITICAL as before
         composeRule.onNodeWithTag(projectIconBuiltInTag("code"), useUnmergedTree = true).assertIsDisplayed()
@@ -141,6 +141,6 @@ class NeedsYouPriorityUiTest {
         assertTrue("rank/primary overlap", rank.right <= primary.left && rank.right <= defer.left)
         assertTrue("timer inside card", timer.right <= card.right + 1f && timer.top >= card.top)
         assertTrue("rank inside card", rank.left >= card.left && rank.bottom <= card.bottom + 1f)
-        composeRule.onNode(hasTestTag(needsYouRankTag("x")) and hasAnyDescendant(hasText("#7")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag("x")) and hasAnyDescendant(hasText("7")), useUnmergedTree = true).assertExists()
     }
 }
