@@ -167,6 +167,13 @@ Tapping the large timer inside this screen does nothing by design.
 
 ### Needs You
 
+**Sort / view control (2026-09-23).** A `tune` glyph beside the "Needs You" heading switches the
+DISPLAY order only: Priority (default, canonical rank) · Longest waiting (`dueAt` ascending) · Most
+recent (`dueAt` descending), ties broken by canonical rank then id. It is a session-level
+presentation preference (`NowViewModel.needsYouSort`) and NEVER changes ranks, colours, `dueAt`,
+timers or priority preferences — cards always show their canonical rank. It applies to Needs You
+only; Working For You has no sort control.
+
 **Approved compact card (2026-09-22).** ONE row: rank badge (circle, number only) · project icon ·
 task title (1 line, ellipsised) over ONE secondary line (source · reason) · `HH:MM:SS` tabular
 timer · CHECK / RESUME / FOCUS NOW. ~56dp tall, fixed alignment columns. Colour comes from ONE

@@ -645,6 +645,40 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## NEEDS YOU PHASE 06 COMPLETE — sort / view control (2026-09-23, branch `feature/needs-you-priority-ranking`)
+
+**CANONICAL PRIORITY ≠ DISPLAY SORT.** The Phase 03 queue stays the single authoritative order (and
+therefore every card's rank number and Phase 02 colour); Phase 06 only adds a way to LOOK at that
+queue in a different order.
+
+- **Control:** one quiet `tune` glyph beside "Needs You" (`NeedsYouSortControl`, 40dp touch target,
+  a 5dp dot when a non-default view is active). Tap → compact anchored `DropdownMenu` with three
+  radio options; choosing one applies immediately and closes the menu (no Save — it is a view
+  preference). Spoken: "Sort Needs You" / "Sort Needs You. Longest waiting selected."
+- **Modes** (`NeedsYouSortMode`, typed — never a UI string):
+  - `PRIORITY` (default) — canonical effective rank ascending.
+  - `LONGEST_WAITING` — `dueAt` ascending (earliest due = waiting longest first).
+  - `MOST_RECENT` — `dueAt` descending (most recently due first).
+- **Ties:** identical `dueAt` → canonical rank → stable id. Timestamps only; never the formatted
+  timer string. Deterministic for any input and identical on every recomposition.
+- **Projection:** `NeedsYouSort.display(queue, mode)` returns the SAME `NeedsYouOrder.Entry` objects
+  re-ordered, so each card keeps its canonical `rank`. Now renders in display order
+  (`NowViewModel.needsYouDisplay`) but takes each card's rank from `needsYouQueue`. No second list,
+  no duplicated truth.
+- **Ownership / persistence:** `NowViewModel.needsYouSort` — a session-level presentation
+  preference. It survives recomposition and navigation while the ViewModel lives; it is NOT
+  persisted (no Room, no DataStore) and resets when the process dies.
+- **Never mutates:** ranks, `attentionRank`, `dueAt`, timers, priority preferences. A priority edit
+  under an alternate view changes the canonical rank and leaves the view selected; CHECK / CHECK
+  AGAIN behave exactly as in Phase 05 and the remaining items simply re-project. An
+  "Always position 2" preference still means canonical #2, never "second card on screen".
+- **Scope:** Needs You only. Working For You is untouched and has no sort control; future-due items
+  are never pulled into Needs You by a view choice.
+- **Motion:** none added — the section is still a `Column`, so reorder is instant and deterministic
+  (no LazyColumn migration, per the brief).
+- **Tests:** `NeedsYouSortTest` (15 covering the 16 specified cases incl. ties, 25 items, rapid
+  switching, policy interplay) and instrumented `NeedsYouSortUiTest` (flows A–J).
+
 ## NEEDS YOU PHASE 05 COMPLETE — attention time (2026-09-22, branch `feature/needs-you-priority-ranking`)
 
 **`dueAt` (`WorkStream.checkAt`) is the temporal source of truth.** Everything shown is derived from

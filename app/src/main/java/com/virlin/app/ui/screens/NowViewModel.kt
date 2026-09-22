@@ -68,6 +68,21 @@ class NowViewModel(
             com.virlin.app.domain.attention.NeedsYouOrder.queue(repository.streams.value).map { it.stream.id })
 
     /**
+     * The Needs You DISPLAY sort (Phase 06) — a presentation preference owned here, so it survives
+     * recomposition and navigation for the session. It never touches the canonical queue: it only
+     * chooses the order the same entries are rendered in. Not persisted (no database).
+     */
+    private val _needsYouSort = MutableStateFlow(NeedsYouSortMode.PRIORITY)
+    val needsYouSort: StateFlow<NeedsYouSortMode> = _needsYouSort.asStateFlow()
+    fun setNeedsYouSort(mode: NeedsYouSortMode) { _needsYouSort.value = mode }
+
+    /** The ids to render, in DISPLAY order. Each card still takes its rank from [needsYouQueue]. */
+    val needsYouDisplay: StateFlow<List<String>> = combine(repository.streams, _needsYouSort) { streams, mode ->
+        NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(streams), mode).map { it.stream.id }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+        NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(repository.streams.value), NeedsYouSortMode.PRIORITY).map { it.stream.id })
+
+    /**
      * Each Needs You item's attention target (`checkAt`) — the Phase 05 temporal truth the card's
      * `HH:MM:SS` / `+HH:MM:SS` timer is derived from. One projection, no per-card state.
      */

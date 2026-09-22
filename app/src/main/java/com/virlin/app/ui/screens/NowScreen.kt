@@ -122,7 +122,9 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val attention by nowViewModel.attention.collectAsState()
     val waitingSince by nowViewModel.waitingSince.collectAsState()
     val dueAt by nowViewModel.attentionDueAt.collectAsState()
-    val needsYouQueue by nowViewModel.needsYouQueue.collectAsState()
+    val needsYouQueue by nowViewModel.needsYouQueue.collectAsState()          // canonical: index + 1 = rank
+    val needsYouDisplay by nowViewModel.needsYouDisplay.collectAsState()      // display order only (Phase 06)
+    val needsYouSort by nowViewModel.needsYouSort.collectAsState()
     val projects by nowViewModel.projects.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
 
@@ -131,9 +133,9 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     // item waiting LONGEST first; it depends only on persisted fields, never on the ticking clock,
     // so the list never re-sorts on a tick. Display items unknown to the domain keep their
     // incoming order after the domain-ordered ones (stable).
-    // Order AND rank come from the domain queue projection; the display list is only looked up by id.
+    // Rank comes from the canonical queue; the ORDER ON SCREEN comes from the display projection.
     val needsYouStreams = streams.filter { it.state == StreamState.NEEDS_YOU }
-        .sortedBy { needsYouQueue.indexOf(it.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
+        .sortedBy { needsYouDisplay.indexOf(it.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
     val processingStreams = streams.filter { it.state == StreamState.PROCESSING }
     val readyStreams = streams.filter { it.state == StreamState.READY }
 
@@ -248,7 +250,16 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                         Text(needsYouStreams.size.toString(), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF92400E))
                     }
                 }
-                Text("Your attention required", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Your attention required", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
+                    // Phase 06: view-only sort. Canonical priority, ranks and colours are untouched.
+                    var sortOpen by remember { mutableStateOf(false) }
+                    NeedsYouSortControl(
+                        mode = needsYouSort, expanded = sortOpen,
+                        onExpandedChange = { sortOpen = it },
+                        onSelect = nowViewModel::setNeedsYouSort
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(10.dp))
             // ONE per-second time source for every card's live timer (lifecycle-aware, drift-free).
