@@ -645,6 +645,47 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## Streams section redesign (2026-09-22, branch `feature/streams-section-redesign`)
+
+Streams is the overview / index of all work; colour now communicates the SECTION (= application
+state), never an individual project. White canvas, white cards, 1dp semantic border, 4dp leading
+accent. Now remains the detailed attention surface (its urgency system is untouched).
+
+- **Tokens:** `ui/theme/StreamsPalette.kt` — `VirlinPalette` (the supplied light/dark pairs, raw hex
+  lives only here) and `StreamsSectionLook` (accent · surface · border · badge · ink, all derived
+  deterministically from one pair). Mapping in `StreamsSectionColors`: Projects = Light Gray
+  (neutral), Focus = Mint, Needs You = Sunflower, Processing = Aqua (Blue Jeans dark ink),
+  Ready = Grass, Snoozed = Lavender, Blocked = Bittersweet, Recently Completed = restrained Mint.
+  Grapefruit / Pink Rose unused — the domain has no failed/error state.
+- **Presentation (`ui/screens/StreamsPresentation.kt`, pure):** `StreamsSection` (title, meaning,
+  empty message, state), `StreamsFilter` (All · Projects · Need You · Processing · Ready · Snoozed ·
+  Blocked — the two new chips only narrow), `StreamsPresentation.sections()` (approved order; under
+  All empty sections are omitted, under a filter the section is returned so its empty state shows;
+  row order is never changed here — Needs You priority stays upstream), `search()` (unchanged
+  semantics), `clock()` (`h:mm:ss` past one hour), `estimate()` (only from a real
+  `expectedDurationSec`), `wakeLabel()` (only from a real `snoozedUntil`), `recentlyCompleted()`
+  (DONE + real `completedAt` within 24 h, newest first, max 5).
+- **Screen (`StreamsScreen.kt`):** `StreamsScreen` collects display streams + the hierarchy snapshot
+  (domain facts: `snoozedUntil`, `blockerReason`, `completedAt`) and renders `StreamsContent`
+  (testable, callback-driven). `StreamsSectionHeader` = marker · title · count badge · meaning line
+  (heading semantics, spoken "Needs you, 4, Attention required"); `StreamsCard` draws the accent
+  inside the rounded outline (no `clip` — it would clip touch input at the edge). Project cards stay
+  neutral with the project icon, count, `%` and a real progress bar. Trailing status per state: Focus
+  invested, Processing elapsed (+ dot), Ready estimate, Snoozed wake time, Completed "n min ago";
+  Blocked shows the real reason as a second line. CHECK remains the Needs You label; the row still
+  opens WorkStream Detail.
+- **Motion:** `animateItemPlacement(tween(280))` on keyed headers/rows so a state change reads as
+  "the item moved"; disabled when the animator scale is 0.
+- **Empty states:** per-filter calm messages (`streams_empty_<section>`), "No streams yet." for All.
+- **Recently completed:** collapsible (SHOW / HIDE, `streams_completed_toggle`), collapsed by default.
+- **Not added:** PAUSED section — the display seed holds 35 placeholder rows sharing one id, which
+  would surface as junk; revisit when the demo seed is cleaned. FAILED — no such state.
+- **Tests:** `StreamsPresentationTest` (11), `StreamsFilterRailTest` (9, unchanged),
+  instrumented `StreamsContentUiTest` (9: sections/order, filters + navigation + CHECK, timers,
+  state transitions, project icons, 335dp/1.3×, semantics, empty states, completed section).
+  `BottomNavUiTest` fails at the same two lines on the pre-redesign screen (pre-existing).
+  Hierarchy Roborazzi goldens are stale from the earlier EXECUTION selector pass (not re-recorded).
+
 ## Needs You Priority Ranking — Phase 1: domain / ordering foundation (2026-09-22, branch `feature/needs-you-priority-ranking`)
 
 Explicit user priority for Needs You, separate from urgency. **No UI in this phase** (no card
