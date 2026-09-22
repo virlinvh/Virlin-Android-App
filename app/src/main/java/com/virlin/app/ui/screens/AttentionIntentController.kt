@@ -83,6 +83,8 @@ class AttentionIntentController(
     fun checkDue(streamId: String) = run(streamId, { null }) { actions.checkDue(streamId) }
     fun continueProcessing(streamId: String, minutes: Long) = run(streamId, { t -> "$t · check in ${minutes}m" }) { actions.continueProcessing(streamId, at(minutes)) }
     fun completeStream(streamId: String) = run(streamId, { t -> "$t completed" }) { actions.completeStream(streamId) }
+    /** Needs You queue position (Phase 1 `reorderNeedsYou`): ordering only — never timers, urgency or `updatedAt`. */
+    fun reorderNeedsYou(streamId: String, position: Int) = run(streamId, { t -> "$t → #$position" }) { actions.reorderNeedsYou(streamId, position) }
 
     override fun customMinutes(streamId: String, intent: TimedIntent, minutes: Long): Boolean {
         if (minutes <= 0) return false

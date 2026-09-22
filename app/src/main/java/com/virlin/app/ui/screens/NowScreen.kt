@@ -252,20 +252,35 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
             // ONE per-second time source for every card's live timer (lifecycle-aware, drift-free).
             // Only the timer texts read it, so the rest of Now never recomposes on a tick.
             val nowTick = rememberSecondTicker()
+            // Queue-position selector (Phase 2): one sheet for the section, opened from a card's badge.
+            var positionPicker by remember { mutableStateOf<String?>(null) }
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 needsYouStreams.forEachIndexed { index, stream ->
-                    NeedsYouCard(
-                        stream = stream, index = index,
-                        kind = attention[stream.id],
-                        waitingSince = waitingSince[stream.id],
-                        now = nowTick,
-                        // Identity is resolved through the project (Project.iconPath), never stored on the stream.
-                        project = com.virlin.app.domain.model.ProjectIdentity.resolve(stream.projectId, projects),
-                        onFocus = nowViewModel::focus,
-                        onCheck = nowViewModel::openCheck,
-                        onDefer = { id -> nowViewModel.deferReturn(id, 5) }
-                    )
+                    // Keyed by id so a card keeps its own animation state when it moves in the queue.
+                    key(stream.id) {
+                        NeedsYouCard(
+                            stream = stream, index = index,
+                            kind = attention[stream.id],
+                            waitingSince = waitingSince[stream.id],
+                            now = nowTick,
+                            // Identity is resolved through the project (Project.iconPath), never stored on the stream.
+                            project = com.virlin.app.domain.model.ProjectIdentity.resolve(stream.projectId, projects),
+                            onFocus = nowViewModel::focus,
+                            onCheck = nowViewModel::openCheck,
+                            onDefer = { id -> nowViewModel.deferReturn(id, 5) },
+                            position = index + 1,
+                            total = needsYouStreams.size,
+                            onChangePosition = { id -> positionPicker = id }
+                        )
+                    }
                 }
+            }
+            positionPicker?.takeIf { id -> needsYouStreams.any { it.id == id } }?.let { id ->
+                NeedsYouPositionSheet(
+                    streamId = id, streams = needsYouStreams,
+                    onSelect = { pos -> positionPicker = null; nowViewModel.reorderNeedsYou(id, pos) },
+                    onDismiss = { positionPicker = null }
+                )
             }
         }
 
@@ -590,7 +605,11 @@ fun NeedsYouCard(
     project: com.virlin.app.domain.model.Project? = null,
     onFocus: (String) -> Unit = {},
     onCheck: (String) -> Unit = onFocus,
-    onDefer: (String) -> Unit = {}
+    onDefer: (String) -> Unit = {},
+    /** Queue position (1-based) of [total] Needs You items; null hides the position control (previews/tests). */
+    position: Int? = null,
+    total: Int = 0,
+    onChangePosition: (String) -> Unit = {}
 ) {
     // Everything time-related derives from ONE timestamp. The urgency LEVEL is a pure function of
     // the waiting duration (Phase 2); derivedStateOf means the palette recomposes only when the
@@ -717,8 +736,8 @@ fun NeedsYouCard(
         else -> maxOuterAlpha * smoothstep(0.68f, 1.0f, p)  // reset for next cycle
     }
 
-    // ── Card rendering (layout unchanged) ───────────────────────────
-    Row(
+    // ── Card rendering ──────────────────────────────────────────────
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("needs_you_card_${stream.id}")
@@ -741,9 +760,10 @@ fun NeedsYouCard(
             }
             .background(bgColor, RoundedCornerShape(16.dp))
             .border(borderWidthFloat.dp, borderColor.copy(alpha = borderAlpha), RoundedCornerShape(16.dp))
-            .padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 6.dp)
     ) {
+      // Hierarchy (Phase 2 priority): top row = identity · task · timer; bottom row = queue position · actions.
+      Row(verticalAlignment = Alignment.Top) {
         // Project identity (Phase icons): the project's icon — custom image or deterministic fallback —
         // inside the SAME 36dp footprint the beacon used. The icon itself is never tinted or animated;
         // urgency shows only around it: a thin ring in the level colour (cross-faded with the palette)
@@ -814,15 +834,20 @@ fun NeedsYouCard(
             )
         }
 
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(10.dp))
 
+        // Live negative waiting timer — top-right, beside the title; never collides with it (title column weights).
+        WaitingTimerChip(
+            streamId = stream.id, waitingSince = waitingSince, now = now,
+            background = badgeBg, foreground = badgeFg, border = badgeBorder
+        )
+      }
+
+      // Bottom row: queue position (attention ORDER, left) · actions (right). Different concepts, different sides.
+      Row(modifier = Modifier.fillMaxWidth().padding(start = 46.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (position != null) NeedsYouPositionBadge(streamId = stream.id, position = position, total = total, onClick = { onChangePosition(stream.id) })
+        Spacer(modifier = Modifier.weight(1f))
         Column(horizontalAlignment = Alignment.End) {
-            // Live negative waiting timer — replaces the static DUE NOW / 1M OVERDUE badge.
-            WaitingTimerChip(
-                streamId = stream.id, waitingSince = waitingSince, now = now,
-                background = badgeBg, foreground = badgeFg, border = badgeBorder
-            )
-
             // Action (Phase 3): a light tonal pill in the card's urgency palette — visibly smaller
             // than the timer chip's weight, but with a 44dp-tall hit box (+ the card padding above
             // and below it ≈ 48dp of touch). Same callbacks, same test tag, same semantics.
@@ -874,6 +899,7 @@ fun NeedsYouCard(
                 }
             }
         }
+      }
     }
 }
 

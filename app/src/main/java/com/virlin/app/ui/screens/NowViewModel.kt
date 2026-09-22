@@ -101,6 +101,8 @@ class NowViewModel(
     override fun customMinutes(streamId: String, intent: TimedIntent, minutes: Long) = intents.customMinutes(streamId, intent, minutes)
 
     fun focus(streamId: String) = intents.focus(streamId)
+    /** Move a Needs You item to a 1-based queue position; the others shift automatically (Phase 1 rule). */
+    fun reorderNeedsYou(streamId: String, position: Int) = intents.reorderNeedsYou(streamId, position)
     /** A planned check/return time arrived (the in-app ticker's scheduling stand-in). */
     fun checkDue(streamId: String) = intents.checkDue(streamId)
     /** "Still running — give it N more minutes." From CHECK or PROCESSING. */

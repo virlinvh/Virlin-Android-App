@@ -645,6 +645,36 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## Needs You Priority Ranking — Phase 2: card hierarchy + position selection UI (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+The queue position is now visible and changeable on every Needs You card; ordering still comes ONLY
+from Phase 1 (`attentionRank` + `VirlinActions.reorderNeedsYou`). Timer, `waitingSince`, urgency
+thresholds/palette/glow, project icons, Check/Resume/Focus now, +5m are untouched.
+
+- **Card (`NeedsYouCard`, `NowScreen.kt`):** two rows. Top: project icon (36dp ring) · task title
+  (2 lines) / source / reason · waiting timer chip top-right (weighted title column → never collides).
+  Bottom (indented under the text column): queue-position badge on the LEFT, `+5m` / Check on the
+  RIGHT. Cards are `key(stream.id)`-ed so a card keeps its own animation state when it moves.
+- **Badge (`NeedsYouPositionBadge`, `ui/screens/NeedsYouPosition.kt`):** `#n ▾` pill + muted
+  `of N`. #1 = filled Charcoal / white text (the next item), #2+ = quiet outlined pill. Shape and
+  weight only — no colour hierarchy competing with urgency. 44dp touch target; semantics
+  "Attention position n of N. Double tap to change."; tag `needs_you_rank_<id>`.
+- **Selector (`NeedsYouPositionSheet`):** `ModalBottomSheet` "Move to position" with exactly one row
+  per current Needs You item — number medallion (#1 filled) · ordinal (First…Tenth, then
+  "Position n") · the task currently there; the current row is highlighted, `selected`, ✓, and reads
+  "Current position n"; the others read "Move to position n, <ordinal>". Tapping applies at once (no
+  Save) → `NowViewModel.reorderNeedsYou` → `AttentionIntentController.reorderNeedsYou` →
+  `VirlinActions.reorderNeedsYou`. Tags `needs_you_position_<n>`, `needs_you_position_sheet`.
+- **Motion:** the section is a plain `Column` (Now is not a LazyColumn), so there is no placement
+  animation; the move is immediate and keyed. Deliberately not converted.
+- **Tests:** instrumented `NeedsYouPriorityUiTest` (6: badge semantics/first stronger/44dp/click,
+  hidden without position + Check + icons, sheet count/selected/apply, single item, position change
+  keeps timer text + urgency, 335dp/1.3× long titles no overlap) and `NeedsYouPriorityJourneyTest`
+  (real app: A default order, N sheet size, B last→2, E dense ranks, persisted rank, J
+  waitingSince/updatedAt/checkAt untouched, D third→1, C first→last, H leaving clears). Test-harness
+  note: after `performScrollTo()` on Now, let the scroll animation settle (~1.2 s of pumped frames)
+  before tapping — a tap on still-moving content is read as a scroll and cancelled.
+
 ## Needs You Priority Ranking — Phase 1: domain / ordering foundation (2026-09-22, branch `feature/needs-you-priority-ranking`)
 
 Explicit user priority for Needs You, separate from urgency. **No UI in this phase** (no card
