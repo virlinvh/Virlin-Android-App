@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.virlin.app.domain.attention.AttentionTiming
 import com.virlin.app.model.WorkStream
 import com.virlin.app.ui.theme.Charcoal
 import java.time.Instant
@@ -68,6 +69,8 @@ fun NeedsYouCard(
     kind: AttentionKind? = null,
     /** When this stream started waiting (domain timestamp). Null = treated as just due (00:00:00). */
     waitingSince: Instant? = null,
+    /** The item's attention target (`WorkStream.checkAt`). Null falls back to [waitingSince]. */
+    dueAt: Instant? = null,
     /** Shared per-second clock from the section; null renders a static 00:00:00 (previews/tests). */
     now: State<Instant>? = null,
     /** Owning project (identity icon source); null = projectless → the stream's own fallback. */
@@ -161,7 +164,8 @@ fun NeedsYouCard(
         Spacer(Modifier.width(8.dp))
 
         // ── RIGHT: fixed-width timer, then the action. Both vertically centred, same column on every card.
-        WaitingTimerText(streamId = stream.id, waitingSince = waitingSince, now = now, color = ink)
+        // `dueAt` is the temporal truth (Phase 05); the card only renders `dueAt − now`.
+        AttentionTimerText(streamId = stream.id, dueAt = dueAt ?: waitingSince, now = now, color = ink)
         Spacer(Modifier.width(8.dp))
         if (kind == AttentionKind.RETURN_DUE || kind == AttentionKind.RESULT_READY) {
             Text(
@@ -237,25 +241,24 @@ private fun NeedsYouRankBadge(
 }
 
 /**
- * The card's waiting timer in the approved `HH:MM:SS` presentation, tabular figures so a ticking
- * second never moves the CHECK action. Reads the shared ticker HERE (and only here) so a tick
- * recomposes just this text; its semantics carry the human-readable form.
+ * The card's attention timer (Phase 05): `HH:MM:SS` remaining while WAITING, `00:00:00` at DUE and
+ * `+HH:MM:SS` once OVERDUE — derived from `dueAt − now`, never counted. Tabular figures, so a
+ * ticking second never moves the CHECK action. Reads the shared ticker HERE (and only here) so a
+ * tick recomposes just this text; its semantics carry the human-readable form.
  */
 @Composable
-private fun WaitingTimerText(
+private fun AttentionTimerText(
     streamId: String,
-    waitingSince: Instant?,
+    dueAt: Instant?,
     now: State<Instant>?,
     color: Color
 ) {
-    val elapsed by remember(waitingSince, now) {
-        derivedStateOf {
-            val since = waitingSince; val n = now
-            if (since == null || n == null) 0L else WaitingTime.elapsedSeconds(since, n.value)
-        }
+    val label by remember(dueAt, now) {
+        derivedStateOf { AttentionTiming.format(dueAt, now?.value ?: dueAt ?: Instant.EPOCH) }
     }
-    val label = WaitingTime.formatClock(elapsed)
-    val spoken = WaitingTime.describe(elapsed)
+    val spoken by remember(dueAt, now) {
+        derivedStateOf { AttentionTiming.describe(dueAt, now?.value ?: dueAt ?: Instant.EPOCH) }
+    }
     Text(
         text = label,
         color = color,

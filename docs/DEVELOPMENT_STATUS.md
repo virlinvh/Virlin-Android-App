@@ -645,6 +645,43 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## NEEDS YOU PHASE 05 COMPLETE — attention time (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+**`dueAt` (`WorkStream.checkAt`) is the temporal source of truth.** Everything shown is derived from
+`dueAt − now` (`domain/attention/AttentionTiming.kt`); nothing counts down in memory and nothing is
+written per second, so backgrounding, rotation and process recreation cannot drift.
+
+- **States:** `WAITING` (`now < dueAt`) · `DUE` (same second) · `OVERDUE` (`now > dueAt`). An item
+  with no `dueAt` reads as DUE — nothing is invented.
+- **Format:** WAITING `HH:MM:SS` remaining · DUE `00:00:00` · OVERDUE `+HH:MM:SS` elapsed. Hours
+  accumulate and never wrap (`27:15:42`, `125:08:17`, `8760:00:00`); a negative countdown is never
+  shown. Tabular figures keep the column fixed. Spoken: "Due in 5 minutes" / "Due now" / "Overdue by
+  3 minutes 42 seconds".
+- **NEEDS YOU CONTRACT (resolved):** Needs You contains ONLY items whose attention time has arrived
+  (domain state `CHECK`), so its cards are DUE or OVERDUE. Items with a future `dueAt` are
+  PROCESSING and appear under **Working For You** with their "Check in mm:ss" countdown. This is the
+  existing Virlin model (`checkDue` promotes an item when its time arrives) and was NOT changed; the
+  `+HH:MM:SS` card format now makes the overdue direction explicit. The Phase 05 brief guessed
+  Needs You might hold future-due items — it does not, and changing that would restructure Now.
+- **CHECK AGAIN:** the existing flow — CHECK → "What happened?" → STILL RUNNING → "Check again:"
+  with the approved presets **3m / 5m / 10m** (`AttentionTiming.checkAgainPresets`) + CUSTOM
+  (minutes) → `VirlinActions.continueProcessing(id, now + N)`. It sets a NEW `dueAt`, hands the item
+  back to the external process until then (Working For You), and it returns to Needs You at the new
+  time as the SAME item — no duplicate, no timer restart. Cancel/dismiss change nothing.
+- **Time ⟂ priority:** a reorder never touches `dueAt`; CHECK AGAIN never touches rank or a stored
+  `PriorityPreference` (an `Always` item returning at its due time re-enters at its preferred
+  position). Timing never re-sorts the queue.
+- **Performance:** ONE shared second ticker for the section (`rememberSecondTicker`), read only
+  inside the timer text; there is no per-card coroutine and no per-second write.
+- **Persistence:** `dueAt` is already persisted in Room (existing column), so timing survives process
+  death. Phase 04 priority preferences remain in memory only. No new storage was added.
+- **Notifications:** not part of this phase. The existing Pass 6–7 scheduler still schedules the
+  reminder for a new check time (that is why the notification permission prompt appears) — no new
+  WorkManager/AlarmManager code was written.
+- **Tests:** `AttentionTimingTest` (17 covering the 20 specified cases: states, formatting, >24h,
+  >99h, presets, custom, clock jumps, no-duplicate, unknown item, 25 timers from one clock) and
+  instrumented `AttentionTimingUiTest` (flows A–J).
+
 ## NEEDS YOU PHASE 04 COMPLETE — priority editor (2026-09-22, branch `feature/needs-you-priority-ranking`)
 
 The rank badge is the priority editor's ONLY entry point (no three-dot menu, no long press, no

@@ -121,6 +121,7 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val pendingCompletion by nowViewModel.pendingWorkStreamCompletion.collectAsState()
     val attention by nowViewModel.attention.collectAsState()
     val waitingSince by nowViewModel.waitingSince.collectAsState()
+    val dueAt by nowViewModel.attentionDueAt.collectAsState()
     val needsYouQueue by nowViewModel.needsYouQueue.collectAsState()
     val projects by nowViewModel.projects.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
@@ -263,6 +264,7 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                             stream = stream, index = index,
                             kind = attention[stream.id],
                             waitingSince = waitingSince[stream.id],
+                            dueAt = dueAt[stream.id],
                             now = nowTick,
                             // Identity is resolved through the project (Project.iconPath), never stored on the stream.
                             project = com.virlin.app.domain.model.ProjectIdentity.resolve(stream.projectId, projects),

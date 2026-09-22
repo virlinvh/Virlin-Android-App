@@ -107,6 +107,13 @@ the preference; `checkDue` re-applies an ACTIVE preference on re-entry. Keep EFF
 PREFERRED POSITION and SCOPE distinct: a preference never owns a rank, and duplicate preferred
 positions are fine because the queue keeps effective ranks unique.
 
+Phase 05 formalises attention TIME in `AttentionTiming`: `dueAt` = `WorkStream.checkAt`, and
+WAITING / DUE / OVERDUE plus the `HH:MM:SS` / `+HH:MM:SS` display are DERIVED from `dueAt − now`
+(never counted, never written per second). Needs You holds only items whose time has arrived
+(`CHECK`); future-due items are PROCESSING and show their countdown in Working For You. CHECK AGAIN
+= `continueProcessing(id, now + N)` with presets 3/5/10 min; it never changes rank or a priority
+preference, and a reorder never changes `dueAt`.
+
 ## Boundaries
 
 - `WorkStreamRepository` (which also implements the small `CaptureRepository`, same transaction

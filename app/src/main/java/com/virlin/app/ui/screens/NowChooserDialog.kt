@@ -77,8 +77,10 @@ fun NowChooserDialog(chooser: Chooser, vm: AttentionIntents) {
                     Secondary("BLOCKED", "chooser_blocked") { vm.block(id) }
                 }
                 is Chooser.StillRunning -> {
+                    // CHECK AGAIN: the approved quick durations (Phase 05) + CUSTOM. Sets a new
+                    // `dueAt = now + N`; priority rank and any priority preference are untouched.
                     Title("Check again:")
-                    Presets(listOf(1, 2, 5, 10), tagPrefix = "still") { ensurePermission(); vm.stillRunning(id, it) }
+                    Presets(com.virlin.app.domain.attention.AttentionTiming.checkAgainPresets.map { it.toInt() }, tagPrefix = "still") { ensurePermission(); vm.stillRunning(id, it) }
                     Secondary("CUSTOM", "chooser_custom") { vm.openCustom(id, TimedIntent.STILL_RUNNING) }
                 }
                 is Chooser.ResultReady -> {

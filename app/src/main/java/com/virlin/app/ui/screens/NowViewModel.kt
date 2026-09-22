@@ -67,6 +67,15 @@ class NowViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
             com.virlin.app.domain.attention.NeedsYouOrder.queue(repository.streams.value).map { it.stream.id })
 
+    /**
+     * Each Needs You item's attention target (`checkAt`) — the Phase 05 temporal truth the card's
+     * `HH:MM:SS` / `+HH:MM:SS` timer is derived from. One projection, no per-card state.
+     */
+    val attentionDueAt: StateFlow<Map<String, java.time.Instant>> = repository.streams
+        .map { list -> list.filter { it.state == com.virlin.app.domain.model.WorkStreamState.CHECK }.mapNotNull { s -> s.checkAt?.let { s.id to it } }.toMap() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            repository.streams.value.filter { it.state == com.virlin.app.domain.model.WorkStreamState.CHECK }.mapNotNull { s -> s.checkAt?.let { s.id to it } }.toMap())
+
     /** The single lightweight chooser open on Now, if any. Never more than one at a time. */
     sealed interface Chooser {
         val streamId: String
