@@ -54,6 +54,7 @@ const val TaskDetailTag = "task_detail"
 const val TaskCancelTag = "task_cancel"
 const val TaskCancelConfirmTag = "task_cancel_confirm"
 const val StartNextTag = "start_next_task"
+const val FocusWorkItemTag = "focus_work_item"
 
 private val Hairline = VirlinColors.TextPrimary.copy(alpha = 0.08f)
 private val DueFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d · h:mm a")
@@ -282,6 +283,12 @@ fun WorkStreamDetailScreen(streamId: String?, navController: NavController, vm: 
 
 @Composable
 fun TaskDetailScreen(taskId: String?, navController: NavController, vm: HierarchyViewModel = viewModel()) {
+    // One human focus at a time: a request that would displace live work asks first.
+    val pendingSwitch by vm.pendingSwitch.collectAsState()
+    pendingSwitch?.let { p ->
+        SwitchFocusDialog(currentTitle = p.currentTitle, nextTitle = p.target.workItem.title,
+            onCancel = vm::cancelSwitch, onConfirm = vm::confirmSwitch)
+    }
     val s by vm.snapshot.collectAsState()
     val task = s.tasks.firstOrNull { it.id == taskId }
     if (task == null) { Missing("Task"); return }
@@ -353,6 +360,11 @@ fun TaskDetailScreen(taskId: String?, navController: NavController, vm: Hierarch
                 Spacer(Modifier.width(10.dp))
                 if (!task.status.isTerminal && stream != null && !isCurrent)
                     AddButton("SET CURRENT", onClick = { vm.setActiveTask(stream.id, task.id) }, modifier = Modifier.testTag("set_current"))
+                // Phase 09: start working on this item now (a container resolves to its first open leaf).
+                if (!task.status.isTerminal && stream != null) {
+                    Spacer(Modifier.width(10.dp))
+                    AddButton("FOCUS", onClick = { vm.focusWorkItem(task.id) }, tag = FocusWorkItemTag)
+                }
             }
             task.notes?.let { Spacer(Modifier.height(22.dp)); SectionLabel("NOTES"); Spacer(Modifier.height(4.dp)); Text(it, fontSize = 13.sp, color = VirlinColors.TextSecondary) }
             if (!task.status.isTerminal) {

@@ -16,6 +16,7 @@ import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.progress.ProgressCalculator
 import com.virlin.app.domain.repository.WorkStreamRepository
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -103,6 +104,34 @@ class HierarchyViewModel(
     fun completeTask(id: String) = dispatch("completeTask") { actions.completeTask(id) }
     fun cancelTask(id: String) = dispatch("cancelTask") { actions.cancelTask(id) }
     fun setActiveTask(streamId: String, taskId: String?) = dispatch("setActiveTask") { actions.setActiveTask(streamId, taskId) }
+
+    /**
+     * PHASE 09 — start human focus on this work item. Resolving is a pure read, so an active focus
+     * elsewhere surfaces as a typed [pendingSwitch] the user confirms; nothing is written until then.
+     */
+    private val _pendingSwitch = MutableStateFlow<PendingSwitch?>(null)
+    val pendingSwitch: StateFlow<PendingSwitch?> = _pendingSwitch.asStateFlow()
+
+    /** A focus request that would displace work the user is already doing. */
+    data class PendingSwitch(val target: com.virlin.app.domain.action.FocusTarget, val currentTitle: String)
+
+    fun focusWorkItem(workItemId: String) {
+        viewModelScope.launch {
+            when (val r = actions.resolveFocusTarget(workItemId)) {
+                is com.virlin.app.domain.action.ActionResult.Success -> {
+                    val target = r.value
+                    val currentTitle = target.displacedWorkItemId?.let { id -> repository.getTask(id)?.title }
+                        ?: target.displacedStreamId?.let { id -> repository.getStream(id)?.title }
+                    if (target.isSwitch && currentTitle != null) _pendingSwitch.value = PendingSwitch(target, currentTitle)
+                    else start(workItemId)
+                }
+                else -> android.util.Log.d("HierarchyViewModel", "focus rejected: $r")
+            }
+        }
+    }
+    fun confirmSwitch() { _pendingSwitch.value?.let { p -> _pendingSwitch.value = null; start(p.target.workItem.id) } }
+    fun cancelSwitch() { _pendingSwitch.value = null }
+    private fun start(workItemId: String) = dispatch("startFocus") { actions.startFocus(workItemId) }
 
     /** Quick creation (Phase 08): a Project, and a WorkStream inside one. Same action layer as the Agent. */
     fun addProject(title: String) = dispatch("createProject") {

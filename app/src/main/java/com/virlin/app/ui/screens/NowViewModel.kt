@@ -131,6 +131,11 @@ class NowViewModel(
 
     fun focus(streamId: String) = intents.focus(streamId)
     /** Move a Needs You item to a 1-based queue position; the others shift automatically (Phase 1 rule). */
+    /** Phase 09: the post-COMPLETE continuation (FOCUS NEXT / DONE FOR NOW). */
+    val completedFocus: StateFlow<AttentionIntentController.CompletedFocus?> get() = intents.completedFocus
+    fun focusNextAfterCompletion() = intents.focusNextAfterCompletion()
+    fun dismissCompletedFocus() = intents.dismissCompletedFocus()
+
     fun reorderNeedsYou(streamId: String, position: Int) = intents.reorderNeedsYou(streamId, position)
     /** Priority editor SAVE (Phase 04): move now + remember the preference according to its scope. */
     fun setNeedsYouPriority(streamId: String, position: Int, scope: com.virlin.app.domain.attention.PriorityScope) =

@@ -119,6 +119,7 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     // Hierarchy (Project / WorkStream / active Task) comes from the domain, never from MockData.
     val currentFocus by nowViewModel.currentFocus.collectAsState()
     val pendingCompletion by nowViewModel.pendingWorkStreamCompletion.collectAsState()
+    val completedFocus by nowViewModel.completedFocus.collectAsState()
     val attention by nowViewModel.attention.collectAsState()
     val waitingSince by nowViewModel.waitingSince.collectAsState()
     val dueAt by nowViewModel.attentionDueAt.collectAsState()
@@ -154,6 +155,14 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     chooser?.let { NowChooserDialog(it, nowViewModel) }
 
     // COMPLETE with no active Task means ending the whole WorkStream — never silently.
+    // Phase 09: after COMPLETE, a quiet continuation. FOCUS NEXT needs intent; DONE FOR NOW just closes.
+    completedFocus?.let { done ->
+        CompletedFocusDialog(
+            completedTitle = done.completedTitle, nextTitle = done.nextTitle,
+            onFocusNext = nowViewModel::focusNextAfterCompletion,
+            onDone = nowViewModel::dismissCompletedFocus
+        )
+    }
     pendingCompletion?.let { id ->
         val title = currentFocus?.takeIf { it.streamId == id }?.workStreamTitle
             ?: streams.firstOrNull { it.id == id }?.title ?: "this WorkStream"

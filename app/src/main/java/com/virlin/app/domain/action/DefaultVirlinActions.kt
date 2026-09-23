@@ -187,6 +187,11 @@ class DefaultVirlinActions(
     // ------------------------------------------------------------------ Focus
 
     override suspend fun focusStream(streamId: String): ActionResult<FocusOutcome> = run(streamId) { target ->
+        focusWithin(target)
+    }
+
+    /** The focus transition itself, inside an EXISTING transaction (shared by focusStream and startFocus). */
+    private suspend fun WorkStreamWriter.focusWithin(target: WorkStream): ActionResult<FocusOutcome> = run {
         if (target.state == FOCUS) return@run ActionResult.Rejected(DomainError.AlreadyFocused)
         requireTransition(target, FOCUS)?.let { return@run it }
 
@@ -231,6 +236,87 @@ class DefaultVirlinActions(
     }
 
     // ------------------------------------------------------------------ Hand-off
+
+    // ------------------------------------------------------------------ Phase 09: focus a WORK ITEM
+
+    override suspend fun resolveFocusTarget(workItemId: String): ActionResult<FocusTarget> = try {
+        repository.transaction { resolveTarget(workItemId) }
+    } catch (e: Exception) { ActionResult.Failure(e) }
+
+    override suspend fun startFocus(workItemId: String): ActionResult<FocusTargetOutcome> = try {
+        repository.transaction {
+            val target = when (val r = resolveTarget(workItemId)) {
+                is ActionResult.Success -> r.value
+                else -> return@transaction r as ActionResult<FocusTargetOutcome>
+            }
+            // The exact item first, then the stream: focusStream closes the displaced session,
+            // snapshots context and enforces the single-Focus invariant in this same transaction.
+            saveStream(getStream(target.workStreamId)!!.copy(activeTaskId = target.workItem.id, updatedAt = clock.now()))
+            val stream = getStream(target.workStreamId)!!
+            if (stream.state == FOCUS) {
+                // Already the focused stream: the exact work item changed, so the old session is
+                // committed and a NEW one starts for the new item (investment follows the item).
+                val now = clock.now()
+                getOpenFocusSession(stream.id)?.let { open -> if (open.isOpen) saveFocusSession(open.copy(endedAt = now)) }
+                saveFocusSession(FocusSession(ids.newId("fs"), stream.id, stream.currentCycleId, startedAt = now, taskId = target.workItem.id))
+                event(stream, EventType.FOCUS_STARTED, now, from = FOCUS, to = FOCUS, detail = target.workItem.id)
+                ActionResult.Success(FocusTargetOutcome(target, getStream(stream.id)!!, null))
+            } else when (val focus = focusWithin(stream)) {
+                is ActionResult.Success -> ActionResult.Success(FocusTargetOutcome(target, focus.value.focused, focus.value.displaced))
+                else -> focus as ActionResult<FocusTargetOutcome>
+            }
+        }
+    } catch (e: Exception) { ActionResult.Failure(e) }
+
+    override suspend fun focusNext(streamId: String): ActionResult<FocusTargetOutcome?> {
+        val next = when (val r = nextTaskCandidate(streamId)) {
+            is ActionResult.Success -> r.value ?: return ActionResult.Success(null)
+            else -> return r as ActionResult<FocusTargetOutcome?>
+        }
+        return when (val started = startFocus(next.id)) {
+            is ActionResult.Success -> ActionResult.Success(started.value)
+            else -> started as ActionResult<FocusTargetOutcome?>
+        }
+    }
+
+    /**
+     * Container → first OPEN leaf, leaf → itself. Never mutates: resolving is a pure read so the
+     * switch confirmation can preview it. Terminal items and containers whose leaves are all
+     * terminal are rejected rather than silently reopened.
+     */
+    private suspend fun WorkStreamWriter.resolveTarget(workItemId: String): ActionResult<FocusTarget> {
+        val item = getTask(workItemId) ?: return ActionResult.Rejected(DomainError.TaskNotFound(workItemId))
+        val all = allTasks()
+        val children = all.filter { it.parentTaskId == item.id }
+        val resolved = if (children.isEmpty()) {
+            if (item.status.isTerminal) return ActionResult.Rejected(DomainError.TaskAlreadyClosed)
+            item
+        } else {
+            firstOpenLeaf(all, item.id) ?: return ActionResult.Rejected(DomainError.TaskAlreadyClosed)
+        }
+        val streamId = resolved.workStreamId ?: return ActionResult.Rejected(DomainError.OwnershipMismatch)
+        val current = getActiveFocus()
+        return ActionResult.Success(
+            FocusTarget(
+                workItem = resolved, workStreamId = streamId,
+                displacedStreamId = current?.id?.takeIf { it != streamId || current.activeTaskId != resolved.id },
+                displacedWorkItemId = current?.activeTaskId?.takeIf { current.id != streamId || it != resolved.id }
+            )
+        )
+    }
+
+    /** Depth-first, sibling order, first non-terminal leaf beneath [rootId]. */
+    private fun firstOpenLeaf(all: List<Task>, rootId: String): Task? {
+        val byParent = all.groupBy { it.parentTaskId }
+        val hasChild = all.mapNotNull { it.parentTaskId }.toHashSet()
+        fun walk(parent: String): Task? {
+            for (t in byParent[parent].orEmpty().sortedBy { it.order }) {
+                if (t.id !in hasChild) { if (!t.status.isTerminal) return t } else walk(t.id)?.let { return it }
+            }
+            return null
+        }
+        return walk(rootId)
+    }
 
     override suspend fun handOffStream(
         streamId: String, waitingFor: String?, nextHumanAction: String?, checkAt: Instant?

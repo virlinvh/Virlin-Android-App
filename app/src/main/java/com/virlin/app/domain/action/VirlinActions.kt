@@ -34,6 +34,27 @@ interface VirlinActions {
     suspend fun focusStream(streamId: String): ActionResult<FocusOutcome>
 
     /**
+     * PHASE 09 — start human focus on an exact WORK ITEM.
+     *
+     * [workItemId] may be a leaf or a container: a container resolves to its first OPEN actionable
+     * leaf in the Phase 08 traversal order (nothing is completed or reopened while resolving).
+     * Rejected when the item (or the resolved leaf) is terminal, when a container has no open leaf,
+     * or when the item is not rooted in a WorkStream. Sets `activeTaskId` and focuses the owning
+     * stream in ONE transaction, so the single-human-Focus invariant still holds and any previously
+     * focused stream is displaced exactly as `focusStream` does.
+     */
+    suspend fun startFocus(workItemId: String): ActionResult<FocusTargetOutcome>
+
+    /**
+     * Resolve what [workItemId] would focus WITHOUT changing anything — used by the switch
+     * confirmation so the UI can name both sides before the user commits.
+     */
+    suspend fun resolveFocusTarget(workItemId: String): ActionResult<FocusTarget>
+
+    /** Focus the next open leaf after the current one ("FOCUS NEXT"); null result = nothing open. */
+    suspend fun focusNext(streamId: String): ActionResult<FocusTargetOutcome?>
+
+    /**
      * The human is done for now and hands the work to an external tool/process.
      * Requires FOCUS. Closes the FocusSession, updates the current Cycle, snapshots context,
      * moves to PROCESSING, and frees human Focus.
@@ -415,6 +436,23 @@ data class TaskUpdate(
     /** TODO ↔ IN_PROGRESS only; use completeTask to close. */
     val inProgress: Field<Boolean> = Field.Keep,
     val executionPreference: Field<ExecutionPreference> = Field.Keep
+)
+
+/** What a focus request resolves to: the exact leaf, its stream and the currently focused work. */
+data class FocusTarget(
+    val workItem: Task,
+    val workStreamId: String,
+    /** The human work that would be displaced, if any (its stream + active item). */
+    val displacedStreamId: String? = null,
+    val displacedWorkItemId: String? = null
+) {
+    val isSwitch: Boolean get() = displacedStreamId != null
+}
+
+data class FocusTargetOutcome(
+    val target: FocusTarget,
+    val focused: WorkStream,
+    val displaced: WorkStream?
 )
 
 data class FocusOutcome(

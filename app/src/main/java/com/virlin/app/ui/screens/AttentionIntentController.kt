@@ -112,8 +112,28 @@ class AttentionIntentController(
             if (active != null) {
                 val taskTitle = repository.getTask(active)?.title ?: "Task"
                 run(streamId, { "$taskTitle completed" }) { actions.completeTask(active) }
+                // Phase 09: offer what is next — FOCUS NEXT requires intent, it never auto-starts.
+                val next = (actions.nextTaskCandidate(streamId) as? ActionResult.Success)?.value
+                _completedFocus.value = CompletedFocus(streamId, taskTitle, next?.id, next?.title)
             } else _pendingWorkStreamCompletion.value = streamId
         }
+    }
+
+    /** What was just completed while focusing, and the next candidate (if any). Transient UI state. */
+    data class CompletedFocus(val streamId: String, val completedTitle: String, val nextTaskId: String?, val nextTitle: String?)
+
+    private val _completedFocus = MutableStateFlow<CompletedFocus?>(null)
+    val completedFocus: StateFlow<CompletedFocus?> = _completedFocus.asStateFlow()
+
+    /** "DONE FOR NOW": dismiss the continuation; nothing is focused and nothing is scheduled. */
+    fun dismissCompletedFocus() { _completedFocus.value = null }
+
+    /** "FOCUS NEXT": explicitly start the offered next leaf. */
+    fun focusNextAfterCompletion() {
+        val done = _completedFocus.value ?: return
+        _completedFocus.value = null
+        val next = done.nextTaskId ?: return
+        run(done.streamId, { "Focused ${done.nextTitle}" }) { actions.startFocus(next) }
     }
     fun confirmCompleteWorkStream() {
         val id = _pendingWorkStreamCompletion.value ?: return
