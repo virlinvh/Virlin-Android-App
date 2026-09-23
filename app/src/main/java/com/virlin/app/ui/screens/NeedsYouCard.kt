@@ -224,7 +224,7 @@ private fun NeedsYouActionPill(
     // ONE block in the rank's own colour: the rank half is the accent itself, the action half a
     // touch lighter, and a white hairline between them. The corner radius echoes the card's own
     // 14dp so the control sits inside it as the same family of shape, not a foreign capsule.
-    val radius = 12.dp
+    val radius = 11.dp
     val whole = RoundedCornerShape(radius)
     val leftHalf = RoundedCornerShape(topStart = radius, bottomStart = radius)
     val rightHalf = if (position == null) whole else RoundedCornerShape(topEnd = radius, bottomEnd = radius)
@@ -245,19 +245,19 @@ private fun NeedsYouActionPill(
             ) {
                 Box(
                     modifier = Modifier
-                        .height(34.dp)
+                        .height(30.dp)
                         // One fixed width, so single- and double-digit ranks keep the same column
                         // on every card and the timers above them stay aligned.
-                        .widthIn(min = 40.dp)
+                        .widthIn(min = 36.dp)
                         .clip(leftHalf)
                         .background(if (neutral) Color.White else accent)
                         .then(if (neutral) Modifier.border(1.dp, border, leftHalf) else Modifier)
-                        .padding(horizontal = 8.dp),
+                        .padding(horizontal = 5.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         "#$position",
-                        fontSize = if (position >= 100) 9.5.sp else if (position >= 10) 10.5.sp else 11.5.sp,
+                        fontSize = if (position >= 100) 9.sp else if (position >= 10) 10.sp else 11.sp,
                         fontWeight = FontWeight.Black,
                         color = if (neutral) Charcoal else onAccent,
                         maxLines = 1, softWrap = false
@@ -265,7 +265,7 @@ private fun NeedsYouActionPill(
                 }
             }
         }
-        if (position != null) Box(Modifier.width(1.dp).height(34.dp).background(hairline))
+        if (position != null) Box(Modifier.width(1.dp).height(30.dp).background(hairline))
         Box(
             modifier = Modifier
                 .fillMaxHeight()
@@ -276,17 +276,17 @@ private fun NeedsYouActionPill(
         ) {
             Row(
                 modifier = Modifier
-                    .height(34.dp)
+                    .height(30.dp)
                     .clip(rightHalf)
                     .background(actionFill)
                     .then(if (neutral) Modifier.border(1.dp, border, rightHalf) else Modifier)
-                    .padding(horizontal = 10.dp),
+                    .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                Text(primary.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 0.4.sp, color = actionInk, maxLines = 1, softWrap = false)
-                Spacer(Modifier.width(5.dp))
-                Text("→", fontSize = 10.sp, fontWeight = FontWeight.Black, color = actionInk)
+                Text(primary.uppercase(), fontSize = 9.5.sp, fontWeight = FontWeight.Black, letterSpacing = 0.3.sp, color = actionInk, maxLines = 1, softWrap = false)
+                Spacer(Modifier.width(4.dp))
+                Text("→", fontSize = 9.5.sp, fontWeight = FontWeight.Black, color = actionInk)
             }
         }
     }
