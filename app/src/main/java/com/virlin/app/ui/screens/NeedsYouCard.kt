@@ -198,8 +198,8 @@ fun NeedsYouCard(
  *
  * `#n` carries the queue position and opens the existing "Move to position" selector; `CHECK →`
  * runs the existing action. They share one surface, one border and one corner radius so the card
- * reads a single control: the rank half carries a slightly deeper tint, the halves meet with no
- * gap, and the outer corners are rounded while the inner edges are square. The visible pill stays
+ * reads a single control: one capsule in the rank's own colour, the rank block in the full accent
+ * and the action half a shade lighter, joined by a white hairline. The visible pill stays
  * 34dp high to keep the card compact, while each half is tappable across a 44dp row. Ranks 11+ (and unranked cards) render the quiet neutral treatment; when no
  * position is known the pill is just the action, exactly as before.
  *
@@ -221,9 +221,16 @@ private fun NeedsYouActionPill(
     onPosition: () -> Unit,
     onAction: () -> Unit
 ) {
-    val shape = RoundedCornerShape(10.dp)
-    val leftHalf = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp)
-    val rightHalf = if (position == null) shape else RoundedCornerShape(topEnd = 10.dp, bottomEnd = 10.dp)
+    // ONE block in the rank's own colour: the rank half is the accent itself, the action half a
+    // touch lighter, and a white hairline between them. The corner radius echoes the card's own
+    // 14dp so the control sits inside it as the same family of shape, not a foreign capsule.
+    val radius = 12.dp
+    val whole = RoundedCornerShape(radius)
+    val leftHalf = RoundedCornerShape(topStart = radius, bottomStart = radius)
+    val rightHalf = if (position == null) whole else RoundedCornerShape(topEnd = radius, bottomEnd = radius)
+    val actionFill = if (neutral) container else accent.copy(alpha = 0.82f)
+    val actionInk = if (neutral) ink else onAccent
+    val hairline = if (neutral) border else Color.White.copy(alpha = 0.45f)
     // The pill is 34dp of paint inside a 44dp row: each half is tappable across the full 44dp, so
     // the control stays compact without shrinking the touch targets.
     Row(modifier = Modifier.height(44.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -241,16 +248,16 @@ private fun NeedsYouActionPill(
                         .height(34.dp)
                         // One fixed width, so single- and double-digit ranks keep the same column
                         // on every card and the timers above them stay aligned.
-                        .widthIn(min = 34.dp)
+                        .widthIn(min = 40.dp)
                         .clip(leftHalf)
                         .background(if (neutral) Color.White else accent)
-                        .border(1.dp, border, leftHalf)
-                        .padding(horizontal = 6.dp),
+                        .then(if (neutral) Modifier.border(1.dp, border, leftHalf) else Modifier)
+                        .padding(horizontal = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         "#$position",
-                        fontSize = if (position >= 100) 9.sp else if (position >= 10) 10.sp else 11.sp,
+                        fontSize = if (position >= 100) 9.5.sp else if (position >= 10) 10.5.sp else 11.5.sp,
                         fontWeight = FontWeight.Black,
                         color = if (neutral) Charcoal else onAccent,
                         maxLines = 1, softWrap = false
@@ -258,6 +265,7 @@ private fun NeedsYouActionPill(
                 }
             }
         }
+        if (position != null) Box(Modifier.width(1.dp).height(34.dp).background(hairline))
         Box(
             modifier = Modifier
                 .fillMaxHeight()
@@ -270,15 +278,15 @@ private fun NeedsYouActionPill(
                 modifier = Modifier
                     .height(34.dp)
                     .clip(rightHalf)
-                    .background(container)
-                    .border(1.dp, border, rightHalf)
-                    .padding(horizontal = 9.dp),
+                    .background(actionFill)
+                    .then(if (neutral) Modifier.border(1.dp, border, rightHalf) else Modifier)
+                    .padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                Text(primary.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 0.4.sp, color = ink, maxLines = 1, softWrap = false)
-                Spacer(Modifier.width(4.dp))
-                Text("→", fontSize = 10.sp, fontWeight = FontWeight.Black, color = ink)
+                Text(primary.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 0.4.sp, color = actionInk, maxLines = 1, softWrap = false)
+                Spacer(Modifier.width(5.dp))
+                Text("→", fontSize = 10.sp, fontWeight = FontWeight.Black, color = actionInk)
             }
         }
     }

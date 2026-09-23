@@ -106,8 +106,9 @@ class NeedsYouPriorityUiTest {
             val check = composeRule.onNodeWithTag("needs_you_primary_$id").fetchSemanticsNode().boundsInRoot
             val card = composeRule.onNodeWithTag("needs_you_card_$id").fetchSemanticsNode().boundsInRoot
             val timer = composeRule.onNodeWithTag("needs_you_timer_$id", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-            // One pill: the halves are adjacent (no gap between them) and vertically identical.
-            assertTrue("$id halves adjacent (${rank.right} vs ${check.left})", Math.abs(rank.right - check.left) <= 1f)
+            // One control: the halves meet across the 1dp hairline and are vertically identical.
+            val hairline = composeRule.density.density * 1f
+            assertTrue("$id halves adjacent (${rank.right} vs ${check.left})", check.left - rank.right in -1f..(hairline + 1f))
             assertEquals("$id same top", Math.round(rank.top), Math.round(check.top))
             assertEquals("$id same height", Math.round(rank.height), Math.round(check.height))
             // The timer stays separate status information, left of the control, inside the card.
