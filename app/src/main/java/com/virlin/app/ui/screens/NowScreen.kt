@@ -297,7 +297,11 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                     stream = edited,
                     currentPosition = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 },
                     queueSize = needsYouQueue.size,
-                    existing = remember(id) { nowViewModel.priorityPreference(id) },
+                    // Read the durable policy off the main thread; null until it arrives.
+                    existing = androidx.compose.runtime.produceState<com.virlin.app.domain.attention.PriorityPreference?>(null, id) {
+                        value = nowViewModel.priorityPreference(id)
+                    }.value,
+                    onRemoveSaved = { nowViewModel.clearPriorityPreference(id) },
                     onSave = { pos, scope -> positionPicker = null; nowViewModel.setNeedsYouPriority(id, pos, scope) },
                     onDismiss = { positionPicker = null }
                 )

@@ -60,6 +60,7 @@ const val PriorityEditorSaveTag = "priority_editor_save"
 const val PriorityEditorCancelTag = "priority_editor_cancel"
 const val PriorityEditorCountTag = "priority_editor_count"
 const val PriorityEditorOtherTag = "priority_editor_other"
+const val PriorityEditorRemoveSavedTag = "priority_editor_remove_saved"
 fun priorityPositionTag(position: Int) = "priority_position_$position"
 fun priorityScopeTag(scope: PriorityScope) = "priority_scope_" + when (scope) {
     PriorityScope.OneTime -> "one_time"
@@ -91,6 +92,8 @@ fun NeedsYouPriorityEditor(
     /** Existing stored preference for this item, if any. */
     existing: com.virlin.app.domain.attention.PriorityPreference? = null,
     now: Instant = Instant.now(),
+    /** Phase 07: forget the durable policy. Shown ONLY when one exists. */
+    onRemoveSaved: () -> Unit = {},
     onSave: (position: Int, scope: PriorityScope) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -203,6 +206,19 @@ fun NeedsYouPriorityEditor(
                         )
                     }
                 }
+            }
+
+            // ── the saved policy can be forgotten (only offered when one exists)
+            if (existing != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Remove saved priority", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CharcoalMuted,
+                    modifier = Modifier.heightIn(min = 44.dp)
+                        .testTag(PriorityEditorRemoveSavedTag)
+                        .clickable(role = Role.Button) { onRemoveSaved(); onDismiss() }
+                        .semantics { contentDescription = "Remove saved priority" }
+                        .padding(vertical = 13.dp)
+                )
             }
 
             // ── actions

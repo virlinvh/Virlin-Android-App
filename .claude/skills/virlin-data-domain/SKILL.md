@@ -100,9 +100,14 @@ the waiting basis. Leaving CHECK clears that item's rank and re-densifies the re
 unranked and append. UI (`NowViewModel.needsYouQueue`) only reads this projection — never compute an
 order or a rank in a composable, and never add a second ordering source.
 
+Phase 07: `PriorityPreferences` is Room-backed in production (`RoomPriorityPreferences`, table
+`priority_preferences`, schema v11, one row per stream id); the interface is suspend, `OneTime` is
+never stored and never deletes an existing policy, `Until` carries `expiresAt` and is cleaned up in
+SQL, `CurrentTerm` keeps its own scope type (expiration still unresolved).
+
 Phase 04 adds `PriorityPreference(streamId, preferredPosition, scope)` with typed `PriorityScope`
 (`OneTime` · `Always` · `CurrentTerm` · `Until`), stored behind `PriorityPreferences`
-(in memory only — no persistence yet). `VirlinActions.setNeedsYouPriority` = the Phase 03 move plus
+(Room-backed since Phase 07). `VirlinActions.setNeedsYouPriority` = the Phase 03 move plus
 the preference; `checkDue` re-applies an ACTIVE preference on re-entry. Keep EFFECTIVE RANK,
 PREFERRED POSITION and SCOPE distinct: a preference never owns a rank, and duplicate preferred
 positions are fine because the queue keeps effective ranks unique.

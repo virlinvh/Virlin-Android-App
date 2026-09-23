@@ -117,7 +117,7 @@ class PriorityEditorUiTest {
                             stream = queue.firstOrNull { it.stream.id == id }?.let { display(id) },
                             currentPosition = queue.firstOrNull { it.stream.id == id }?.rank,
                             queueSize = queue.size,
-                            existing = prefs.get(id),
+                            existing = runBlocking { prefs.get(id) },
                             now = t0,
                             onSave = { pos, sc -> editing = null; scope.launch { actions.setNeedsYouPriority(id, pos, sc) } },
                             onDismiss = { editing = null }
@@ -178,14 +178,14 @@ class PriorityEditorUiTest {
         tag(PriorityEditorCancelTag).performClick()
         composeRule.waitForIdle()
         assertEquals(listOf("A", "B", "C", "D", "E"), queueIds())
-        assertTrue(prefs.all().isEmpty())
+        assertTrue(runBlocking { prefs.all() }.isEmpty())
         // Dismiss (back / swipe) takes the same path as Cancel.
         openEditorOn("E")
         tag(priorityPositionTag(2)).performClick()
         androidx.test.espresso.Espresso.pressBack()
         composeRule.waitForIdle()
         assertEquals(listOf("A", "B", "C", "D", "E"), queueIds())
-        assertTrue(prefs.all().isEmpty())
+        assertTrue(runBlocking { prefs.all() }.isEmpty())
     }
 
     // ------------------------------------------------------------------ FLOW D
@@ -200,8 +200,8 @@ class PriorityEditorUiTest {
         composeRule.waitUntil(5_000) { queueIds()[1] == "E" }
         composeRule.waitForIdle()
         assertEquals(listOf("A", "E", "B", "C", "D"), queueIds())
-        assertEquals(2, prefs.get("E")!!.preferredPosition)
-        assertEquals(PriorityScope.Always, prefs.get("E")!!.scope)
+        assertEquals(2, runBlocking { prefs.get("E") }!!.preferredPosition)
+        assertEquals(PriorityScope.Always, runBlocking { prefs.get("E") }!!.scope)
         // Reopening represents the stored preference, not the default.
         openEditorOn("E")
         tag(priorityScopeTag(PriorityScope.Always)).assertIsSelected()
@@ -221,7 +221,7 @@ class PriorityEditorUiTest {
         tag("needs_you_primary_C").performClick()
         assertEquals(listOf("C"), checked)                                     // CHECK fires, unchanged
         assertEquals(listOf("C", "A", "B", "D", "E"), queueIds())              // and priority editing did not consume it
-        assertNull(prefs.get("C"))                                             // "This time" stores nothing
+        assertNull(runBlocking { prefs.get("C") })                                             // "This time" stores nothing
     }
 
     // ------------------------------------------------------------------ small / large queues

@@ -312,7 +312,7 @@ class VirlinMigrationTest {
         }
     }
 
-    @Test fun freshInstall_isV10_andNoMigrationNeeded() {
+    @Test fun freshInstall_isV11_andNoMigrationNeeded() {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         ctx.deleteDatabase("virlin-fresh-test.db")
         val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, "virlin-fresh-test.db").addMigrations(*VirlinDatabase.MIGRATIONS).build()
@@ -324,7 +324,7 @@ class VirlinMigrationTest {
                 assertEquals(0, db.attachmentDocuments().count())
                 assertEquals(0, db.voiceDocuments().count())
             }
-            assertEquals(10, db.openHelper.readableDatabase.version)
+            assertEquals(11, db.openHelper.readableDatabase.version)
         } finally { db.close(); ctx.deleteDatabase("virlin-fresh-test.db") }
     }
 }

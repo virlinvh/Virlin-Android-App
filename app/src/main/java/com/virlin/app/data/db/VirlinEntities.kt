@@ -48,6 +48,24 @@ data class ProjectEntity(
     val iconId: String? = null
 )
 
+/**
+ * v11 — a durable Needs You priority policy (Phase 07). ONE row per WorkStream (the stable id is
+ * the primary key), so saving again replaces the policy instead of creating a competing one.
+ * `OneTime` is never stored. No foreign key: a preference may outlive its stream and is simply
+ * ignored and cleaned up, so attention can never crash on stale data.
+ */
+@Entity(tableName = "priority_preferences")
+data class PriorityPreferenceEntity(
+    @PrimaryKey val streamId: String,
+    /** 1-based position the user asked for; clamped against the live queue when applied. */
+    val preferredPosition: Int,
+    /** ALWAYS | CURRENT_TERM | UNTIL — the typed scope, never a UI label. */
+    val scopeType: String,
+    val createdAt: Instant,
+    /** Set only for UNTIL. */
+    val expiresAt: Instant?
+)
+
 @Entity(
     tableName = "workstreams",
     indices = [Index("projectId"), Index("state"), Index("checkAt"), Index("activeTaskId")]

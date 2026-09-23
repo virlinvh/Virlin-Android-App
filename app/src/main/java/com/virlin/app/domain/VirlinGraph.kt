@@ -191,7 +191,16 @@ object VirlinGraph {
         VirlinStartup.mark("DomainDisplayBridge_STARTED")
     }
 
-    val actions: VirlinActions by lazy { DefaultVirlinActions(repository, clock, ids) }
+    /**
+     * Durable Needs You priority policies (Phase 07). Room-backed once the database is open; until
+     * then an in-memory store keeps the app usable, and it is replaced the moment `init` runs.
+     */
+    val priorityPreferences: com.virlin.app.domain.attention.PriorityPreferences by lazy {
+        database?.let { com.virlin.app.data.db.RoomPriorityPreferences(it) }
+            ?: com.virlin.app.domain.attention.InMemoryPriorityPreferences()
+    }
+
+    val actions: VirlinActions by lazy { DefaultVirlinActions(repository, clock, ids, priorityPreferences) }
     val commands: com.virlin.app.domain.command.CommandEngine by lazy {
         com.virlin.app.domain.command.CommandEngine(actions, repository, clock, zone)
     }

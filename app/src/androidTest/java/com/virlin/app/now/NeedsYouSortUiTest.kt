@@ -130,7 +130,7 @@ class NeedsYouSortUiTest {
                         NeedsYouPriorityEditor(
                             stream = queue.firstOrNull { it.stream.id == id }?.let { display(id) },
                             currentPosition = queue.firstOrNull { it.stream.id == id }?.rank,
-                            queueSize = queue.size, existing = prefs.get(id), now = t0,
+                            queueSize = queue.size, existing = runBlocking { prefs.get(id) }, now = t0,
                             onSave = { pos, sc -> editing = null; scope.launch { actions.setNeedsYouPriority(id, pos, sc) } },
                             onDismiss = { editing = null }
                         )
@@ -247,6 +247,6 @@ class NeedsYouSortUiTest {
         assertEquals(listOf("A", "C", "B"), onScreen())                     // B is last on screen …
         assertEquals(1, NeedsYouOrder.effectiveRank(repo.streams.value, "B"))  // … and still canonical #1
         rankShown("B", 1)
-        assertEquals(1, prefs.get("B")!!.preferredPosition)
+        assertEquals(1, runBlocking { prefs.get("B") }!!.preferredPosition)
     }
 }

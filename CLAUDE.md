@@ -305,7 +305,7 @@ WorkStream".
 
 **Persistence is Room (Pass 5):** `VirlinGraph.init(context)` opens `virlin.db`; state
 survives process death and due returns/checks are reconciled on reopen. UI never touches DAOs.
-Schema is **v10** (v2 added `captures`; v10 added `workstreams.attentionRank` for Needs You priority ranking —
+Schema is **v11** (v2 added `captures`; v10 `workstreams.attentionRank` for Needs You priority ranking; v11 `priority_preferences` for durable priority policies —
 every step an explicit migration proven by `VirlinMigrationTest`); every schema change ships a real migration — never a destructive fallback.
 Details in the `virlin-data-domain` skill.
 

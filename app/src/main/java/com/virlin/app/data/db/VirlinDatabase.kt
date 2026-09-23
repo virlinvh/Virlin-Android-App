@@ -47,6 +47,16 @@ interface TaskDao {
 }
 
 @Dao
+interface PriorityPreferenceDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(p: PriorityPreferenceEntity)
+    @Query("SELECT * FROM priority_preferences ORDER BY createdAt, streamId") suspend fun all(): List<PriorityPreferenceEntity>
+    @Query("SELECT * FROM priority_preferences WHERE streamId = :streamId") suspend fun byStream(streamId: String): PriorityPreferenceEntity?
+    @Query("DELETE FROM priority_preferences WHERE streamId = :streamId") suspend fun delete(streamId: String)
+    /** Expiry cleanup in the data layer — never dependent on a screen being open. Epoch millis, converter-free. */
+    @Query("DELETE FROM priority_preferences WHERE expiresAt IS NOT NULL AND expiresAt <= :nowEpochMillis") suspend fun deleteExpired(nowEpochMillis: Long): Int
+}
+
+@Dao
 interface CaptureDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(c: CaptureEntity)
     /** Newest first by persisted createdAt (never by insertion order). */
@@ -136,6 +146,7 @@ interface VoiceDocumentDao {
  * v6: + attachment_documents (Capture File/Image metadata; bytes in managed files).
  * v7: + voice_documents (Capture Voice notes; clip audio in managed files).
  * v10: + workstreams.attentionRank (explicit Needs You position; null = unranked).
+ * v11: + priority_preferences (durable Needs You priority policies; OneTime is never stored).
  * Every version change ships an explicit [Migration] proven by `VirlinMigrationTest`;
  * there is NO destructive fallback.
  */
@@ -144,9 +155,9 @@ interface VoiceDocumentDao {
         ProjectEntity::class, WorkStreamEntity::class, TaskEntity::class, CycleEntity::class,
         FocusSessionEntity::class, ContextSnapshotEntity::class, EventEntity::class, MetaEntity::class,
         CaptureEntity::class, NoteDocumentEntity::class, PromptDocumentEntity::class,
-        AttachmentDocumentEntity::class, VoiceDocumentEntity::class
+        AttachmentDocumentEntity::class, VoiceDocumentEntity::class, PriorityPreferenceEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
@@ -162,6 +173,7 @@ abstract class VirlinDatabase : RoomDatabase() {
     abstract fun captures(): CaptureDao
     abstract fun noteDocuments(): NoteDocumentDao
     abstract fun promptDocuments(): PromptDocumentDao
+    abstract fun priorityPreferences(): PriorityPreferenceDao
     abstract fun attachmentDocuments(): AttachmentDocumentDao
     abstract fun voiceDocuments(): VoiceDocumentDao
 
@@ -286,7 +298,17 @@ abstract class VirlinDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `workstreams` ADD COLUMN `attentionRank` INTEGER")
             }
         }
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+        /** v10 → v11: additive `priority_preferences` table (durable Needs You priority policies). */
+        val MIGRATION_10_11: Migration = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `priority_preferences` (" +
+                        "`streamId` TEXT NOT NULL, `preferredPosition` INTEGER NOT NULL, `scopeType` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `expiresAt` INTEGER, PRIMARY KEY(`streamId`))"
+                )
+            }
+        }
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

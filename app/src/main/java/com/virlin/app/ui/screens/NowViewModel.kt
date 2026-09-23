@@ -135,8 +135,13 @@ class NowViewModel(
     /** Priority editor SAVE (Phase 04): move now + remember the preference according to its scope. */
     fun setNeedsYouPriority(streamId: String, position: Int, scope: com.virlin.app.domain.attention.PriorityScope) =
         intents.setNeedsYouPriority(streamId, position, scope)
-    /** Stored preference for an item (in memory; Phase 04 has no persistence). */
-    fun priorityPreference(streamId: String) = actions.priorityPreference(streamId)
+    /** The item's stored durable policy, if any (Room-backed; read off the main thread). */
+    suspend fun priorityPreference(streamId: String) = actions.priorityPreference(streamId)
+
+    /** "Remove saved priority": forget the durable policy; the current queue order is untouched. */
+    fun clearPriorityPreference(streamId: String) {
+        viewModelScope.launch { actions.clearPriorityPreference(streamId) }
+    }
     /** A planned check/return time arrived (the in-app ticker's scheduling stand-in). */
     fun checkDue(streamId: String) = intents.checkDue(streamId)
     /** "Still running — give it N more minutes." From CHECK or PROCESSING. */

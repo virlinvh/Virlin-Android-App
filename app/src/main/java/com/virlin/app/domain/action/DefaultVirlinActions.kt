@@ -519,13 +519,20 @@ class DefaultVirlinActions(
         // The stored position is what the user asked for, clamped to the queue that accepted it.
         val effective = NeedsYouOrder.effectiveRank(moved.value, streamId) ?: position
         when (scope) {
-            PriorityScope.OneTime -> preferences.remove(streamId)      // this occurrence only: remember nothing
-            else -> preferences.put(PriorityPreference(streamId, effective, scope, clock.now()))
+            // "This time" is a move now: it never creates a durable policy, and (Phase 07) it never
+            // deletes one either — an existing Always/Until keeps applying on the NEXT re-entry.
+            PriorityScope.OneTime -> Unit
+            else -> preferences.save(PriorityPreference(streamId, effective, scope, clock.now()))
         }
         return moved
     }
 
-    override fun priorityPreference(streamId: String): PriorityPreference? = preferences.get(streamId)
+    override suspend fun priorityPreference(streamId: String): PriorityPreference? = preferences.get(streamId)
+
+    override suspend fun clearPriorityPreference(streamId: String) = preferences.remove(streamId)
+
+    /** Start-up hygiene: drop expired policies without needing any screen to be open. */
+    override suspend fun cleanupExpiredPriorityPreferences(): Int = preferences.cleanupExpired(clock.now())
 
     /**
      * Re-entry policy: place a returning item at its preferred position when its preference is
@@ -534,8 +541,8 @@ class DefaultVirlinActions(
      * both prefer position 1 while effective ranks stay unique.
      */
     private suspend fun WorkStreamWriter.applyPreferenceOnEntry(streamId: String, now: Instant) {
-        val pref = preferences.get(streamId) ?: return
-        if (!pref.isActiveAt(now)) { preferences.remove(streamId); return }
+        // `activeFor` also drops an expired policy, so expiry never needs the UI.
+        val pref = preferences.activeFor(streamId, now) ?: return
         val move = NeedsYouOrder.planMove(allStreams(), streamId, pref.preferredPosition) ?: return
         move.changed.forEach { saveStream(it) }
     }

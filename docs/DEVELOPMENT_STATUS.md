@@ -645,6 +645,61 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## NEEDS YOU PHASE 07 COMPLETE — local priority persistence (2026-09-23, branch `feature/needs-you-priority-ranking`)
+
+Durable Needs You priority policies now survive process death in the app's own Room database.
+Offline-first: nothing here talks to a network, and no cloud/auth/sync code was added.
+
+- **Boundary unchanged:** `PriorityPreferences` is still the only thing the app talks to; every
+  member is now `suspend` so a durable store never runs on the main thread. Production binding is
+  `data/db/RoomPriorityPreferences` (`VirlinGraph.priorityPreferences`);
+  `InMemoryPriorityPreferences` remains for tests, previews and fakes. No Room entity leaves the
+  data layer; mapping lives in `VirlinMappers`.
+- **Schema v10 → v11**, additive `MIGRATION_10_11`, no destructive fallback: new table
+  `priority_preferences(streamId PK, preferredPosition, scopeType, createdAt, expiresAt)`. One row
+  per item, so saving again REPLACES the policy. No foreign key: a preference may outlive its
+  stream; orphans are ignored and cleaned up rather than cascading deletes into attention.
+- **Scopes:** `Always` and `CurrentTerm` persist indefinitely; `Until` persists `expiresAt` and is
+  ignored (and deleted) once past; **`OneTime` is never stored**. `CurrentTerm` keeps its own
+  `scopeType` on disk — it is NOT collapsed into `Always`, and its **term-expiration semantics
+  remain unresolved** until a real term concept exists.
+- **Phase 04 contract refined:** a `OneTime` move no longer deletes an existing durable policy. It
+  moves the current occurrence; the stored `Always`/`CurrentTerm`/`Until` still applies on the next
+  re-entry. (Phase 04 previously cleared it — the new behaviour matches "this time" semantics.)
+- **Expiry** is handled in SQL (`deleteExpired`) via `cleanupExpired`, so it never depends on a
+  screen being open; `activeFor` also drops an expired row when it is read.
+- **Removal:** the only UI addition — "Remove saved priority" inside the existing Priority Editor,
+  shown ONLY when a durable policy exists. No other visual change.
+- **Separation preserved:** `PriorityPreference` (policy) · `NeedsYouOrder` (canonical queue) ·
+  `AttentionTiming`/`checkAt` (time) · `NeedsYouSortMode` (session-only view). Re-entry resolves the
+  policy first, the queue then fixes effective rank, and the Phase 06 projection applies last.
+  A stored position larger than the current queue clamps on apply and the stored intent is kept.
+- **Tests:** `PriorityPersistenceTest` (20 contract cases) and instrumented `PriorityPersistenceRoomTest`
+  (8: v10 → v11 migration preserving projects/workstreams/tasks/`checkAt`/`attentionRank`, fresh
+  install v11, database-reopen recovery, Until before/after expiry, SQL cleanup, replacement and
+  removal, orphan and corrupt-scope safety).
+
+## Visual-baseline reconciliation (2026-09-23)
+
+Outcome of inspecting every failing Roborazzi golden after the Needs You redesign (Phases 01–06):
+
+1. **Three Needs You baselines are APPROVED but PENDING RE-RECORD** — `needs_you_check_due`,
+   `needs_you_return_due`, `needs_you_result_ready`. Each was compared old vs new: the difference is
+   entirely the approved compact card (Phase 01), rank identity (Phase 02) and `HH:MM:SS` timer
+   (Phase 05); no clipping, no misalignment, no missing content. They could not be re-recorded
+   because Windows Application Control blocks the freshly extracted
+   `robolectric-nativeruntime.dll`. Re-record them (and then `git checkout` the two Current Focus
+   goldens that the same test class would overwrite) when the environment permits.
+2. **Current Focus differences are unrelated** — `now_focus_human`, `now_focus_external` differ only
+   through the earlier focus-investment pass ("FOCUS INVESTED" → "CURRENT SESSION", timer seed).
+   Left untouched.
+3. **Technical debt:** `now_screen_hierarchy` and `app_scaffold_hierarchy` currently render the
+   startup placeholder "Preparing your attention…" because `VirlinGraph` never becomes ready under
+   Robolectric. Those goldens validate nothing today; this is a TEST-INFRASTRUCTURE defect to fix
+   separately — never re-record them as-is.
+4. **No genuine Needs You regression was found.** The remaining Agent / Hierarchy golden failures
+   are stale from earlier unrelated passes.
+
 ## NEEDS YOU PHASE 06 COMPLETE — sort / view control (2026-09-23, branch `feature/needs-you-priority-ranking`)
 
 **CANONICAL PRIORITY ≠ DISPLAY SORT.** The Phase 03 queue stays the single authoritative order (and

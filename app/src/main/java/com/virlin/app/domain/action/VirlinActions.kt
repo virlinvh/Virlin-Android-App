@@ -140,8 +140,14 @@ interface VirlinActions {
      */
     suspend fun setNeedsYouPriority(streamId: String, position: Int, scope: PriorityScope): ActionResult<List<WorkStream>>
 
-    /** The stored preference for an item, if any (Phase 04: in memory only). */
-    fun priorityPreference(streamId: String): PriorityPreference?
+    /** The stored durable preference for an item, if any (Phase 07: Room-backed). */
+    suspend fun priorityPreference(streamId: String): PriorityPreference?
+
+    /** Forget an item's saved priority policy ("Remove saved priority"). */
+    suspend fun clearPriorityPreference(streamId: String)
+
+    /** Delete every expired policy; safe to call at start-up. Returns how many were removed. */
+    suspend fun cleanupExpiredPriorityPreferences(): Int
 
     // ================================================================ Structure: Project
 
