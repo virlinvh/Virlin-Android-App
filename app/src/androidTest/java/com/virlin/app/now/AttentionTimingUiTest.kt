@@ -131,8 +131,8 @@ class AttentionTimingUiTest {
 
     @Test fun flowA_and_H_timerStatesRender_andLongDurationsStayAligned() {
         show()
-        assertEquals("+00:03:42", timerOf("A"))              // overdue
-        assertEquals("00:05:00", timerOf("B"))               // waiting
+        assertEquals("+03:42", timerOf("A"))                 // overdue, compact under an hour
+        assertEquals("05:00", timerOf("B"))                  // waiting, compact under an hour
         assertEquals("+27:15:42", timerOf("C"))              // 27h, not wrapped
         listOf("A", "B", "C").forEach { tag("needs_you_primary_$it").assertIsDisplayed() }   // CHECK reachable
         val cards = listOf("A", "B", "C").map { tag("needs_you_card_$it").fetchSemanticsNode().boundsInRoot }
@@ -143,15 +143,48 @@ class AttentionTimingUiTest {
         assertTrue("long timer does not collide", timer.right <= action.left + 1f)
     }
 
+
+    // ------------------------------------------------------------------ adaptive timer format
+
+    /**
+     * The card shows `MM:SS` while there is no hour to show and gains the hour segment — unpadded —
+     * the moment there is, with no reset, no duplicate and no reordering across the boundary. The
+     * spoken description stays human-readable either side.
+     */
+    @Test fun compactTimer_dropsTheHourSegment_thenGainsItLive() {
+        show()
+        val orderBefore = NeedsYouOrder.queue(repo.streams.value).map { it.stream.id }
+        val narrowWidth = tag("needs_you_timer_A").fetchSemanticsNode().boundsInRoot.width
+        val wideWidth = tag("needs_you_timer_C").fetchSemanticsNode().boundsInRoot.width
+        assertTrue("compact timer reclaims width: $narrowWidth < $wideWidth", narrowWidth < wideWidth)
+
+        // B is waiting 5:00; walk it to one second under an hour of OVERDUE and across the boundary.
+        advance(300 + 3598); assertEquals("+59:58", timerOf("B"))
+        advance(1); assertEquals("+59:59", timerOf("B"))
+        advance(1); assertEquals("+1:00:00", timerOf("B"))
+        advance(1); assertEquals("+1:00:01", timerOf("B"))
+        composeRule.onAllNodesWithTag("needs_you_card_B").assertCountEquals(1)
+        assertEquals(orderBefore, NeedsYouOrder.queue(repo.streams.value).map { it.stream.id })
+
+        // Accessibility never follows the compact string.
+        val spoken = tag("needs_you_timer_B").fetchSemanticsNode().config.toString()
+        assertTrue("spoken stays human readable: $spoken", spoken.contains("1 hour"))
+
+        // The card still fits and the action is still clear of the longer timer.
+        val timer = tag("needs_you_timer_B").fetchSemanticsNode().boundsInRoot
+        val action = tag("needs_you_primary_B").fetchSemanticsNode().boundsInRoot
+        assertTrue("hour timer does not collide", timer.right <= action.left + 1f)
+    }
+
     // ------------------------------------------------------------------ DUE transition (16/17 of the spec)
 
     @Test fun waitingBecomesDueThenOverdue_withoutResetOrReorder() {
         show()
         val orderBefore = NeedsYouOrder.queue(repo.streams.value).map { it.stream.id }
-        advance(299); assertEquals("00:00:01", timerOf("B"))
-        advance(1); assertEquals("00:00:00", timerOf("B"))
-        advance(1); assertEquals("+00:00:01", timerOf("B"))
-        advance(41); assertEquals("+00:00:42", timerOf("B"))
+        advance(299); assertEquals("00:01", timerOf("B"))
+        advance(1); assertEquals("00:00", timerOf("B"))
+        advance(1); assertEquals("+00:01", timerOf("B"))
+        advance(41); assertEquals("+00:42", timerOf("B"))
         assertEquals(orderBefore, NeedsYouOrder.queue(repo.streams.value).map { it.stream.id })   // no reordering
         composeRule.onAllNodesWithTag("needs_you_card_B").assertCountEquals(1)                    // no duplicate item
     }
@@ -174,7 +207,7 @@ class AttentionTimingUiTest {
         nowState.value = t0.plusSeconds(300)
         runBlocking { actions.checkDue("A") }
         composeRule.waitForIdle()
-        assertEquals("00:00:00", timerOf("A"))                                 // back, due, no duplicate
+        assertEquals("00:00", timerOf("A"))                                    // back, due, no duplicate
         composeRule.onAllNodesWithTag("needs_you_card_A").assertCountEquals(1)
         checkAgain("C", 3); assertEquals(nowState.value.plusSeconds(180), dueOf("C"))
         checkAgain("C", 10); assertEquals(nowState.value.plusSeconds(600), dueOf("C"))
@@ -210,7 +243,7 @@ class AttentionTimingUiTest {
         tag(priorityPositionTag(2)).performClick()
         androidx.test.espresso.Espresso.pressBack(); composeRule.waitForIdle()
         repo.streams.value.forEach { assertEquals("dueAt ${it.id}", before[it.id], it.checkAt) }
-        assertEquals("+00:03:42", timerOf("A"))
+        assertEquals("+03:42", timerOf("A"))
     }
 
     // ------------------------------------------------------------------ check again keeps the priority policy
@@ -225,6 +258,6 @@ class AttentionTimingUiTest {
         composeRule.waitForIdle()
         assertEquals(1, NeedsYouOrder.effectiveRank(repo.streams.value, "C"))
         assertEquals(PriorityScope.Always, runBlocking { prefs.get("C") }!!.scope)
-        assertEquals("00:00:00", timerOf("C"))
+        assertEquals("00:00", timerOf("C"))
     }
 }

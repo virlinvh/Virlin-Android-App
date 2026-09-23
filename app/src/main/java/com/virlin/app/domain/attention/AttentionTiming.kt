@@ -43,7 +43,7 @@ object AttentionTiming {
 
     /**
      * The approved card presentation:
-     * - WAITING → `HH:MM:SS` remaining (`00:05:00`, `01:20:00`)
+     * - WAITING → `HH:MM:SS` remaining (`00:05:00`, `01:20:00`), or the compact adaptive form
      * - DUE     → `00:00:00`
      * - OVERDUE → `+HH:MM:SS` elapsed past due (`+00:03:42`, `+27:15:42`)
      *
@@ -51,10 +51,10 @@ object AttentionTiming {
      * hours (`125:08:17`) are supported. The leading `+` makes the direction unambiguous; a negative
      * countdown is never shown.
      */
-    fun format(dueAt: Instant?, now: Instant): String {
-        if (dueAt == null) return clock(0)
+    fun format(dueAt: Instant?, now: Instant, adaptive: Boolean = false): String {
+        if (dueAt == null) return clock(0, adaptive)
         val s = secondsUntil(dueAt, now)
-        return if (s >= 0) clock(s) else "+" + clock(-s)
+        return if (s >= 0) clock(s, adaptive) else "+" + clock(-s, adaptive)
     }
 
     /** Spoken form for accessibility: "Due in 5 minutes" / "Due now" / "Overdue by 3 minutes 42 seconds". */
@@ -64,10 +64,22 @@ object AttentionTiming {
         TimeState.OVERDUE -> "Overdue by " + words(-secondsUntil(dueAt!!, now))
     }
 
-    /** `HH:MM:SS` with accumulating, never-wrapping hours. */
-    fun clock(totalSeconds: Long): String {
+    /**
+     * `HH:MM:SS` with accumulating, never-wrapping hours.
+     *
+     * [adaptive] is the compact Needs You presentation: under an hour the hour segment is dropped
+     * entirely (`26:55`, never `00:26:55`) so the card gives that space back to the title, and the
+     * hour appears only once it exists, unpadded (`1:00:00`, `25:04:08`). The sequence therefore
+     * runs `59:58 → 59:59 → 1:00:00` with no reset. Hours still accumulate past 24 either way.
+     */
+    fun clock(totalSeconds: Long, adaptive: Boolean = false): String {
         val t = totalSeconds.coerceAtLeast(0)
-        return "%02d:%02d:%02d".format(t / 3600, (t % 3600) / 60, t % 60)
+        val h = t / 3600; val m = (t % 3600) / 60; val s = t % 60
+        return when {
+            !adaptive -> "%02d:%02d:%02d".format(h, m, s)
+            h == 0L -> "%02d:%02d".format(m, s)
+            else -> "%d:%02d:%02d".format(h, m, s)
+        }
     }
 
     private fun words(totalSeconds: Long): String {

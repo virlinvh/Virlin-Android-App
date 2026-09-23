@@ -242,7 +242,8 @@ private fun NeedsYouRankBadge(
 
 /**
  * The card's attention timer (Phase 05): `HH:MM:SS` remaining while WAITING, `00:00:00` at DUE and
- * `+HH:MM:SS` once OVERDUE — derived from `dueAt − now`, never counted. Tabular figures, so a
+ * `+MM:SS` once OVERDUE, gaining the hour segment only past an hour (`+1:02:05`) — derived from
+ * `dueAt − now`, never counted. Tabular figures, so a
  * ticking second never moves the CHECK action. Reads the shared ticker HERE (and only here) so a
  * tick recomposes just this text; its semantics carry the human-readable form.
  */
@@ -254,7 +255,7 @@ private fun AttentionTimerText(
     color: Color
 ) {
     val label by remember(dueAt, now) {
-        derivedStateOf { AttentionTiming.format(dueAt, now?.value ?: dueAt ?: Instant.EPOCH) }
+        derivedStateOf { AttentionTiming.format(dueAt, now?.value ?: dueAt ?: Instant.EPOCH, adaptive = true) }
     }
     val spoken by remember(dueAt, now) {
         derivedStateOf { AttentionTiming.describe(dueAt, now?.value ?: dueAt ?: Instant.EPOCH) }

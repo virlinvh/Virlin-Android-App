@@ -97,6 +97,51 @@ class AttentionTimingTest {
         assertEquals(TimeState.DUE, AttentionTiming.state(null, t0))
     }
 
+
+    // ------------------------------------------------------------------ adaptive (compact) format
+
+    /**
+     * The Needs You card drops the hour segment while there is no hour to show, and gains it —
+     * unpadded — the moment there is. Hours still accumulate past 24.
+     */
+    @Test fun adaptive_dropsTheHourSegmentUnderAnHour_andGainsItUnpaddedAfter() {
+        fun waited(seconds: Long) = AttentionTiming.format(t0.minusSeconds(seconds), t0, adaptive = true)
+        assertEquals("00:00", AttentionTiming.format(t0, t0, adaptive = true))
+        assertEquals("+00:01", waited(1))
+        assertEquals("+00:59", waited(59))
+        assertEquals("+01:00", waited(60))
+        assertEquals("+01:01", waited(61))
+        assertEquals("+09:59", waited(9 * 60 + 59))
+        assertEquals("+10:00", waited(10 * 60))
+        assertEquals("+26:55", waited(26 * 60 + 55))
+        assertEquals("+59:58", waited(59 * 60 + 58))
+        assertEquals("+59:59", waited(59 * 60 + 59))
+        assertEquals("+1:00:00", waited(3600))                  // the hour appears, nothing resets
+        assertEquals("+1:00:01", waited(3601))
+        assertEquals("+1:01:01", waited(3661))
+        assertEquals("+1:02:05", waited(3725))
+        assertEquals("+9:59:59", waited(9 * 3600 + 59 * 60 + 59))
+        assertEquals("+10:00:00", waited(10 * 3600))
+        assertEquals("+11:23:29", waited(11 * 3600 + 23 * 60 + 29))
+        assertEquals("+25:04:08", waited(25 * 3600 + 4 * 60 + 8))   // past 24h, never wrapped
+    }
+
+    /** The live transition is one second wide: nothing in between, nothing reset. */
+    @Test fun adaptive_transitionAcrossTheHourIsContinuous() {
+        val waitingSince = t0.minusSeconds(3600)
+        fun at(offset: Long) = AttentionTiming.format(waitingSince, t0.plusSeconds(offset - 3600), adaptive = true)
+        assertEquals("+59:58", at(3598))
+        assertEquals("+59:59", at(3599))
+        assertEquals("+1:00:00", at(3600))
+        assertEquals("+1:00:01", at(3601))
+    }
+
+    /** Accessibility never follows the compact visual string; it stays spoken. */
+    @Test fun adaptive_doesNotChangeTheSpokenDescription() {
+        assertEquals("Overdue by 26 minutes 55 seconds", AttentionTiming.describe(t0.minusSeconds(1615), t0))
+        assertEquals("Overdue by 1 hour 2 minutes 5 seconds", AttentionTiming.describe(t0.minusSeconds(3725), t0))
+    }
+
     // ------------------------------------------------------------------ 7–10, 15: CHECK AGAIN
 
     @Test fun test7_8_9_presetsProduceANewDueAt() = runBlocking {
