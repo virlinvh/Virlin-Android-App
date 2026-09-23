@@ -109,9 +109,9 @@ class PriorityPersistenceRoomTest {
         } finally { migrated.close(); ctx.deleteDatabase(migrationDb) }
     }
 
-    @Test fun freshInstall_isV11() {
+    @Test fun freshInstall_isV12() {
         runBlocking { assertTrue(db.priorityPreferences().all().isEmpty()) }
-        assertEquals(11, db.openHelper.readableDatabase.version)
+        assertEquals(12, db.openHelper.readableDatabase.version)
     }
 
     // ------------------------------------------------------------------ process-death recovery

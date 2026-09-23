@@ -5,6 +5,8 @@ import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.ExternalStage
+import com.virlin.app.domain.model.ExternalStageStatus
 import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.ExecutionPreference
@@ -48,7 +50,7 @@ object VirlinMappers {
         nextHumanAction = nextHumanAction, blockerReason = blockerReason, processingStartedAt = processingStartedAt,
         checkAt = checkAt, snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.name, currentCycleId = currentCycleId,
         cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt,
-        attentionRank = attentionRank
+        attentionRank = attentionRank, externalActorId = externalActorId
     )
     fun WorkStreamEntity.toDomain() = WorkStream(
         id = id, title = title, projectId = projectId, tool = tool,
@@ -58,7 +60,18 @@ object VirlinMappers {
         blockerReason = blockerReason, processingStartedAt = processingStartedAt, checkAt = checkAt,
         snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.let(SnoozeReason::valueOf),
         currentCycleId = currentCycleId, cycleCount = cycleCount, activeTaskId = activeTaskId,
-        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt, attentionRank = attentionRank
+        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt, attentionRank = attentionRank,
+        externalActorId = externalActorId
+    )
+
+    fun ExternalStage.toEntity() = ExternalStageEntity(
+        id = id, workStreamId = workStreamId, title = title, order = order,
+        expectedMinutes = expectedMinutes, status = status.name, startedAt = startedAt, completedAt = completedAt
+    )
+    fun ExternalStageEntity.toDomain() = ExternalStage(
+        id = id, workStreamId = workStreamId, title = title, order = order,
+        expectedMinutes = expectedMinutes, status = ExternalStageStatus.valueOf(status),
+        startedAt = startedAt, completedAt = completedAt
     )
 
     fun Task.toEntity() = TaskEntity(

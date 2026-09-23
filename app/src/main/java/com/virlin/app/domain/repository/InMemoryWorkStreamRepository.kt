@@ -5,6 +5,8 @@ import com.virlin.app.domain.model.VoiceDocument
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.ExternalStage
+import com.virlin.app.domain.model.ExternalStages
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.NoteDocument
 import com.virlin.app.domain.model.Project
@@ -51,6 +53,12 @@ class InMemoryWorkStreamRepository(
     private val voiceByCapture = LinkedHashMap<String, VoiceDocument>()
     private val voiceById = LinkedHashMap<String, VoiceDocument>()
 
+    private val stageMap = LinkedHashMap<String, ExternalStage>()
+
+    private val _stages = MutableStateFlow<List<ExternalStage>>(emptyList())
+    override val stages: StateFlow<List<ExternalStage>> = _stages.asStateFlow()
+    override suspend fun getStages(workStreamId: String) = lock.withLock { ExternalStages.of(stageMap.values, workStreamId) }
+
     private val _streams = MutableStateFlow(streamMap.values.toList())
     override val streams: StateFlow<List<WorkStream>> = _streams.asStateFlow()
     private val _projects = MutableStateFlow(projectMap.values.toList())
@@ -96,6 +104,8 @@ class InMemoryWorkStreamRepository(
         cycles.addAll(staged.cycles.values); staged.cycleUpdates.forEach { c -> cycles.replaceAll { if (it.id == c.id) c else it } }
         sessions.addAll(staged.sessions.values); staged.sessionUpdates.forEach { s -> sessions.replaceAll { if (it.id == s.id) s else it } }
         snapshots.addAll(staged.snapshots)
+        staged.stages.forEach { (id, st) -> stageMap[id] = st }
+        if (staged.stages.isNotEmpty()) _stages.value = stageMap.values.toList()
         events.addAll(staged.events)
         _streams.value = streamMap.values.toList()
         if (staged.projects.isNotEmpty()) _projects.value = projectMap.values.toList()
@@ -132,6 +142,7 @@ class InMemoryWorkStreamRepository(
         val sessionUpdates = mutableListOf<FocusSession>()
         val snapshots = mutableListOf<ContextSnapshot>()
         val events = mutableListOf<WorkStreamEvent>()
+        val stages = LinkedHashMap<String, ExternalStage>()
         val captures = LinkedHashMap<String, CaptureItem>()
         val notes = LinkedHashMap<String, NoteDocument>()
         val prompts = LinkedHashMap<String, PromptDocument>()
@@ -195,6 +206,9 @@ class InMemoryWorkStreamRepository(
             else sessionUpdates += session
         }
         override suspend fun saveSnapshot(snapshot: ContextSnapshot) { snapshots += snapshot }
+        override suspend fun stagesOf(workStreamId: String): List<ExternalStage> =
+            ExternalStages.of(LinkedHashMap(stageMap).apply { putAll(stages) }.values, workStreamId)
+        override suspend fun saveStage(stage: ExternalStage) { stages[stage.id] = stage }
         override suspend fun appendEvent(event: WorkStreamEvent) { events += event }
     }
 }

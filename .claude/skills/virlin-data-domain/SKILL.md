@@ -119,6 +119,29 @@ WAITING / DUE / OVERDUE plus the `HH:MM:SS` / `+HH:MM:SS` display are DERIVED fr
 = `continueProcessing(id, now + N)` with presets 3/5/10 min; it never changes rank or a priority
 preference, and a reorder never changes `dueAt`.
 
+## External work — Working For You (Phase 10)
+
+- An external run IS the WorkStream while `state == PROCESSING`: `checkAt` (when to look again),
+  `activeTaskId` (the exact work item), `waitingFor` (the instruction), plus
+  `externalActorId` (stable `ExternalActor` id; `tool` is the display fallback). There is NO
+  second execution entity — Working For You and Needs You are projections of one row.
+- `ExternalWork.workingForYou(streams, now, stages, projects, tasks)` is the only projection:
+  PROCESSING and not yet due, soonest `checkAt` first, ties by id, no-check runs last. Never
+  order it by the Needs You ranking; due items enter Needs You through `NeedsYouOrder`.
+- Countdown = `checkAt - now` via `AttentionTiming`. One hoisted clock value renders the whole
+  section: no per-row ticker, no per-second write, no stored countdown.
+- `ExternalStage` (table `external_stages`, schema v12) is TRACKING METADATA for the external
+  process — never a Task, never part of `ProgressCalculator`. `sortOrder` is the only ordering
+  truth; `ExternalStages` does all stage arithmetic.
+- Verbs: `startExternalWork` · `scheduleExternalCheck` · `markExternalResultReady` ·
+  `markExternalStillRunning` · `markExternalBlocked` · `deferReadyResult` ·
+  `focusExternalResult` · `startNextExternalStage`. RESULT READY completes the STAGE and keeps
+  the item as attention — it never completes the human Task. STILL RUNNING returns the same run
+  to PROCESSING; a deferred ready result goes to SNOOZED(EXTERNAL_RESULT_READY), never back to
+  Working For You. FOCUS NOW delegates to Phase 09 `startFocus`, so there is one switch flow.
+- `READY -> PROCESSING` is DELEGATE (work the human is not doing); `FOCUS -> PROCESSING` is
+  still HAND OFF.
+
 ## Boundaries
 
 - `WorkStreamRepository` (which also implements the small `CaptureRepository`, same transaction

@@ -2477,3 +2477,106 @@ Additive `MIGRATION_3_4`: `note_documents` + unique index on `captureItemId`. Ca
 - Inbox row opens editor (never auto-launches browser). Legacy LINK hydrates the same CaptureItem.
 
 ## Repository
+
+
+## PHASE 09 COMPLETE — CURRENT FOCUS EXECUTION (2026-09-23)
+
+Human focus now starts on an EXACT work item. `VirlinActions.startFocus(workItemId)` resolves a
+leaf (a container resolves to its first open leaf), sets `activeTaskId` and focuses the owning
+WorkStream in ONE transaction, so the single-human-Focus invariant is unchanged;
+`resolveFocusTarget` is the pure read behind the SWITCH FOCUS? confirmation, and `focusNext`
+powers FOCUS NEXT after COMPLETE (DONE FOR NOW simply closes). Investment stays derived from
+FocusSessions; the approved Current Focus card was not redesigned.
+
+## PHASE 10 COMPLETE — WORKING FOR YOU EXECUTION SYSTEM (2026-09-23)
+
+### The permanent conceptual model
+
+```
+CURRENT FOCUS      = ONE human-active WorkItem
+WORKING FOR YOU    = zero-to-many externally executing items
+NEEDS YOU          = items currently requiring human attention
+```
+
+These are three PROJECTIONS of the same persisted state, never three stores.
+
+### Lifecycle
+
+```
+EXTERNAL EXECUTION
+        |
+     PROCESSING  ->  WORKING FOR YOU
+        |  checkAt reached
+      CHECK      ->  NEEDS YOU
+        |
+ +--------------+----------------+
+RESULT READY   STILL RUNNING    BLOCKED
+   |                |              |
+FOCUS / DEFER   CHECK AGAIN    HUMAN ACTION
+                    |
+              WORKING FOR YOU
+```
+
+For a staged run: `STAGE -> PROCESSING -> CHECK -> RESULT -> START NEXT STAGE -> PROCESSING`.
+
+### Architecture decision
+
+The WorkStream already WAS the external execution: `PROCESSING` + `checkAt` + `activeTaskId` +
+`waitingFor` (the instruction) + `currentCycleId`. Phase 10 therefore added no parallel
+`ExternalExecution` entity — only the two things the model could not express:
+
+- `WorkStream.externalActorId` — the stable actor identity (`ExternalActor`, an open catalogue,
+  not an enum; `tool` remains the free-text display fallback).
+- `external_stages` — lightweight tracking metadata for the external process. Stages are NOT
+  hierarchy Tasks, never enter `ProgressCalculator`, and are ordered by an explicit `sortOrder`.
+
+### Rules
+
+- **One identity across projections.** A due run is the SAME row in Needs You; nothing is copied.
+- **Countdown is `checkAt - now`** (`AttentionTiming`), rendered from ONE hoisted clock value for
+  the whole section. No per-row ticker, no per-second Room write, no stored countdown.
+- **Ordering** in Working For You is soonest `checkAt` first, ties by id, no-check runs last —
+  deliberately NOT the Needs You priority ranking. Due runs enter Needs You through the existing
+  canonical `NeedsYouOrder` queue, so Phase 07 policies still apply.
+- **External completion is not human completion.** RESULT READY completes the external stage and
+  leaves the item as attention; it never completes the hierarchy Task.
+- **STILL RUNNING** returns the same run to PROCESSING with a new check time; **RESULT READY but
+  deferred** goes to SNOOZED(EXTERNAL_RESULT_READY) — never back to Working For You.
+- **FOCUS NOW** hands the exact work item to Phase 09 `startFocus`, so there is exactly one
+  focus-switching system and no second Task.
+- **START NEXT STAGE** completes the running stage and starts the next in explicit order, deriving
+  `checkAt = now + expectedMinutes`. REVIEW FIRST simply does not call it.
+- Virlin TRACKS external work. It executes no external tool, polls no API and detects no status.
+
+### Domain surface
+
+`startExternalWork` · `scheduleExternalCheck` · `markExternalResultReady` ·
+`markExternalStillRunning` · `markExternalBlocked` · `deferReadyResult` · `focusExternalResult` ·
+`startNextExternalStage` · `externalStages` — all on `VirlinActions`, all routed to the existing
+attention verbs where one already existed. The Agent can call them later unchanged.
+
+### Transition table change
+
+`READY -> PROCESSING` is now legal: DELEGATE hands work the human is NOT doing to an external
+actor. `FOCUS -> PROCESSING` remains HAND OFF. Both end in PROCESSING, which is still the only
+state that means "something else is working".
+
+### Persistence
+
+Schema **v11 -> v12** (`MIGRATION_11_12`, additive only): `workstreams.externalActorId` and the
+`external_stages` table. Projects, streams, tasks, focus sessions, `checkAt`, `attentionRank` and
+`priority_preferences` are untouched; schema `12.json` is exported.
+
+### UI
+
+`ExternalWorkRow` replaces the demo-counter processing row inside the approved Working For You
+container (actor · work item + instruction · current stage · countdown), a compact detail sheet
+shows the stage list and CHECK NOW, and `DelegateDialog` (Task Detail -> DELEGATE) is the minimum
+creation path: who, what, check-in, optional stages. Now, Needs You, Current Focus, the Orb and
+the Agent were not redesigned.
+
+### Known debt
+
+The Roborazzi screenshot classes already fail at the Phase 09 commit (stale goldens from the
+earlier baseline reconciliation) and `CaptureBoundaryTest.types_are_explicit_and_payloads_raw`
+also fails at that commit. Neither was introduced by Phase 10, and no golden was re-recorded.

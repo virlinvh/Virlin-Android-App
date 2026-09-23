@@ -138,6 +138,21 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val needsYouStreams = streams.filter { it.state == StreamState.NEEDS_YOU }
         .sortedBy { needsYouDisplay.indexOf(it.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
     val processingStreams = streams.filter { it.state == StreamState.PROCESSING }
+    // WORKING FOR YOU (Phase 10) is a domain projection: real actor, work item, stage and check
+    // time. ONE clock value feeds every row's countdown — no per-row ticker, no stored countdown.
+    val externalWork by nowViewModel.externalWork.collectAsState()
+    val externalNow by produceState(com.virlin.app.domain.VirlinGraph.clock.now()) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            value = com.virlin.app.domain.VirlinGraph.clock.now()
+        }
+    }
+    var openExternal by remember { mutableStateOf<String?>(null) }
+    openExternal?.let { id ->
+        externalWork.firstOrNull { it.id == id }?.let { item ->
+            ExternalWorkDetailSheet(item, externalNow, nowViewModel, onDismiss = { openExternal = null })
+        } ?: run { openExternal = null }
+    }
     val readyStreams = streams.filter { it.state == StreamState.READY }
 
     // Notification routing (navigation only): body tap → WorkStream Detail; CHECK → the
@@ -320,7 +335,7 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
         Spacer(modifier = Modifier.height(24.dp))
 
         // 4. WORKING FOR YOU SECTION
-        if (processingStreams.isNotEmpty()) {
+        if (externalWork.isNotEmpty()) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -335,7 +350,7 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                             .background(Color(0xFFEDE9FE), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(processingStreams.size.toString(), fontSize = 11.sp, fontWeight = FontWeight.Black, color = Color(0xFF5B21B6))
+                        Text(externalWork.size.toString(), fontSize = 11.sp, fontWeight = FontWeight.Black, color = Color(0xFF5B21B6))
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -367,8 +382,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                processingStreams.forEachIndexed { index, stream ->
-                    ProcessingRow(stream, index)
+                externalWork.forEachIndexed { index, item ->
+                    ExternalWorkRow(item, externalNow, index, onOpen = { openExternal = it })
                 }
             }
         }

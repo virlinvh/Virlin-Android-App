@@ -102,6 +102,30 @@ class HierarchyViewModel(
     // ------------------------------------------------------------------ intents → VirlinActions
 
     fun completeTask(id: String) = dispatch("completeTask") { actions.completeTask(id) }
+
+    /**
+     * PHASE 10 — delegate this work item to an external actor. The same WorkStream becomes the
+     * Working For You item; no second task and no second identity is created.
+     */
+    fun delegate(
+        workStreamId: String,
+        workItemId: String?,
+        actor: com.virlin.app.domain.model.ExternalActor,
+        instruction: String,
+        checkInMinutes: Long?,
+        stages: List<com.virlin.app.domain.action.NewExternalStage>
+    ) = dispatch("startExternalWork") {
+        actions.startExternalWork(
+            com.virlin.app.domain.action.StartExternalWork(
+                workStreamId = workStreamId,
+                actor = actor,
+                instruction = instruction.takeIf { it.isNotBlank() },
+                workItemId = workItemId,
+                checkInMinutes = checkInMinutes,
+                stages = stages
+            )
+        )
+    }
     fun cancelTask(id: String) = dispatch("cancelTask") { actions.cancelTask(id) }
     fun setActiveTask(streamId: String, taskId: String?) = dispatch("setActiveTask") { actions.setActiveTask(streamId, taskId) }
 

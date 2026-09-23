@@ -9,6 +9,9 @@ import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
 import com.virlin.app.domain.model.EffectiveExecutionMode
+import com.virlin.app.domain.model.ExternalStage
+import com.virlin.app.domain.model.ExternalStageStatus
+import com.virlin.app.domain.model.ExternalStages
 import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.ExecutionPreference
@@ -632,6 +635,157 @@ class DefaultVirlinActions(
         val move = NeedsYouOrder.planMove(allStreams(), streamId, pref.preferredPosition) ?: return
         move.changed.forEach { saveStream(it) }
     }
+
+
+    // ================================================================ External work (Phase 10)
+
+    override suspend fun startExternalWork(request: StartExternalWork): ActionResult<WorkStream> =
+        run(request.workStreamId) { stream ->
+            if (stream.state.isTerminal) return@run ActionResult.Rejected(DomainError.StreamAlreadyDone)
+            if (stream.state != PROCESSING) requireTransition(stream, PROCESSING)?.let { return@run it }
+            val now = clock.now()
+
+            // The work item is identified by a stable id and must belong to this stream.
+            val workItemId = request.workItemId
+            if (workItemId != null) {
+                val task = getTask(workItemId) ?: return@run ActionResult.Rejected(DomainError.TaskNotFound(workItemId))
+                if (task.workStreamId != stream.id) return@run ActionResult.Rejected(DomainError.TaskNotInWorkStream)
+            }
+            if (request.stages.any { it.title.isBlank() }) return@run ActionResult.Rejected(DomainError.EmptyTitle)
+
+            // Stages describe the external process. The first one starts with the run.
+            val created = request.stages.mapIndexed { index, s ->
+                ExternalStage(
+                    id = ids.newId("stg"),
+                    workStreamId = stream.id,
+                    title = s.title.trim(),
+                    order = index,
+                    expectedMinutes = s.expectedMinutes,
+                    status = if (index == 0) ExternalStageStatus.IN_PROGRESS else ExternalStageStatus.PENDING,
+                    startedAt = if (index == 0) now else null
+                )
+            }
+            created.forEach { saveStage(it) }
+
+            // checkAt is derived once, from timestamps - never a stored countdown.
+            val checkAt = request.checkAt
+                ?: request.checkInMinutes?.let { now.plus(Duration.ofMinutes(it)) }
+                ?: created.firstOrNull()?.expected?.let { now.plus(it) }
+
+            closeOpenSession(stream.id, now)
+            val cycle = (getCurrentCycle(stream.id) ?: newCycle(stream, now)).copy(handedOffAt = now)
+            saveCycle(cycle)
+
+            val updated = stream.copy(
+                state = PROCESSING,
+                externalActorId = request.actor?.id ?: stream.externalActorId,
+                tool = request.actor?.displayName ?: stream.tool,
+                waitingFor = request.instruction ?: stream.waitingFor,
+                activeTaskId = workItemId ?: stream.activeTaskId,
+                processingStartedAt = now,
+                checkAt = checkAt,
+                snoozedUntil = null,
+                snoozeReason = null,
+                currentCycleId = cycle.id,
+                updatedAt = now
+            )
+            saveSnapshot(updated, now, reason = PROCESSING)
+            persist(updated)
+            event(stream, EventType.PROCESSING_STARTED, now, from = stream.state, to = PROCESSING,
+                cycleId = cycle.id, detail = request.instruction ?: updated.waitingFor)
+            ActionResult.Success(updated)
+        }
+
+    override suspend fun scheduleExternalCheck(streamId: String, checkAt: Instant): ActionResult<WorkStream> =
+        continueProcessing(streamId, checkAt)
+
+    override suspend fun markExternalStillRunning(streamId: String, checkAt: Instant): ActionResult<WorkStream> =
+        stillRunning(streamId, checkAt)
+
+    override suspend fun markExternalBlocked(streamId: String, reason: String?): ActionResult<WorkStream> =
+        blockStream(streamId, reason)
+
+    override suspend fun deferReadyResult(streamId: String, returnAt: Instant): ActionResult<WorkStream> =
+        resultReadyLater(streamId, returnAt)
+
+    override suspend fun markExternalResultReady(streamId: String): ActionResult<WorkStream> = run(streamId) { stream ->
+        if (stream.state != CHECK && stream.state != PROCESSING) return@run ActionResult.Rejected(DomainError.NotAnExternalCheck)
+        val now = clock.now()
+        if (stream.state == PROCESSING) requireTransition(stream, CHECK)?.let { return@run it }
+        // The external stage is finished; the human work item is NOT touched.
+        ExternalStages.current(stagesOf(stream.id), stream.id)?.let { current ->
+            saveStage(current.copy(status = ExternalStageStatus.DONE, completedAt = now))
+        }
+        val updated = stream.copy(
+            state = CHECK,
+            processingStartedAt = null,
+            checkAt = stream.checkAt ?: now,      // keep the due moment so the overdue timer stays honest
+            snoozedUntil = null,
+            snoozeReason = null,
+            updatedAt = now
+        )
+        saveSnapshot(updated, now, reason = CHECK)
+        persist(updated)
+        event(stream, EventType.RESULT_READY, now, from = stream.state, to = CHECK)
+        ActionResult.Success(updated)
+    }
+
+    override suspend fun focusExternalResult(streamId: String): ActionResult<WorkStream> {
+        val stream = repository.getStream(streamId) ?: return ActionResult.NotFound(streamId)
+        val workItemId = stream.activeTaskId
+        // Same work item, same Phase 09 focus rules - no second task, no second switching system.
+        return if (workItemId != null) {
+            when (val r = startFocus(workItemId)) {
+                is ActionResult.Success -> ActionResult.Success(r.value.focused)
+                is ActionResult.Rejected -> ActionResult.Rejected(r.reason)
+                is ActionResult.NotFound -> ActionResult.NotFound(r.streamId)
+                is ActionResult.Failure -> ActionResult.Failure(r.cause)
+            }
+        } else when (val r = resultReadyNow(streamId)) {
+            is ActionResult.Success -> ActionResult.Success(r.value.focused)
+            is ActionResult.Rejected -> ActionResult.Rejected(r.reason)
+            is ActionResult.NotFound -> ActionResult.NotFound(r.streamId)
+            is ActionResult.Failure -> ActionResult.Failure(r.cause)
+        }
+    }
+
+    override suspend fun startNextExternalStage(streamId: String, checkAt: Instant?): ActionResult<WorkStream> =
+        run(streamId) { stream ->
+            if (stream.state.isTerminal) return@run ActionResult.Rejected(DomainError.StreamAlreadyDone)
+            val now = clock.now()
+            val all = stagesOf(stream.id)
+            if (all.isEmpty()) return@run ActionResult.Rejected(DomainError.NotExternalWork)
+            // The stage to start is the one that is merely PLANNED; a stage still running is
+            // completed first and its successor begins. Nothing is ever skipped.
+            val current = ExternalStages.current(all, stream.id)
+            val next = when {
+                current == null -> null
+                current.status == ExternalStageStatus.PENDING -> current
+                else -> ExternalStages.next(all, stream.id, current)
+            } ?: return@run ActionResult.Rejected(DomainError.NoNextStage)
+            if (stream.state != PROCESSING) requireTransition(stream, PROCESSING)?.let { return@run it }
+
+            current?.takeIf { it.id != next.id && it.status != ExternalStageStatus.DONE }
+                ?.let { saveStage(it.copy(status = ExternalStageStatus.DONE, completedAt = now)) }
+            saveStage(next.copy(status = ExternalStageStatus.IN_PROGRESS, startedAt = now))
+
+            val due = checkAt ?: next.expected?.let { now.plus(it) }
+            closeOpenSession(stream.id, now)
+            val updated = stream.copy(
+                state = PROCESSING,
+                processingStartedAt = now,
+                checkAt = due,
+                snoozedUntil = null,
+                snoozeReason = null,
+                updatedAt = now
+            )
+            saveSnapshot(updated, now, reason = PROCESSING)
+            persist(updated)
+            event(stream, EventType.PROCESSING_STARTED, now, from = stream.state, to = PROCESSING, detail = next.title)
+            ActionResult.Success(updated)
+        }
+
+    override suspend fun externalStages(streamId: String): List<ExternalStage> = repository.getStages(streamId)
 
     // ------------------------------------------------------------------ Shared mechanics
 

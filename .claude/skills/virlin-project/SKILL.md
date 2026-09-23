@@ -214,6 +214,16 @@ Uses compact processing rows and subtle animated processing indicators.
 
 PROCESSING does not consume human Focus.
 
+**Phase 10 — external execution (IMPLEMENTED).** A Working For You item is a real external run:
+actor (`ExternalActor`, stable id on the WorkStream), the exact work item, the instruction it was
+given, the current stage and a countdown derived from `checkAt - now`. Zero-to-many runs may
+execute at once, ordered soonest check first (never by the Needs You ranking). When the check time
+arrives the SAME item becomes Needs You — CHECK → RESULT READY (stays attention until focused or
+deferred) / STILL RUNNING (returns here with a new check time) / BLOCKED. Stages are tracking
+metadata for the external process, never hierarchy Tasks, and never advance by themselves:
+START NEXT STAGE is an explicit choice. FOCUS NOW hands the exact work item to Phase 09 focus.
+Virlin TRACKS external work — it runs no external tool and polls no API.
+
 ### When You're Free
 
 Represents Ready work.

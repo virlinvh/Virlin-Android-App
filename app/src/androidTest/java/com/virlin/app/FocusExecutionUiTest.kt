@@ -132,7 +132,14 @@ class FocusExecutionUiTest {
         // FLOW G: FOCUS NEXT starts the OFFERED leaf (the deterministic next candidate), on purpose.
         val offered = runBlocking { (actions().nextTaskCandidate(WORK_STREAM) as ActionResult.Success).value }!!
         touch(FocusNextTag, 1500)
-        composeRule.waitUntil(5_000) { focusedStream()?.activeTaskId == offered.id }
+        runCatching { composeRule.waitUntil(5_000) { focusedStream()?.activeTaskId == offered.id } }
+            .onFailure {
+                throw AssertionError(
+                    "FOCUS NEXT did not start the offered leaf. offered=${offered.id}/${offered.title} " +
+                        "focused=${focusedStream()?.id}/${focusedStream()?.activeTaskId} " +
+                        "state=${repo().streams.value.first { s -> s.id == WORK_STREAM }.state}"
+                )
+            }
         assert(runBlocking { repo().getFocusSessions(WORK_STREAM) }.count { it.isOpen } == 1)
 
         // FLOW H: completing again and choosing DONE FOR NOW leaves nothing focused.

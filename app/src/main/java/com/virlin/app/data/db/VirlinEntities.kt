@@ -96,7 +96,28 @@ data class WorkStreamEntity(
     val updatedAt: Instant,
     val completedAt: Instant?,
     /** v10: explicit Needs You position (1-based) while in CHECK; null = unranked. */
-    val attentionRank: Int? = null
+    val attentionRank: Int? = null,
+    /** v12: stable id of the external actor doing the work (Phase 10); null = unknown/none. */
+    val externalActorId: String? = null
+)
+
+/**
+ * v12 — one planned step of an external run (Phase 10). Tracking metadata for the external
+ * process, NOT a hierarchy Task: stages never appear in Project/WorkStream progress.
+ * `sortOrder` is the explicit ordering truth. No foreign key, matching the rest of the schema:
+ * a stale stage is ignored, never a crash.
+ */
+@Entity(tableName = "external_stages", indices = [Index("workStreamId")])
+data class ExternalStageEntity(
+    @PrimaryKey val id: String,
+    val workStreamId: String,
+    val title: String,
+    @ColumnInfo(name = "sortOrder") val order: Int,
+    /** Expected duration in whole minutes; `checkAt = startedAt + expected` when it starts. */
+    val expectedMinutes: Long?,
+    val status: String,
+    val startedAt: Instant?,
+    val completedAt: Instant?
 )
 
 @Entity(

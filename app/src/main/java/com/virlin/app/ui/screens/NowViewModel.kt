@@ -91,6 +91,46 @@ class NowViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
             repository.streams.value.filter { it.state == com.virlin.app.domain.model.WorkStreamState.CHECK }.mapNotNull { s -> s.checkAt?.let { s.id to it } }.toMap())
 
+    /**
+     * WORKING FOR YOU (Phase 10): the external runs projected from the domain — soonest check
+     * first. The same WorkStream leaves this list and appears in Needs You when its check time
+     * arrives; nothing is duplicated, and no countdown is stored anywhere.
+     */
+    val externalWork: StateFlow<List<com.virlin.app.domain.external.ExternalWorkItem>> =
+        combine(repository.streams, repository.stages, repository.projects, repository.tasks) { s, st, p, t ->
+            com.virlin.app.domain.external.ExternalWork.workingForYou(s, clock.now(), st, p, t)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            com.virlin.app.domain.external.ExternalWork.workingForYou(
+                repository.streams.value, clock.now(), repository.stages.value,
+                repository.projects.value, repository.tasks.value))
+
+    /** Stages of one external run, for the detail surface. Read through the action layer. */
+    suspend fun stagesOf(streamId: String) = actions.externalStages(streamId)
+
+    /** Delegate work to an external actor (Phase 10 creation path). */
+    fun startExternalWork(request: com.virlin.app.domain.action.StartExternalWork) {
+        viewModelScope.launch { log("startExternalWork", actions.startExternalWork(request)) }
+    }
+
+    /** START NEXT STAGE — the next planned external step begins; back to Working For You. */
+    fun startNextExternalStage(streamId: String) {
+        viewModelScope.launch { log("startNextExternalStage", actions.startNextExternalStage(streamId)) }
+    }
+
+    /** CHECK -> "result ready": stays human attention until focused or deferred. */
+    fun markExternalResultReady(streamId: String) {
+        viewModelScope.launch { log("markExternalResultReady", actions.markExternalResultReady(streamId)) }
+    }
+
+    /** FOCUS NOW on a ready external result (Phase 09 focus rules, same work item). */
+    fun focusExternalResult(streamId: String) {
+        viewModelScope.launch { log("focusExternalResult", actions.focusExternalResult(streamId)) }
+    }
+
+    private fun log(name: String, result: ActionResult<*>) {
+        if (result !is ActionResult.Success) Log.w(TAG, "$name -> $result")
+    }
+
     /** The single lightweight chooser open on Now, if any. Never more than one at a time. */
     sealed interface Chooser {
         val streamId: String

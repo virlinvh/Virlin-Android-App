@@ -6,6 +6,7 @@ import com.virlin.app.data.db.VirlinMappers.toEntity
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.ExternalStage
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
@@ -38,7 +39,8 @@ class RoomWorkStreamRepository private constructor(
     initialStreams: List<WorkStream>,
     initialProjects: List<Project>,
     initialTasks: List<Task>,
-    initialCaptures: List<CaptureItem>
+    initialCaptures: List<CaptureItem>,
+    initialStages: List<ExternalStage>
 ) : WorkStreamRepository {
 
     private val lock = Mutex()
@@ -51,6 +53,9 @@ class RoomWorkStreamRepository private constructor(
     override val tasks: StateFlow<List<Task>> = _tasks.asStateFlow()
     private val _captures = MutableStateFlow(initialCaptures)
     override val captures: StateFlow<List<CaptureItem>> = _captures.asStateFlow()
+    private val _stages = MutableStateFlow(initialStages)
+    override val stages: StateFlow<List<ExternalStage>> = _stages.asStateFlow()
+    override suspend fun getStages(workStreamId: String) = db.externalStages().byStream(workStreamId).map { it.toDomain() }
     override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()
     override suspend fun getNoteByCaptureId(captureItemId: String) =
         db.noteDocuments().byCaptureId(captureItemId)?.toDomain()
@@ -93,13 +98,14 @@ class RoomWorkStreamRepository private constructor(
         if (writer.touchedStreams) _streams.value = db.workStreams().all().map { it.toDomain() }
         if (writer.touchedProjects) _projects.value = db.projects().all().map { it.toDomain() }
         if (writer.touchedTasks) _tasks.value = db.tasks().all().map { it.toDomain() }
+        if (writer.touchedStages) _stages.value = db.externalStages().all().map { it.toDomain() }
         if (writer.touchedCaptures) _captures.value = db.captures().all().map { it.toDomain() }.newestFirst()
         result
     }
 
     /** Reads inside the transaction see the transaction's own writes — Room guarantees that. */
     private inner class Writer : WorkStreamWriter {
-        var touchedStreams = false; var touchedProjects = false; var touchedTasks = false; var touchedCaptures = false
+        var touchedStreams = false; var touchedProjects = false; var touchedTasks = false; var touchedCaptures = false; var touchedStages = false
 
         override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()
         override suspend fun saveCapture(capture: CaptureItem) { db.captures().upsert(capture.toEntity()); touchedCaptures = true }
@@ -145,6 +151,8 @@ class RoomWorkStreamRepository private constructor(
             val seq = db.focusSessions().byId(session.id)?.seq ?: (db.focusSessions().maxSeq() + 1)
             db.focusSessions().upsert(session.toEntity(seq))
         }
+        override suspend fun stagesOf(workStreamId: String) = db.externalStages().byStream(workStreamId).map { it.toDomain() }
+        override suspend fun saveStage(stage: ExternalStage) { db.externalStages().upsert(stage.toEntity()); touchedStages = true }
         override suspend fun saveSnapshot(snapshot: ContextSnapshot) { db.snapshots().insert(snapshot.toEntity(db.snapshots().maxSeq() + 1)) }
         override suspend fun appendEvent(event: WorkStreamEvent) { db.events().insert(event.toEntity(db.events().maxSeq() + 1)) }
     }
@@ -156,7 +164,8 @@ class RoomWorkStreamRepository private constructor(
             val projects = db.projects().all().map { it.toDomain() }
             val tasks = db.tasks().all().map { it.toDomain() }
             val captures = db.captures().all().map { it.toDomain() }.newestFirst()
-            return RoomWorkStreamRepository(db, streams, projects, tasks, captures)
+            val stages = db.externalStages().all().map { it.toDomain() }
+            return RoomWorkStreamRepository(db, streams, projects, tasks, captures, stages)
         }
     }
 }

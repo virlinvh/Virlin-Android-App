@@ -57,6 +57,14 @@ interface PriorityPreferenceDao {
 }
 
 @Dao
+interface ExternalStageDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(s: ExternalStageEntity)
+    @Query("SELECT * FROM external_stages ORDER BY workStreamId, sortOrder, id") suspend fun all(): List<ExternalStageEntity>
+    @Query("SELECT * FROM external_stages WHERE workStreamId = :workStreamId ORDER BY sortOrder, id")
+    suspend fun byStream(workStreamId: String): List<ExternalStageEntity>
+}
+
+@Dao
 interface CaptureDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(c: CaptureEntity)
     /** Newest first by persisted createdAt (never by insertion order). */
@@ -155,9 +163,10 @@ interface VoiceDocumentDao {
         ProjectEntity::class, WorkStreamEntity::class, TaskEntity::class, CycleEntity::class,
         FocusSessionEntity::class, ContextSnapshotEntity::class, EventEntity::class, MetaEntity::class,
         CaptureEntity::class, NoteDocumentEntity::class, PromptDocumentEntity::class,
-        AttachmentDocumentEntity::class, VoiceDocumentEntity::class, PriorityPreferenceEntity::class
+        AttachmentDocumentEntity::class, VoiceDocumentEntity::class, PriorityPreferenceEntity::class,
+        ExternalStageEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
@@ -174,6 +183,7 @@ abstract class VirlinDatabase : RoomDatabase() {
     abstract fun noteDocuments(): NoteDocumentDao
     abstract fun promptDocuments(): PromptDocumentDao
     abstract fun priorityPreferences(): PriorityPreferenceDao
+    abstract fun externalStages(): ExternalStageDao
     abstract fun attachmentDocuments(): AttachmentDocumentDao
     abstract fun voiceDocuments(): VoiceDocumentDao
 
@@ -308,7 +318,25 @@ abstract class VirlinDatabase : RoomDatabase() {
                 )
             }
         }
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
+        /**
+         * v11 -> v12: external work (Phase 10). Adds `workstreams.externalActorId` and the
+         * `external_stages` table. Purely additive — every existing row, check time, rank and
+         * priority policy is untouched.
+         */
+        val MIGRATION_11_12: Migration = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `workstreams` ADD COLUMN `externalActorId` TEXT")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `external_stages` (" +
+                        "`id` TEXT NOT NULL, `workStreamId` TEXT NOT NULL, `title` TEXT NOT NULL, " +
+                        "`sortOrder` INTEGER NOT NULL, `expectedMinutes` INTEGER, `status` TEXT NOT NULL, " +
+                        "`startedAt` INTEGER, `completedAt` INTEGER, PRIMARY KEY(`id`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_external_stages_workStreamId` ON `external_stages` (`workStreamId`)")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

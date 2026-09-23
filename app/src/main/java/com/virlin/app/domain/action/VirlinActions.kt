@@ -122,6 +122,51 @@ interface VirlinActions {
      */
     suspend fun deferReturn(streamId: String, returnAt: Instant): ActionResult<WorkStream>
 
+    // ================================================================ External work (Phase 10)
+
+    /**
+     * Delegate work to an external actor: the stream becomes PROCESSING (Working For You) with a
+     * stable actor identity, the instruction it was given, the exact work item it concerns and a
+     * derived `checkAt`. Optional [StartExternalWork.stages] describe the external process; the
+     * first one starts immediately. Stages are tracking metadata, never hierarchy Tasks.
+     */
+    suspend fun startExternalWork(request: StartExternalWork): ActionResult<WorkStream>
+
+    /** Change when to look again without changing anything else (same run, same stage). */
+    suspend fun scheduleExternalCheck(streamId: String, checkAt: Instant): ActionResult<WorkStream>
+
+    /**
+     * CHECK -> "the result is ready": the current stage is completed and the item STAYS human
+     * attention (Needs You) until the user focuses it or defers it. It never completes the
+     * hierarchy Task - external completion is not human completion.
+     */
+    suspend fun markExternalResultReady(streamId: String): ActionResult<WorkStream>
+
+    /** CHECK -> "still running": same run, same stage, new check time, back to Working For You. */
+    suspend fun markExternalStillRunning(streamId: String, checkAt: Instant): ActionResult<WorkStream>
+
+    /** CHECK -> "blocked / needs input": human attention, with the reason preserved. */
+    suspend fun markExternalBlocked(streamId: String, reason: String? = null): ActionResult<WorkStream>
+
+    /** "I will look at the ready result later" - attention deferred, never back to PROCESSING. */
+    suspend fun deferReadyResult(streamId: String, returnAt: Instant): ActionResult<WorkStream>
+
+    /**
+     * FOCUS NOW on an external result: focuses the exact work item when the run has one (so the
+     * Phase 09 switch rules apply unchanged), otherwise the stream itself. Creates no second Task.
+     */
+    suspend fun focusExternalResult(streamId: String): ActionResult<WorkStream>
+
+    /**
+     * START NEXT STAGE: complete the current stage, start the next one in explicit order and go
+     * back to PROCESSING with `checkAt = now + expected` (or [checkAt] when the user overrides).
+     * Rejected with [DomainError.NoNextStage] when the final stage is done.
+     */
+    suspend fun startNextExternalStage(streamId: String, checkAt: Instant? = null): ActionResult<WorkStream>
+
+    /** The stages of one external run, in explicit order. */
+    suspend fun externalStages(streamId: String): List<com.virlin.app.domain.model.ExternalStage>
+
     /** No active processing; resumable when useful. Clears obsolete timers. */
     suspend fun markReady(streamId: String): ActionResult<WorkStream>
 

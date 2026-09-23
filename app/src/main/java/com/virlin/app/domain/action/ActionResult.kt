@@ -53,6 +53,12 @@ sealed interface DomainError {
     data object TaskNotInWorkStream : DomainError
     data object InvalidEffort : DomainError
 
+    // ---- External work (Phase 10)
+    /** START NEXT STAGE was asked for but the run has no stage left to start. */
+    data object NoNextStage : DomainError
+    /** The action needs an external run (a stream with an actor / PROCESSING context). */
+    data object NotExternalWork : DomainError
+
     // ---- Execution responsibility
     /** Hand Off / external-processing verbs require effective EXTERNAL. */
     data object NotExternalExecution : DomainError

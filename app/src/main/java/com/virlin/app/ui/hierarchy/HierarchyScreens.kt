@@ -301,6 +301,7 @@ fun TaskDetailScreen(taskId: String?, navController: NavController, vm: Hierarch
     LaunchedEffect(task.id, s.streams) { focused = vm.focusedOn(task) }
     var adding by remember { mutableStateOf(false) }
     var confirmCancel by remember { mutableStateOf(false) }
+    var delegating by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(VirlinColors.Background).testTag(TaskDetailTag),
@@ -364,6 +365,9 @@ fun TaskDetailScreen(taskId: String?, navController: NavController, vm: Hierarch
                 if (!task.status.isTerminal && stream != null) {
                     Spacer(Modifier.width(10.dp))
                     AddButton("FOCUS", onClick = { vm.focusWorkItem(task.id) }, tag = FocusWorkItemTag)
+                    // Phase 10: hand this exact work item to an external actor (Working For You).
+                    Spacer(Modifier.width(10.dp))
+                    AddButton("DELEGATE", onClick = { delegating = true }, tag = DelegateButtonTag)
                 }
             }
             task.notes?.let { Spacer(Modifier.height(22.dp)); SectionLabel("NOTES"); Spacer(Modifier.height(4.dp)); Text(it, fontSize = 13.sp, color = VirlinColors.TextSecondary) }
@@ -376,6 +380,12 @@ fun TaskDetailScreen(taskId: String?, navController: NavController, vm: Hierarch
         }
     }
     if (adding) AddTaskDialog("New subtask under ${task.title}", onDismiss = { adding = false }) { t, e -> vm.addSubtask(task.id, t, e); adding = false }
+    if (delegating && stream != null) {
+        DelegateDialog(task.title, onDismiss = { delegating = false }) { actor, instruction, minutes, stages ->
+            vm.delegate(stream.id, task.id, actor, instruction, minutes, stages)
+            delegating = false
+        }
+    }
     if (confirmCancel) Dialog(onDismissRequest = { confirmCancel = false }) {
         Column(Modifier.background(VirlinColors.Background, RoundedCornerShape(20.dp)).padding(20.dp)) {
             Text("Cancel “${task.title}”?", fontSize = 15.sp, fontWeight = FontWeight.Black, color = VirlinColors.TextPrimary)

@@ -62,8 +62,14 @@ data class WorkStream(
     val id: String,
     val title: String,
     val projectId: String? = null,
-    /** External tool / working context, e.g. "Claude", "Codex". */
+    /** External tool / working context, e.g. "Claude", "Codex". Display name only. */
     val tool: String? = null,
+    /**
+     * Stable identity of the external actor doing the work (Phase 10), e.g. `claude_code`.
+     * Resolve for display with `ExternalActor.resolve(externalActorId, tool)`; [tool] stays the
+     * free-text fallback so older rows keep rendering.
+     */
+    val externalActorId: String? = null,
     /**
      * Stored execution preference (INHERIT / HUMAN / EXTERNAL). Resolve with
      * [ExecutionModeResolver] — never treat this alone as current Hand Off eligibility when

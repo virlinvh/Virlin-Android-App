@@ -111,10 +111,15 @@ class AttentionIntentController(
             val active = stream?.activeTaskId
             if (active != null) {
                 val taskTitle = repository.getTask(active)?.title ?: "Task"
-                run(streamId, { "$taskTitle completed" }) { actions.completeTask(active) }
-                // Phase 09: offer what is next — FOCUS NEXT requires intent, it never auto-starts.
-                val next = (actions.nextTaskCandidate(streamId) as? ActionResult.Success)?.value
-                _completedFocus.value = CompletedFocus(streamId, taskTitle, next?.id, next?.title)
+                // Completion is AWAITED here: asking for the next candidate before the write lands
+                // would offer the item that was just completed, and FOCUS NEXT would be rejected.
+                val completed = actions.completeTask(active)
+                report(title(streamId), completed) { "$taskTitle completed" }
+                if (completed is ActionResult.Success) {
+                    // Phase 09: offer what is next — FOCUS NEXT requires intent, it never auto-starts.
+                    val next = (actions.nextTaskCandidate(streamId) as? ActionResult.Success)?.value
+                    _completedFocus.value = CompletedFocus(streamId, taskTitle, next?.id, next?.title)
+                }
             } else _pendingWorkStreamCompletion.value = streamId
         }
     }
