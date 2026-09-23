@@ -645,6 +645,45 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## PHASE 08 COMPLETE — WORK HIERARCHY FOUNDATION (2026-09-23, branch `feature/needs-you-priority-ranking`)
+
+**The permanent model.** `PROJECT → WORKSTREAM → WORK ITEM → WORK ITEM → …`
+
+Most of this foundation ALREADY EXISTED (Passes 2–3) and was verified rather than rebuilt; Phase 08
+closed the real gaps. **No schema change was needed: the database stays at v11, no migration.**
+
+- **Recursive work item:** `Task` with `parentTaskId` (null = root), `order` (sibling ordering),
+  stable ids, owned by a WorkStream or standalone in a Project. There is ONE table for every depth —
+  no Subtask/Sub-subtask entities — and no depth limit (a 25-deep chain is tested).
+- **Ordering:** explicit `order`, auto-assigned per sibling list on create; never `createdAt`, row
+  order or title.
+- **Completion:** checklist semantics (`TODO/IN_PROGRESS/DONE/CANCELLED`), completion is per item and
+  a parent is NEVER auto-completed by its children. `CANCELLED` is terminal but not completed.
+- **Progress is DERIVED, never stored:** `ProgressCalculator` counts EXECUTABLE LEAVES only, so
+  containers are never double-counted. WorkStream = leaves of its root tasks; Project = leaves across
+  its WorkStreams plus standalone task trees (real leaf counts, not an average of percentages);
+  a scope with no leaves is `Unstructured` ("No structured progress"), never a misleading 0%.
+- **NEXT:** `nextTaskCandidate` = the first open leaf in depth-first sibling order; parents are never
+  candidates, terminal items are skipped, and it is null when nothing is open.
+- **Current Focus linkage:** `WorkStream.activeTaskId` targets a stable WorkItem id — renaming never
+  breaks focus — and `activePath` resolves the ancestry (leaf-first; the UI reverses it for
+  breadcrumbs). The frozen Current Focus card was NOT redesigned.
+- **UI:** Streams → Project Detail → WorkStream Detail → Task Detail, with a tree that expands and
+  collapses (presentation state only), bounded indentation (`MaxIndentDepth = 3`), per-row
+  completion control with a 40dp target and spoken state, breadcrumbs, and progress shown as a
+  percentage at Project level and counts deeper down.
+- **Phase 08 additions:** quick creation of a **Project** (`+ PROJECT` in Streams) and a
+  **WorkStream** (`+ WORKSTREAM` in Project Detail) through a one-field dialog and the same
+  `VirlinActions` the Agent uses — previously only the Agent could create them. Task and Subtask
+  creation already existed.
+- **Attention untouched:** Needs You / Working For You still attach to the WorkStream (not to a
+  WorkItem); rank, priority policies, `checkAt`, Check Again and sorting are unchanged.
+- **Tests:** `WorkHierarchyTest` (8: NEXT traversal incl. end-of-subtree and skipping, focus by id,
+  1 project × 10 streams × 120 items projected in one pass with correct roll-up, 25-deep chain,
+  empty scopes) on top of the existing `StructureActionsTest` (37) and `HierarchyPresentationTest`
+  (13); instrumented `WorkHierarchyCreationUiTest` (create project → workstream → task → subtask →
+  deeper → complete → progress follows, parents not auto-completed).
+
 ## NEEDS YOU PHASE 07 COMPLETE — local priority persistence (2026-09-23, branch `feature/needs-you-priority-ranking`)
 
 Durable Needs You priority policies now survive process death in the app's own Room database.

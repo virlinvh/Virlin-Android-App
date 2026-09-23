@@ -35,6 +35,10 @@ fun taskCompleteTag(id: String) = "task_complete_$id"
 const val AddTaskButtonTag = "add_task_button"
 const val AddTaskTitleTag = "add_task_title"
 const val AddTaskConfirmTag = "add_task_confirm"
+const val AddNameTitleTag = "add_name_title"
+const val AddNameConfirmTag = "add_name_confirm"
+const val AddProjectButtonTag = "add_project_button"
+const val AddWorkStreamButtonTag = "add_workstream_button"
 
 private val Hairline = VirlinColors.TextPrimary.copy(alpha = 0.08f)
 /** Indentation is capped so deep trees stay usable; hierarchy is still conveyed by order + chevrons. */
@@ -151,19 +155,49 @@ fun SectionLabel(text: String) {
 }
 
 @Composable
-fun AddButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun AddButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, tag: String = AddTaskButtonTag) {
     Text(
         label, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 0.8.sp, color = VirlinColors.TextPrimary,
         modifier = modifier
             .background(Color.White, RoundedCornerShape(50))
             .border(1.dp, Hairline, RoundedCornerShape(50))
-            .testTag(AddTaskButtonTag)
+            .testTag(tag)
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     )
 }
 
 /** Lightweight creation: title + optional estimate in minutes. Ownership is inherited by the caller. */
+/**
+ * Fast creation of a named container (Project / WorkStream): ONE field, Cancel / Create.
+ * Deliberately not a wizard — creation must take a second.
+ */
+@Composable
+fun AddNameDialog(title: String, placeholder: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().background(VirlinColors.Background, RoundedCornerShape(20.dp)).padding(20.dp)) {
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Black, color = VirlinColors.TextPrimary)
+            Spacer(Modifier.height(14.dp))
+            Field(text, { text = it }, placeholder, AddNameTitleTag, VirlinColors.TextPrimary)
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                Text("Cancel", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = VirlinColors.TextSecondary,
+                    modifier = Modifier.clickable(role = Role.Button, onClick = onDismiss).padding(12.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Create", fontSize = 12.sp, fontWeight = FontWeight.Black, color = Color.White,
+                    modifier = Modifier
+                        .background(VirlinColors.TextPrimary, RoundedCornerShape(50))
+                        .testTag(AddNameConfirmTag)
+                        .clickable(role = Role.Button) { if (text.isNotBlank()) { onConfirm(text.trim()); onDismiss() } }
+                        .padding(horizontal = 18.dp, vertical = 12.dp)
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun AddTaskDialog(title: String, onDismiss: () -> Unit, onConfirm: (String, Duration?) -> Unit) {
     var text by remember { mutableStateOf("") }

@@ -71,6 +71,7 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
     val standalone = HierarchyPresentation.rows(s.tasks.filter { it.projectId == project.id && it.workStreamId == null }, null, null, s.expanded)
     val progress = remember(s) { ProgressCalculator.ofProject(s.tasks, s.streams, project.id).toLabel() }
     var adding by remember { mutableStateOf(false) }
+    var addingStream by remember { mutableStateOf(false) }
     var editingIcon by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     if (editingIcon) {
@@ -148,6 +149,10 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
             StreamSummaryRow(sum) { navController.navigate(workStreamDetail(ws.id)) }
         }
         item {
+            Spacer(Modifier.height(10.dp))
+            AddButton("+ WORKSTREAM", onClick = { addingStream = true }, tag = AddWorkStreamButtonTag)
+        }
+        item {
             Spacer(Modifier.height(20.dp)); SectionLabel("STANDALONE TASKS"); Spacer(Modifier.height(6.dp))
             if (standalone.isEmpty()) Text("None", fontSize = 13.sp, color = VirlinColors.TextTertiary)
         }
@@ -157,6 +162,7 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
         item { Spacer(Modifier.height(16.dp)); AddButton("+ ADD TASK", onClick = { adding = true }) }
     }
     if (adding) AddTaskDialog("New task in ${project.title}", onDismiss = { adding = false }) { t, e -> vm.addStandaloneTask(project.id, t, e); adding = false }
+    if (addingStream) AddNameDialog("New WorkStream in ${project.title}", "WorkStream name", onDismiss = { addingStream = false }) { vm.addWorkStream(project.id, it) }
 }
 
 @Composable

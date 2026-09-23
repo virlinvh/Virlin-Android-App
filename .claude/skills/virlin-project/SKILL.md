@@ -165,6 +165,15 @@ colours are restored on exit. Exiting (X or Android Back) returns to Now; the No
 
 Tapping the large timer inside this screen does nothing by design.
 
+### Work hierarchy (Phase 08)
+
+`PROJECT → WORKSTREAM → WORK ITEM → WORK ITEM → …` — one recursive `Task` entity (`parentTaskId`,
+`order`), stable ids, no per-depth types and no depth limit. Progress is DERIVED from executable
+leaves only (never stored, never an average of percentages); empty scopes read "No structured
+progress", never 0%. A parent is never auto-completed by its children. Creation: `+ PROJECT` in
+Streams, `+ WORKSTREAM` in Project Detail, `+ TASK` / `+ SUBTASK` in the tree — all through
+`VirlinActions`. Attention (Needs You / Working For You) stays attached to the WorkStream.
+
 ### Needs You
 
 **Sort / view control (2026-09-23).** A `tune` glyph beside the "Needs You" heading switches the

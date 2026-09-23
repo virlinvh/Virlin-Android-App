@@ -104,6 +104,14 @@ class HierarchyViewModel(
     fun cancelTask(id: String) = dispatch("cancelTask") { actions.cancelTask(id) }
     fun setActiveTask(streamId: String, taskId: String?) = dispatch("setActiveTask") { actions.setActiveTask(streamId, taskId) }
 
+    /** Quick creation (Phase 08): a Project, and a WorkStream inside one. Same action layer as the Agent. */
+    fun addProject(title: String) = dispatch("createProject") {
+        actions.createProject(com.virlin.app.domain.action.CreateProject(title = title))
+    }
+    fun addWorkStream(projectId: String, title: String) = dispatch("createWorkStream") {
+        actions.createWorkStream(com.virlin.app.domain.action.CreateWorkStream(title = title, projectId = projectId))
+    }
+
     fun addTask(streamId: String, title: String, effort: Duration?) = dispatch("addTask") {
         actions.createTask(CreateTask(title = title, workStreamId = streamId, estimatedEffort = effort))
     }
