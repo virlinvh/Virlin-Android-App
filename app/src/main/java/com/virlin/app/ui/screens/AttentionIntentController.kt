@@ -79,6 +79,8 @@ class AttentionIntentController(
     override fun resultReadyLater(streamId: String, minutes: Long) { dismissChooser(); run(streamId, { t -> "$t result ready · remind in ${minutes}m" }) { actions.resultReadyLater(streamId, at(minutes)) } }
     override fun deferReturn(streamId: String, minutes: Long) { dismissChooser(); run(streamId, { t -> "$t · back in ${minutes}m" }) { actions.deferReturn(streamId, at(minutes)) } }
     override fun block(streamId: String) { dismissChooser(); run(streamId, { t -> "$t blocked" }) { actions.blockStream(streamId) } }
+    /** "Not now": keep the item, stop asking — the existing READY transition, nothing new. */
+    fun markReady(streamId: String) { dismissChooser(); run(streamId, { t -> "$t is ready when you are" }) { actions.markReady(streamId) } }
     fun focus(streamId: String) = run(streamId, { t -> "Focused $t" }) { actions.focusStream(streamId) }
     fun checkDue(streamId: String) = run(streamId, { null }) { actions.checkDue(streamId) }
     fun continueProcessing(streamId: String, minutes: Long) = run(streamId, { t -> "$t · check in ${minutes}m" }) { actions.continueProcessing(streamId, at(minutes)) }

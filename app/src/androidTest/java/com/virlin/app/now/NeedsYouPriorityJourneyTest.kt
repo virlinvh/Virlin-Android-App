@@ -72,7 +72,7 @@ class NeedsYouPriorityJourneyTest {
         composeRule.waitUntil(5_000) { composeRule.onAllNodesWithTag(priorityPositionTag(2), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         assertEquals(before.size, (1..before.size).count { composeRule.onAllNodesWithTag(priorityPositionTag(it), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() })   // N
         assertTrue(composeRule.onAllNodesWithTag(priorityPositionTag(before.size + 1), useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
-        touch(priorityPositionTag(2), 400); touch(PriorityEditorSaveTag, 1200)
+        touch(priorityPositionTag(2), 1200); touch(com.virlin.app.ui.screens.NeedsYouControlCloseTag, 900)
 
         val after = needsYou()
         val expected = before.toMutableList().also { it.add(1, it.removeAt(it.lastIndex)) }.map { it.id }
@@ -89,10 +89,10 @@ class NeedsYouPriorityJourneyTest {
 
         // D: third → 1, then C: first → last
         val third = after[2]
-        touch(needsYouRankTag(third.id), 900); touch(priorityPositionTag(1), 400); touch(PriorityEditorSaveTag, 1200)
+        touch(needsYouRankTag(third.id), 900); touch(priorityPositionTag(1), 1200); touch(com.virlin.app.ui.screens.NeedsYouControlCloseTag, 900)
         assertEquals(third.id, needsYou().first().id)
         val first = needsYou().first()
-        touch(needsYouRankTag(first.id), 900); touch(priorityPositionTag(needsYou().size), 400); touch(PriorityEditorSaveTag, 1200)
+        touch(needsYouRankTag(first.id), 900); touch(priorityPositionTag(needsYou().size), 1200); touch(com.virlin.app.ui.screens.NeedsYouControlCloseTag, 900)
         val finalOrder = needsYou()
         assertEquals(first.id, finalOrder.last().id)
         assertEquals((1..finalOrder.size).toList(), finalOrder.map { it.attentionRank })

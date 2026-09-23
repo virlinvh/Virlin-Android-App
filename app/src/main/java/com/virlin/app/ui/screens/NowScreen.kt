@@ -291,6 +291,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
             val nowTick = rememberSecondTicker()
             // Queue-position selector (Phase 2): one sheet for the section, opened from a card's badge.
             var positionPicker by remember { mutableStateOf<String?>(null) }
+            // Which item's control sheet is open, and which tab it opened on. Transient UI state.
+            var control by remember { mutableStateOf<Pair<String, NeedsYouControlTab>?>(null) }
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 needsYouStreams.forEachIndexed { index, stream ->
                     // Keyed by id so a card keeps its own animation state when it moves in the queue.
@@ -303,18 +305,55 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                             now = nowTick,
                             // Identity is resolved through the project (Project.iconPath), never stored on the stream.
                             project = com.virlin.app.domain.model.ProjectIdentity.resolve(stream.projectId, projects),
-                            onFocus = nowViewModel::focus,
-                            onCheck = nowViewModel::openCheck,
+                            // Phase 2: BOTH halves of the pill open the one control sheet; they
+                            // differ only in the tab it opens on. Nothing is decided on the card.
+                            onFocus = { id -> control = id to NeedsYouControlTab.CHECK },
+                            onCheck = { id -> control = id to NeedsYouControlTab.CHECK },
                             onDefer = { id -> nowViewModel.deferReturn(id, 5) },
                             // Effective rank = position in the domain queue (never the display index).
                             position = needsYouQueue.indexOf(stream.id).let { if (it < 0) null else it + 1 },
                             total = needsYouStreams.size,
-                            onChangePosition = { id -> positionPicker = id }
+                            onChangePosition = { id -> control = id to NeedsYouControlTab.PRIORITY }
                         )
                     }
                 }
             }
-            // Priority editor (Phase 04): preview state inside the sheet; the queue changes on SAVE only.
+            // The unified control sheet (Phase 2): one surface for position and check decisions.
+            // It owns no domain logic — every row below calls an existing intent.
+            control?.let { (id, initialTab) ->
+                val item = needsYouStreams.firstOrNull { it.id == id }
+                val rank = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 }
+                NeedsYouControlSheet(
+                    stream = item,
+                    project = item?.let { com.virlin.app.domain.model.ProjectIdentity.resolve(it.projectId, projects) },
+                    kind = attention[id],
+                    position = rank,
+                    total = needsYouQueue.size,
+                    dueAt = dueAt[id] ?: waitingSince[id],
+                    now = nowTick,
+                    initialTab = initialTab,
+                    // Existing queue path; the sheet stays open so one visit can do both things.
+                    onMoveToPosition = { pos -> nowViewModel.reorderNeedsYou(id, pos) },
+                    onOpenPriorityPolicy = { control = null; positionPicker = id },
+                    onAction = { action ->
+                        // Every branch is an EXISTING transition out of CHECK. Actions that take the
+                        // item out of Needs You close the sheet; the list updates from the domain.
+                        when (action) {
+                            is NeedsYouControlAction.FocusNow ->
+                                if (attention[id] == AttentionKind.CHECK_DUE) nowViewModel.resultReadyNow(id) else nowViewModel.focus(id)
+                            is NeedsYouControlAction.StillRunning -> nowViewModel.stillRunning(id, action.minutes)
+                            is NeedsYouControlAction.RemindLater ->
+                                if (attention[id] == AttentionKind.RESULT_READY) nowViewModel.resultReadyLater(id, action.minutes)
+                                else nowViewModel.deferReturn(id, action.minutes)
+                            is NeedsYouControlAction.NotNow -> nowViewModel.markReady(id)
+                            is NeedsYouControlAction.Blocked -> nowViewModel.block(id)
+                        }
+                        control = null
+                    },
+                    onDismiss = { control = null }
+                )
+            }
+            // Priority editor (Phase 04): still the home of durable policies, opened from the sheet.
             positionPicker?.let { id ->
                 val edited = needsYouStreams.firstOrNull { it.id == id }
                 NeedsYouPriorityEditor(

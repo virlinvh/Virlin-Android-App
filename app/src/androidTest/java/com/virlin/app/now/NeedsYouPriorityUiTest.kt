@@ -170,6 +170,49 @@ class NeedsYouPriorityUiTest {
         composeRule.onNodeWithTag(projectIconBuiltInTag("code"), useUnmergedTree = true).assertIsDisplayed()
     }
 
+
+    /**
+     * The unified control sheet at 335dp and 1.3x font: both tabs readable, the header's title
+     * ellipsises instead of pushing the timer out, and no row escapes the sheet's width.
+     */
+    @Test fun controlSheet_narrow335_fontScale13_fits() {
+        val long = display("x", "A very long source name that keeps going · Project", "An extremely long task title that should ellipsize rather than push anything off screen")
+        composeRule.setContent {
+            val base = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(base.density, 1.3f)) {
+                VirlinTheme {
+                    Box(Modifier.width(335.dp)) {
+                        com.virlin.app.ui.screens.NeedsYouControlSheet(
+                            stream = long, project = project("p1", "Virlin Development"),
+                            kind = AttentionKind.CHECK_DUE, position = 2, total = 4,
+                            dueAt = Instant.now().minusSeconds(3725), now = mutableStateOf(Instant.now()),
+                            initialTab = com.virlin.app.ui.screens.NeedsYouControlTab.PRIORITY,
+                            onMoveToPosition = {}, onAction = {}, onDismiss = {}
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        val sheet = composeRule.onNodeWithTag(com.virlin.app.ui.screens.NeedsYouControlSheetTag).fetchSemanticsNode().boundsInRoot
+        listOf(
+            com.virlin.app.ui.screens.NeedsYouControlPriorityTabTag,
+            com.virlin.app.ui.screens.NeedsYouControlCheckTabTag,
+            com.virlin.app.ui.screens.NeedsYouControlTimerTag,
+            priorityPositionTag(1), priorityPositionTag(4)
+        ).forEach { t ->
+            val b = composeRule.onNodeWithTag(t, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            assertTrue("$t escapes the sheet (${b.left}..${b.right} vs ${sheet.left}..${sheet.right})",
+                b.left >= sheet.left - 1f && b.right <= sheet.right + 1f)
+            // Interactive rows keep a full touch target; the timer is status text, not a target.
+            if (t != com.virlin.app.ui.screens.NeedsYouControlTimerTag) {
+                assertTrue("$t touch height", b.height / composeRule.density.density >= 43.5f)
+            }
+        }
+        // Both tab labels are present and legible at this scale (nothing clipped to zero width).
+        composeRule.onNodeWithTag(com.virlin.app.ui.screens.NeedsYouControlCheckTabTag).assertIsDisplayed()
+    }
+
     @Test fun narrow335_fontScale13_longTitles_noOverlap() {
         val long = display("x", "A very long source name that keeps going · Project", "An extremely long task title that should wrap onto a second line and then ellipsize cleanly")
         composeRule.setContent {

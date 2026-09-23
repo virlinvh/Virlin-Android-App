@@ -170,6 +170,8 @@ class NowViewModel(
     override fun customMinutes(streamId: String, intent: TimedIntent, minutes: Long) = intents.customMinutes(streamId, intent, minutes)
 
     fun focus(streamId: String) = intents.focus(streamId)
+    /** "Not now" from the control sheet: the existing markReady action. */
+    fun markReady(streamId: String) = intents.markReady(streamId)
     /** Move a Needs You item to a 1-based queue position; the others shift automatically (Phase 1 rule). */
     /** Phase 09: the post-COMPLETE continuation (FOCUS NEXT / DONE FOR NOW). */
     val completedFocus: StateFlow<AttentionIntentController.CompletedFocus?> get() = intents.completedFocus
