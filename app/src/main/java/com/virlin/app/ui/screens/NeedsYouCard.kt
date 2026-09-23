@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -46,13 +49,18 @@ import java.time.Instant
  * ONE row, one alignment grid, fixed columns — a card never shifts because a title is longer:
  *
  * ```
- * [ 1 ] [icon]  Navigation · Route structure      01:07:38   CHECK →
- *               Claude · Virlin · Check due
+ * [icon]  Navigation · Route structure     +58:43  [ #1 | CHECK → ]
+ *         Claude · Virlin · Check due
  * ```
  *
- * LEFT   rank badge (circular, tappable — the queue-position selector) + the project's own icon
+ * LEFT   the project's own icon
  * CENTER task title (1 line, ellipsised) over one restrained secondary line (source · reason)
- * RIGHT  HH:MM:SS waiting timer (tabular figures) + the compact CHECK / Resume / Focus now action
+ * RIGHT  the waiting timer (tabular figures, status — never part of the button) and ONE compact
+ *        action pill that carries BOTH the queue position and the CHECK / Resume / Focus now
+ *        action. There is no separate rank bubble anywhere on the card: the rank is shown once,
+ *        inside the pill. The pill is one visual control with TWO interaction targets — `#n`
+ *        opens the existing position selector, `CHECK →` runs the existing action — and each is
+ *        exposed to TalkBack separately.
  *
  * The card holds NO business logic: rank, timer basis, kind and callbacks are all passed in. Every
  * colour comes from ONE call to [NeedsYouPriority.visualsFor] — badge, icon, border, surface tint,
@@ -113,16 +121,8 @@ fun NeedsYouCard(
             .padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // ── LEFT: rank badge · contextual icon (fixed columns → every card lines up)
-        if (position != null) {
-            NeedsYouRankBadge(
-                streamId = stream.id, position = position, total = total,
-                accent = accent, onAccent = v.onAccent, neutral = v.neutral,
-                onClick = { onChangePosition(stream.id) }
-            )
-        } else {
-            Spacer(Modifier.width(4.dp))
-        }
+        // ── LEFT: the contextual icon alone — the space the rank bubble used to take now belongs
+        // to the title (the rank moved into the action pill on the right).
         Box(
             modifier = Modifier.size(30.dp).background(container, CircleShape),
             contentAlignment = Alignment.Center
@@ -175,19 +175,104 @@ fun NeedsYouCard(
                     .padding(horizontal = 4.dp, vertical = 14.dp)
             )
         }
+        NeedsYouActionPill(
+            streamId = stream.id,
+            position = position,
+            total = total,
+            primary = primary,
+            actionLabel = "$primary, ${stream.subtitle}",
+            accent = accent, onAccent = v.onAccent, container = container, border = border,
+            ink = ink, neutral = v.neutral,
+            onPosition = { onChangePosition(stream.id) },
+            onAction = { if (kind == AttentionKind.CHECK_DUE || kind == null) onCheck(stream.id) else onFocus(stream.id) }
+        )
+    }
+}
+
+/**
+ * The combined attention control: ONE pill, two targets.
+ *
+ * ```
+ * [ #1 | CHECK → ]
+ * ```
+ *
+ * `#n` carries the queue position and opens the existing "Move to position" selector; `CHECK →`
+ * runs the existing action. They share one surface, one border and one corner radius so the card
+ * reads a single control: the rank half carries a slightly deeper tint, the halves meet with no
+ * gap, and the outer corners are rounded while the inner edges are square. The visible pill stays
+ * 34dp high to keep the card compact, while each half is tappable across a 44dp row. Ranks 11+ (and unranked cards) render the quiet neutral treatment; when no
+ * position is known the pill is just the action, exactly as before.
+ *
+ * Rank is never communicated by colour alone — the number is always written out.
+ */
+@Composable
+private fun NeedsYouActionPill(
+    streamId: String,
+    position: Int?,
+    total: Int,
+    primary: String,
+    actionLabel: String,
+    accent: Color,
+    onAccent: Color,
+    container: Color,
+    border: Color,
+    ink: Color,
+    neutral: Boolean,
+    onPosition: () -> Unit,
+    onAction: () -> Unit
+) {
+    val shape = RoundedCornerShape(10.dp)
+    val leftHalf = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp)
+    val rightHalf = if (position == null) shape else RoundedCornerShape(topEnd = 10.dp, bottomEnd = 10.dp)
+    // The pill is 34dp of paint inside a 44dp row: each half is tappable across the full 44dp, so
+    // the control stays compact without shrinking the touch targets.
+    Row(modifier = Modifier.height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (position != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .testTag(needsYouRankTag(streamId))
+                    .clickable(role = Role.Button, onClick = onPosition)
+                    .semantics { contentDescription = "Attention position $position of $total. Double tap to change." },
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .height(34.dp)
+                        // One fixed width, so single- and double-digit ranks keep the same column
+                        // on every card and the timers above them stay aligned.
+                        .widthIn(min = 34.dp)
+                        .clip(leftHalf)
+                        .background(if (neutral) Color.White else accent)
+                        .border(1.dp, border, leftHalf)
+                        .padding(horizontal = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "#$position",
+                        fontSize = if (position >= 100) 9.sp else if (position >= 10) 10.sp else 11.sp,
+                        fontWeight = FontWeight.Black,
+                        color = if (neutral) Charcoal else onAccent,
+                        maxLines = 1, softWrap = false
+                    )
+                }
+            }
+        }
         Box(
             modifier = Modifier
-                .height(44.dp)
-                .testTag("needs_you_primary_${stream.id}")
-                .semantics { role = Role.Button; contentDescription = "$primary, ${stream.subtitle}" }
-                .clickable { if (kind == AttentionKind.CHECK_DUE || kind == null) onCheck(stream.id) else onFocus(stream.id) },
+                .fillMaxHeight()
+                .testTag("needs_you_primary_$streamId")
+                .semantics { role = Role.Button; contentDescription = actionLabel }
+                .clickable(onClick = onAction),
             contentAlignment = Alignment.Center
         ) {
             Row(
                 modifier = Modifier
-                    .background(container, RoundedCornerShape(10.dp))
-                    .border(1.dp, border, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                    .height(34.dp)
+                    .clip(rightHalf)
+                    .background(container)
+                    .border(1.dp, border, rightHalf)
+                    .padding(horizontal = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
@@ -195,47 +280,6 @@ fun NeedsYouCard(
                 Spacer(Modifier.width(4.dp))
                 Text("→", fontSize = 10.sp, fontWeight = FontWeight.Black, color = ink)
             }
-        }
-    }
-}
-
-/**
- * The circular rank badge: the number alone communicates queue order — never "#1 of 4",
- * "Priority 1" or "Rank 1" on the card. Filled with the rank accent (neutral ranks read as a
- * quiet outline). 24dp visual inside a 44dp touch target.
- */
-@Composable
-private fun NeedsYouRankBadge(
-    streamId: String,
-    position: Int,
-    total: Int,
-    accent: Color,
-    onAccent: Color,
-    neutral: Boolean,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .testTag(needsYouRankTag(streamId))
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = "Attention position $position of $total. Double tap to change." },
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .background(if (neutral) Color.White else accent, CircleShape)
-                .border(1.dp, if (neutral) Charcoal.copy(alpha = 0.22f) else accent, CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                position.toString(),
-                fontSize = if (position >= 100) 9.sp else if (position >= 10) 10.5.sp else 12.sp,
-                fontWeight = FontWeight.Black,
-                color = if (neutral) Charcoal else onAccent,
-                maxLines = 1, softWrap = false
-            )
         }
     }
 }

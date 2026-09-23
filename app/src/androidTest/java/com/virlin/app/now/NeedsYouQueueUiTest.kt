@@ -100,7 +100,7 @@ class NeedsYouQueueUiTest {
         File(dir, name).outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
     private fun rankShown(id: String, rank: Int) =
-        composeRule.onNode(hasTestTag(needsYouRankTag(id)) and hasAnyDescendant(hasText("$rank")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag(id)) and hasAnyDescendant(hasText("#$rank")), useUnmergedTree = true).assertExists()
     private fun timerOf(id: String) = composeRule.onNodeWithTag("needs_you_timer_$id", useUnmergedTree = true)
         .fetchSemanticsNode().config.toString().substringAfter("Text : ").substringBefore("]")
 

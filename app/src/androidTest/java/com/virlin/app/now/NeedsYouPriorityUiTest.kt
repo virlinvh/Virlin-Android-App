@@ -19,6 +19,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
@@ -67,13 +68,61 @@ class NeedsYouPriorityUiTest {
         }
         composeRule.onNodeWithTag(needsYouRankTag("a")).assertIsDisplayed().assertContentDescriptionContains("Attention position 1 of 4", substring = true)
         composeRule.onNodeWithTag(needsYouRankTag("d")).assertContentDescriptionContains("Attention position 4 of 4. Double tap to change.", substring = true)
-        composeRule.onNode(hasTestTag(needsYouRankTag("a")) and hasAnyDescendant(hasText("1")), useUnmergedTree = true).assertExists()
-        composeRule.onNode(hasTestTag(needsYouRankTag("d")) and hasAnyDescendant(hasText("4")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag("a")) and hasAnyDescendant(hasText("#1")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag("d")) and hasAnyDescendant(hasText("#4")), useUnmergedTree = true).assertExists()
         // touch target ≥ 44dp although the visible pill is smaller
         val h = composeRule.onNodeWithTag(needsYouRankTag("b")).fetchSemanticsNode().let { it.size.height / composeRule.density.density }
         assertTrue("badge hit height $h", h >= 43.5f)
         composeRule.onNodeWithTag(needsYouRankTag("d")).performClick()
         assertEquals(listOf("d"), opened)
+    }
+
+
+    /**
+     * Phase 1 of the action-area refinement: the rank and CHECK live in ONE pill on the right.
+     * There is no separate rank bubble anywhere else on the card, the two halves touch (one
+     * control), and each half drives only its own callback.
+     */
+    @Test fun combinedControl_isOnePill_withTwoIndependentTargets() {
+        val checked = mutableListOf<String>()
+        val opened = mutableListOf<String>()
+        composeRule.setContent {
+            VirlinTheme {
+                Column {
+                    four().forEachIndexed { i, s ->
+                        NeedsYouCard(
+                            s, i, AttentionKind.CHECK_DUE, project = project("p1", "Virlin Development"),
+                            position = i + 1, total = 4,
+                            onCheck = { checked += it }, onChangePosition = { opened += it }
+                        )
+                    }
+                }
+            }
+        }
+        // B: every card shows "#position" next to its action, and exactly once.
+        (1..4).forEach { p -> composeRule.onAllNodesWithText("#$p").assertCountEquals(1) }
+        listOf("a", "b", "c", "d").forEach { id ->
+            val rank = composeRule.onNodeWithTag(needsYouRankTag(id)).fetchSemanticsNode().boundsInRoot
+            val check = composeRule.onNodeWithTag("needs_you_primary_$id").fetchSemanticsNode().boundsInRoot
+            val card = composeRule.onNodeWithTag("needs_you_card_$id").fetchSemanticsNode().boundsInRoot
+            val timer = composeRule.onNodeWithTag("needs_you_timer_$id", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            // One pill: the halves are adjacent (no gap between them) and vertically identical.
+            assertTrue("$id halves adjacent (${rank.right} vs ${check.left})", Math.abs(rank.right - check.left) <= 1f)
+            assertEquals("$id same top", Math.round(rank.top), Math.round(check.top))
+            assertEquals("$id same height", Math.round(rank.height), Math.round(check.height))
+            // The timer stays separate status information, left of the control, inside the card.
+            assertTrue("$id timer left of control", timer.right <= rank.left + 1f)
+            assertTrue("$id control inside card", check.right <= card.right + 1f)
+            // Both halves keep a full touch target although the paint is ~34dp.
+            listOf(rank, check).forEach { b ->
+                assertTrue("$id touch height ${b.height / composeRule.density.density}", b.height / composeRule.density.density >= 43.5f)
+            }
+        }
+        // G/H: each half fires only its own callback.
+        composeRule.onNodeWithTag(needsYouRankTag("b")).performClick()
+        assertEquals(listOf("b"), opened); assertTrue("rank tap must not check", checked.isEmpty())
+        composeRule.onNodeWithTag("needs_you_primary_c").performClick()
+        assertEquals(listOf("c"), checked); assertEquals(listOf("b"), opened)
     }
 
     @Test fun badge_hiddenWithoutPosition_andCheckStillWorks_iconsUnchanged() {
@@ -115,7 +164,7 @@ class NeedsYouPriorityUiTest {
         fun timerText() = composeRule.onNodeWithTag("needs_you_timer_c", useUnmergedTree = true).fetchSemanticsNode().config.toString().substringAfter("Text : ").substringBefore("]")
         val before = timerText()
         position = 1; composeRule.waitForIdle()
-        composeRule.onNode(hasTestTag(needsYouRankTag("c")) and hasAnyDescendant(hasText("1")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag("c")) and hasAnyDescendant(hasText("#1")), useUnmergedTree = true).assertExists()
         assertEquals(before, timerText())                                                                                                    // same waiting text
         repeat(12) { now.value = now.value.plusSeconds(1); composeRule.waitForIdle() }                                                        // crosses 10:00 → CRITICAL as before
         composeRule.onNodeWithTag(projectIconBuiltInTag("code"), useUnmergedTree = true).assertIsDisplayed()
@@ -139,9 +188,9 @@ class NeedsYouPriorityUiTest {
         val primary = composeRule.onNodeWithTag("needs_you_primary_x").fetchSemanticsNode().boundsInRoot
         val timer = composeRule.onNodeWithTag("needs_you_timer_x", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val defer = composeRule.onNodeWithTag("needs_you_defer_x").fetchSemanticsNode().boundsInRoot
-        assertTrue("rank/primary overlap", rank.right <= primary.left && rank.right <= defer.left)
+        assertTrue("rank/primary overlap", rank.right <= primary.left + 1f && defer.right <= rank.left + 1f)
         assertTrue("timer inside card", timer.right <= card.right + 1f && timer.top >= card.top)
         assertTrue("rank inside card", rank.left >= card.left && rank.bottom <= card.bottom + 1f)
-        composeRule.onNode(hasTestTag(needsYouRankTag("x")) and hasAnyDescendant(hasText("7")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag("x")) and hasAnyDescendant(hasText("#7")), useUnmergedTree = true).assertExists()
     }
 }

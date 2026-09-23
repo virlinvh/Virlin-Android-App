@@ -153,7 +153,7 @@ class NeedsYouSortUiTest {
         .sortedBy { it.second }.map { it.first }
     private fun timerOf(id: String) = tag("needs_you_timer_$id").fetchSemanticsNode().config.toString().substringAfter("Text : [").substringBefore("]")
     private fun rankShown(id: String, rank: Int) =
-        composeRule.onNode(hasTestTag(needsYouRankTag(id)) and hasAnyDescendant(hasText("$rank")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag(id)) and hasAnyDescendant(hasText("#$rank")), useUnmergedTree = true).assertExists()
 
     // ------------------------------------------------------------------ FLOW A / I
 

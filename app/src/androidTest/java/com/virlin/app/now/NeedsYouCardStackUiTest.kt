@@ -113,7 +113,7 @@ class NeedsYouCardStackUiTest {
         val d = composeRule.density.density
 
         // Same columns on every card, whatever the title length or timer magnitude.
-        assertEquals("badge column", 1, badges.map { it.left }.distinct().size)
+        assertEquals("rank column", 1, badges.map { it.right }.distinct().size)
         assertEquals("card left edge", 1, cards.map { it.left }.distinct().size)
         assertEquals("card right edge", 1, cards.map { it.right }.distinct().size)
         assertEquals("action right edge", 1, actions.map { it.right }.distinct().size)
@@ -124,7 +124,7 @@ class NeedsYouCardStackUiTest {
         assertTrue("compact card height ${heights[0]}dp", heights[0] in 50f..70f)
         // Nothing overlaps: timer sits left of the action, both inside the card.
         titles.indices.forEach { i ->
-            assertTrue("card $i timer/action overlap", timers[i].right <= actions[i].left + 1f)
+            assertTrue("card $i timer/rank overlap", timers[i].right <= badges[i].left + 1f)
             assertTrue("card $i action inside", actions[i].right <= cards[i].right + 1f)
             assertTrue("card $i badge 44dp touch target", badges[i].height / d >= 43.5f)
         }
@@ -135,7 +135,7 @@ class NeedsYouCardStackUiTest {
     @Test fun rankIdentities_progress_thenGoNeutralFrom11() {
         show()
         titles.indices.forEach { i ->
-            composeRule.onNode(hasTestTag(needsYouRankTag("st$i")) and hasAnyDescendant(hasText("${i + 1}")), useUnmergedTree = true).assertExists()
+            composeRule.onNode(hasTestTag(needsYouRankTag("st$i")) and hasAnyDescendant(hasText("#${i + 1}")), useUnmergedTree = true).assertExists()
         }
         // 1–10 carry the palette; 11 and 12 share the one neutral identity.
         assertTrue((1..10).all { !NeedsYouPriority.visualsFor(it).neutral })

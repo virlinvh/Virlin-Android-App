@@ -165,7 +165,7 @@ class PriorityEditorUiTest {
         composeRule.waitForIdle()
         assertEquals(listOf("D", "A", "B", "C", "E"), queueIds())
         composeRule.onAllNodesWithTag(PriorityEditorTag, useUnmergedTree = true).assertCountEquals(0)        // sheet closed
-        composeRule.onNode(hasTestTag(needsYouRankTag("D")) and hasAnyDescendant(hasText("1")), useUnmergedTree = true).assertExists()
+        composeRule.onNode(hasTestTag(needsYouRankTag("D")) and hasAnyDescendant(hasText("#1")), useUnmergedTree = true).assertExists()
         names.forEach { assertEquals("timer $it", timersBefore[it], timerOf(it)) }                            // FLOW G
     }
 
