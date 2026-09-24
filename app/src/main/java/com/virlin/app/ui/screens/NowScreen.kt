@@ -193,54 +193,11 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     ) {
         Spacer(modifier = Modifier.height(10.dp))
 
-        // 1. TOP HEADER
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Virlin", fontSize = 24.sp, fontWeight = FontWeight.Black, color = Charcoal)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(Color(0xFF34C759), CircleShape)
-                            .border(2.dp, Color(0xFFD1FAE5).copy(alpha=0.9f), CircleShape)
-                    )
-                }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text("Good evening, Maya", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
-            }
+        // 1. GREETING + TODAY'S SUMMARY (the old Virlin/progress-pill header was removed)
+        // Presentation only — see NowDaySummaryValues.
+        NowDaySummary()
 
-            // Progress Pill
-            Row(
-                modifier = Modifier
-                    .background(Color.White.copy(alpha=0.95f), RoundedCornerShape(24.dp))
-                    .border(1.dp, Color.Black.copy(alpha=0.05f), RoundedCornerShape(24.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        progress = { 0.8f },
-                        color = Color(0xFF34C759),
-                        trackColor = Color(0xFFEAECE8),
-                        strokeWidth = 3.dp,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Text("8", fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, color = Charcoal)
-                }
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("8 advanced", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Charcoal)
-                    Text("today", fontSize = 10.sp, fontWeight = FontWeight.Medium, color = CharcoalLight)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         // 2. FOCUS HERO CARD
         if (focusStream != null) {
