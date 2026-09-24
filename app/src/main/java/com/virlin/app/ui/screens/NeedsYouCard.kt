@@ -28,6 +28,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -116,15 +118,20 @@ fun NeedsYouCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("needs_you_card_${stream.id}")
+            // Clipped to the card's own shape so the left accent below follows the same corners.
+            .clip(RoundedCornerShape(14.dp))
             .background(surface, RoundedCornerShape(14.dp))
+            // A 6dp accent along the LEFT edge only, in the card's existing colour — drawn over
+            // the surface and under the hairline border, so it reads as part of the border itself.
+            .drawBehind { drawRect(accent, size = Size(6.dp.toPx(), size.height)) }
             .border(1.dp, border, RoundedCornerShape(14.dp))
-            .padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = 8.dp, end = 8.dp, top = 14.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // ── LEFT: the contextual icon alone — the space the rank bubble used to take now belongs
         // to the title (the rank moved into the action pill on the right).
         Box(
-            modifier = Modifier.size(30.dp).background(container, CircleShape),
+            modifier = Modifier.size(34.dp).background(container, CircleShape),
             contentAlignment = Alignment.Center
         ) {
             // The project's own icon keeps its SEMANTICS; only its container inherits the rank family.
@@ -133,7 +140,7 @@ fun NeedsYouCard(
                 name = project?.title ?: stream.title,
                 iconPath = project?.iconPath,
                 iconId = project?.iconId,
-                size = 22.dp,
+                size = 25.dp,
                 decorative = true
             )
         }
@@ -199,7 +206,7 @@ fun NeedsYouCard(
  * `#n` carries the queue position and opens the existing "Move to position" selector; `CHECK →`
  * runs the existing action. They share one surface, one border and one corner radius so the card
  * reads a single control: one capsule in the rank's own colour, the rank block in the full accent
- * and the action half a shade lighter, joined by a white hairline. The visible pill stays
+ * with both halves on one fill, parted only by a thin rule. The visible pill stays
  * 34dp high to keep the card compact, while each half is tappable across a 44dp row. Ranks 11+ (and unranked cards) render the quiet neutral treatment; when no
  * position is known the pill is just the action, exactly as before.
  *
@@ -221,16 +228,18 @@ private fun NeedsYouActionPill(
     onPosition: () -> Unit,
     onAction: () -> Unit
 ) {
-    // ONE block in the rank's own colour: the rank half is the accent itself, the action half a
-    // touch lighter, and a white hairline between them. The corner radius echoes the card's own
+    // ONE block in the card's own urgency colour: both halves share the SAME fill and a thin
+    // vertical rule is all that separates them. The corner radius echoes the card's own
     // 14dp so the control sits inside it as the same family of shape, not a foreign capsule.
     val radius = 11.dp
     val whole = RoundedCornerShape(radius)
     val leftHalf = RoundedCornerShape(topStart = radius, bottomStart = radius)
     val rightHalf = if (position == null) whole else RoundedCornerShape(topEnd = radius, bottomEnd = radius)
-    val actionFill = if (neutral) container else accent.copy(alpha = 0.82f)
+    // ONE fill for both halves: the rank side is not a darker block, so the control reads as a
+    // single button with a divider rather than two buttons pushed together.
+    val actionFill = if (neutral) container else accent
     val actionInk = if (neutral) ink else onAccent
-    val hairline = if (neutral) border else Color.White.copy(alpha = 0.45f)
+    val hairline = if (neutral) border else Color.White.copy(alpha = 0.55f)
     // The pill is 34dp of paint inside a 44dp row: each half is tappable across the full 44dp, so
     // the control stays compact without shrinking the touch targets.
     Row(modifier = Modifier.height(44.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -248,9 +257,9 @@ private fun NeedsYouActionPill(
                         .height(30.dp)
                         // One fixed width, so single- and double-digit ranks keep the same column
                         // on every card and the timers above them stay aligned.
-                        .widthIn(min = 36.dp)
+                        .widthIn(min = 32.dp)
                         .clip(leftHalf)
-                        .background(if (neutral) Color.White else accent)
+                        .background(actionFill)
                         .then(if (neutral) Modifier.border(1.dp, border, leftHalf) else Modifier)
                         .padding(horizontal = 5.dp),
                     contentAlignment = Alignment.Center
@@ -259,13 +268,18 @@ private fun NeedsYouActionPill(
                         "#$position",
                         fontSize = if (position >= 100) 9.sp else if (position >= 10) 10.sp else 11.sp,
                         fontWeight = FontWeight.Black,
-                        color = if (neutral) Charcoal else onAccent,
+                        color = actionInk,
                         maxLines = 1, softWrap = false
                     )
                 }
             }
         }
-        if (position != null) Box(Modifier.width(1.dp).height(30.dp).background(hairline))
+        if (position != null) {
+            // The only separation between the halves: a short rule over the shared fill.
+            Box(Modifier.height(30.dp).background(actionFill), contentAlignment = Alignment.Center) {
+                Box(Modifier.width(1.dp).height(17.dp).background(hairline))
+            }
+        }
         Box(
             modifier = Modifier
                 .fillMaxHeight()
