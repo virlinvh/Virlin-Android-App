@@ -26,6 +26,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -109,10 +120,15 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val currentFocus by nowViewModel.currentFocus.collectAsState()
     val pendingCompletion by nowViewModel.pendingWorkStreamCompletion.collectAsState()
     val attention by nowViewModel.attention.collectAsState()
+    val waitingSince by nowViewModel.waitingSince.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
 
     val focusStream = streams.find { it.state == StreamState.FOCUS }
-    val needsYouStreams = streams.filter { it.state == StreamState.NEEDS_YOU }
+    // Needs You order = how urgently it needs me: the item waiting LONGEST first (earliest
+    // waitingSince), unknown timestamps last; ties keep their existing (stable) order. The
+    // comparator depends only on persisted timestamps, never on the ticking clock, so the
+    // list never re-sorts on a tick. (No explicit priority field exists on the display model.)
+    val needsYouStreams = WaitingTime.orderLongestWaitingFirst(streams.filter { it.state == StreamState.NEEDS_YOU }) { waitingSince[it.id] }
     val processingStreams = streams.filter { it.state == StreamState.PROCESSING }
     val readyStreams = streams.filter { it.state == StreamState.READY }
 
@@ -230,11 +246,16 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                 Text("Your attention required", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
             }
             Spacer(modifier = Modifier.height(10.dp))
+            // ONE per-second time source for every card's live timer (lifecycle-aware, drift-free).
+            // Only the timer texts read it, so the rest of Now never recomposes on a tick.
+            val nowTick = rememberSecondTicker()
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 needsYouStreams.forEachIndexed { index, stream ->
                     NeedsYouCard(
                         stream = stream, index = index,
                         kind = attention[stream.id],
+                        waitingSince = waitingSince[stream.id],
+                        now = nowTick,
                         onFocus = nowViewModel::focus,
                         onCheck = nowViewModel::openCheck,
                         onDefer = { id -> nowViewModel.deferReturn(id, 5) }
@@ -556,28 +577,42 @@ fun NeedsYouCard(
     stream: WorkStream,
     index: Int,
     kind: AttentionKind? = null,
+    /** When this stream started waiting (domain timestamp). Null = treated as just due (00:00). */
+    waitingSince: java.time.Instant? = null,
+    /** Shared per-second clock from the section; null renders a static 00:00 (previews/tests). */
+    now: androidx.compose.runtime.State<java.time.Instant>? = null,
     onFocus: (String) -> Unit = {},
     onCheck: (String) -> Unit = onFocus,
     onDefer: (String) -> Unit = {}
 ) {
-    val isDueNow = index == 0
+    // Everything time-related derives from ONE timestamp. The urgency LEVEL is a pure function of
+    // the waiting duration (Phase 2); derivedStateOf means the palette recomposes only when the
+    // level actually changes (at 1:00 / 3:00 / 5:00 / 10:00), never on an ordinary tick.
+    val level by remember(waitingSince, now) {
+        derivedStateOf {
+            val since = waitingSince; val n = now
+            if (since == null || n == null) UrgencyLevel.ATTENTION
+            else UrgencyLevel.of(WaitingTime.elapsedSeconds(since, n.value))
+        }
+    }
+    val isDueNow = level == UrgencyLevel.ATTENTION
+    val pal = NeedsYouUrgency.palette(level)
 
-    // ── Color tokens (unchanged) ────────────────────────────────────
-    val baseBg       = if (isDueNow) Color(0xFFFFFDF4) else Color(0xFFFFF7F2)
-    val attentionBg  = if (isDueNow) Color(0xFFFEF6C8) else Color(0xFFFFE8DA)
-
-    val restBorder   = if (isDueNow) Color(0xFFFFE29A) else Color(0xFFFFD0BB)
-    val peakBorder   = if (isDueNow) Color(0xFFFACC15) else Color(0xFFFB923C)
-
-    val badgeBg      = if (isDueNow) Color(0xFFFEF3C7) else Color(0xFFFFEDD5)
-    val badgeFg      = if (isDueNow) Color(0xFF92400E) else Color(0xFF9A3412)
-    val badgeText    = if (isDueNow) "DUE NOW" else "1M OVERDUE"
-    val badgeBorder  = if (isDueNow) Color(0xFFFDE68A) else Color(0xFFFED7AA)
-
-    val beaconCoreColor  = if (isDueNow) Color(0xFFFFC928) else Color(0xFFFF7A45)
-    val beaconRingColor  = if (isDueNow) Color(0xFFFFF8DE) else Color(0xFFFFF1EB)
-    val beaconRingBorder = if (isDueNow) Color(0xFFFFAA22) else Color(0xFFFF9A55)
-    val beaconOuterColor = if (isDueNow) Color(0xFFFFE278) else Color(0xFFFFC09C)
+    // ── Colour tokens: one coordinated palette per level, cross-faded (not flashed) on a
+    // threshold crossing. The timer itself never restarts — only these colours move.
+    val paletteTween = tween<Color>(durationMillis = 350)
+    val baseBg       by animateColorAsState(pal.cardBg, paletteTween, label = "ny_bg")
+    val attentionBg  by animateColorAsState(pal.cardBgAttention, paletteTween, label = "ny_bg_peak")
+    val restBorder   by animateColorAsState(pal.border, paletteTween, label = "ny_border")
+    val peakBorder   by animateColorAsState(pal.borderPeak, paletteTween, label = "ny_border_peak")
+    val badgeBg      by animateColorAsState(pal.chipBg, paletteTween, label = "ny_chip_bg")
+    val badgeFg      by animateColorAsState(pal.chipFg, paletteTween, label = "ny_chip_fg")
+    val badgeBorder  by animateColorAsState(pal.chipBorder, paletteTween, label = "ny_chip_border")
+    val beaconCoreColor  by animateColorAsState(pal.indicator, paletteTween, label = "ny_beacon")
+    val glowColor        by animateColorAsState(pal.glow, paletteTween, label = "ny_glow")
+    val beaconRingColor  = badgeBg
+    val beaconRingBorder = beaconCoreColor.copy(alpha = 0.75f)
+    val beaconOuterColor = beaconCoreColor.copy(alpha = 0.55f)
 
     // ── Single master progress 0→1 ──────────────────────────────────
     // Due Now:  7000ms cycle,  no offset
@@ -611,6 +646,21 @@ fun NeedsYouCard(
     //  0.68–1.00  REST
     //
     val p = attentionProgress
+
+    // ── Living glow (Phase 2): a very slow breathing halo OUTSIDE the card. Same transition
+    // object (no per-tick allocation), 2.6–3.4 s cycle by level, deterministic phase offset per
+    // item, alpha only — nothing scales or moves. Reduced motion → static half-strength halo.
+    val reducedMotion = rememberNowReducedMotion()
+    val glowBreath by infiniteTransition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = NeedsYouUrgency.glowCycleMillis(level), easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+            initialStartOffset = StartOffset(NeedsYouUrgency.glowPhaseOffsetMillis(index), StartOffsetType.FastForward)
+        ),
+        label = "glow_breath"
+    )
+    val glowAlpha = NeedsYouUrgency.glowAlpha(level, if (reducedMotion) 0f else glowBreath, reducedMotion)
 
     // Surface color: slow single warm pulse
     val surfaceIntensity = when {
@@ -664,6 +714,23 @@ fun NeedsYouCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .drawBehind {
+                // Soft halo: two feathered strokes just outside the card edge (cheap; no blur/shader).
+                if (glowAlpha > 0.005f) {
+                    val r = 16.dp.toPx()
+                    val w1 = 10.dp.toPx(); val w2 = 4.dp.toPx()
+                    drawRoundRect(
+                        color = glowColor.copy(alpha = glowAlpha * 0.45f),
+                        topLeft = Offset(-w1 / 2f, -w1 / 2f), size = Size(size.width + w1, size.height + w1),
+                        cornerRadius = CornerRadius(r + w1 / 2f), style = Stroke(width = w1)
+                    )
+                    drawRoundRect(
+                        color = glowColor.copy(alpha = glowAlpha),
+                        topLeft = Offset(-w2 / 2f, -w2 / 2f), size = Size(size.width + w2, size.height + w2),
+                        cornerRadius = CornerRadius(r + w2 / 2f), style = Stroke(width = w2)
+                    )
+                }
+            }
             .background(bgColor, RoundedCornerShape(16.dp))
             .border(borderWidthFloat.dp, borderColor.copy(alpha = borderAlpha), RoundedCornerShape(16.dp))
             .padding(10.dp),
@@ -698,36 +765,39 @@ fun NeedsYouCard(
 
         Spacer(modifier = Modifier.width(12.dp))
 
+        // Hierarchy (Phase 3): 1. the task that needs me · 3. its project/source · 5. why (context).
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = stream.title,
-                fontSize = 12.sp,
+                text = stream.subtitle,                      // WHAT needs me
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 color = Charcoal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                lineHeight = 16.sp
             )
             Text(
-                text = stream.subtitle,
-                fontSize = 11.5.sp,
+                text = stream.title,                         // source: "Claude · Virlin"
+                fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = Charcoal.copy(alpha = 0.9f),
+                color = Charcoal.copy(alpha = 0.72f),
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 1.dp)
             )
-            // Human return vs external check vs result ready are worded differently on purpose.
+            // WHY it needs me — human return vs external check vs result ready are distinct.
             val sub2 = when (kind) {
                 AttentionKind.RETURN_DUE -> "Ready to continue"
                 AttentionKind.RESULT_READY -> "Result ready"
                 AttentionKind.CHECK_DUE -> "Check due"
-                null -> if (isDueNow) "Authentication redirect" else "Route structure decision"
+                null -> null   // no fabricated context line
             }
-            Text(
+            if (sub2 != null) Text(
                 text = sub2,
-                modifier = Modifier.testTag("needs_you_kind_${stream.id}"),
+                modifier = Modifier.testTag("needs_you_kind_${stream.id}").padding(top = 1.dp),
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.Normal,
-                color = Charcoal.copy(alpha = 0.7f),
+                color = Charcoal.copy(alpha = 0.6f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -736,44 +806,37 @@ fun NeedsYouCard(
         Spacer(modifier = Modifier.width(12.dp))
 
         Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = badgeText,
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold,
-                color = badgeFg,
-                modifier = Modifier
-                    .background(badgeBg, RoundedCornerShape(12.dp))
-                    .border(1.dp, badgeBorder, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            // Live negative waiting timer — replaces the static DUE NOW / 1M OVERDUE badge.
+            WaitingTimerChip(
+                streamId = stream.id, waitingSince = waitingSince, now = now,
+                background = badgeBg, foreground = badgeFg, border = badgeBorder
             )
-            Spacer(modifier = Modifier.height(8.dp))
 
+            // Action (Phase 3): a light tonal pill in the card's urgency palette — visibly smaller
+            // than the timer chip's weight, but with a 44dp-tall hit box (+ the card padding above
+            // and below it ≈ 48dp of touch). Same callbacks, same test tag, same semantics.
             var pressed by remember { mutableStateOf(false) }
-            val scale by animateFloatAsState(
-                targetValue = if (pressed) 0.96f else 1f,
-                animationSpec = tween(140),
-                label = "check_scale"
-            )
+            val pressAlpha by animateFloatAsState(if (pressed) 1f else 0f, tween(120), label = "check_press")
 
             val primary = when (kind) {
-                AttentionKind.RETURN_DUE -> "RESUME"
-                AttentionKind.RESULT_READY -> "FOCUS NOW"
-                else -> "CHECK"
+                AttentionKind.RETURN_DUE -> "Resume"
+                AttentionKind.RESULT_READY -> "Focus now"
+                else -> "Check"
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (kind == AttentionKind.RETURN_DUE || kind == AttentionKind.RESULT_READY) {
                     // Defer the return without changing why it exists.
-                    Text("+5m", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Charcoal.copy(alpha = 0.75f),
+                    Text("+5m", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Charcoal.copy(alpha = 0.7f),
                         modifier = Modifier.testTag("needs_you_defer_${stream.id}")
                             .clickable(role = Role.Button) { onDefer(stream.id) }
-                            .padding(horizontal = 8.dp, vertical = 4.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 12.dp))
+                    Spacer(modifier = Modifier.width(2.dp))
                 }
-                Row(
+                Box(
                     modifier = Modifier
-                        .scale(scale)
-                        .background(Charcoal, RoundedCornerShape(16.dp))
+                        .height(44.dp)
                         .testTag("needs_you_primary_${stream.id}")
+                        .semantics { role = Role.Button; contentDescription = "$primary, ${stream.subtitle}" }
                         .pointerInput(stream.id, kind) {
                             detectTapGestures(
                                 onPress = {
@@ -783,17 +846,68 @@ fun NeedsYouCard(
                                 },
                                 onTap = { if (kind == AttentionKind.CHECK_DUE || kind == null) onCheck(stream.id) else onFocus(stream.id) }
                             )
-                        }
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        },
+                    contentAlignment = Alignment.CenterEnd
                 ) {
-                    Text(primary, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("→", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Row(
+                        modifier = Modifier
+                            .background(lerpColor(badgeBg.copy(alpha = 0.55f), badgeBg, pressAlpha), RoundedCornerShape(14.dp))
+                            .border(1.dp, lerpColor(badgeBorder, badgeFg.copy(alpha = 0.6f), pressAlpha), RoundedCornerShape(14.dp))
+                            .padding(horizontal = 11.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(primary, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = badgeFg, maxLines = 1)
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text("→", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = badgeFg)
+                    }
                 }
             }
         }
     }
+}
+
+/** Reduced motion for Now cards: the system animator duration scale is 0 (animations disabled). */
+@Composable
+private fun rememberNowReducedMotion(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return remember {
+        android.provider.Settings.Global.getFloat(context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+    }
+}
+
+/**
+ * The card's waiting timer: `00:00` at the due moment, then `−mm:ss` / `−h:mm:ss` elapsed.
+ * Reads the shared ticker HERE (and only here) so a tick recomposes just this chip. Its
+ * semantics carry the human-readable form ("Waiting for 3 minutes 42 seconds").
+ */
+@Composable
+private fun WaitingTimerChip(
+    streamId: String,
+    waitingSince: java.time.Instant?,
+    now: androidx.compose.runtime.State<java.time.Instant>?,
+    background: Color,
+    foreground: Color,
+    border: Color
+) {
+    val elapsed = if (waitingSince == null || now == null) 0L else WaitingTime.elapsedSeconds(waitingSince, now.value)
+    val label = WaitingTime.format(elapsed)
+    val spoken = WaitingTime.describe(elapsed)
+    Text(
+        text = label,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        color = foreground,
+        // Tabular figures: −09:59 → −10:00 never changes width, so nothing around it jitters.
+        style = androidx.compose.ui.text.TextStyle(fontFeatureSettings = "tnum"),
+        maxLines = 1,
+        softWrap = false,
+        modifier = Modifier
+            .background(background, RoundedCornerShape(12.dp))
+            .border(1.dp, border, RoundedCornerShape(12.dp))
+            .testTag("needs_you_timer_$streamId")
+            .semantics { contentDescription = spoken }
+            .padding(horizontal = 9.dp, vertical = 3.dp)
+    )
 }
 
 @Composable

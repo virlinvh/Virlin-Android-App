@@ -48,6 +48,11 @@ class NowViewModel(
         .map { NowPresentation.attention(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NowPresentation.attention(repository.streams.value))
 
+    /** When each Needs You stream started waiting (domain timestamp) — drives the live timer and ordering. */
+    val waitingSince: StateFlow<Map<String, java.time.Instant>> = repository.streams
+        .map { NowPresentation.waitingSince(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NowPresentation.waitingSince(repository.streams.value))
+
     /** The single lightweight chooser open on Now, if any. Never more than one at a time. */
     sealed interface Chooser {
         val streamId: String
