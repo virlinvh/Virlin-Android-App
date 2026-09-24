@@ -305,8 +305,8 @@ WorkStream".
 
 **Persistence is Room (Pass 5):** `VirlinGraph.init(context)` opens `virlin.db`; state
 survives process death and due returns/checks are reconciled on reopen. UI never touches DAOs.
-Schema is **v2** (Pass 10 added `captures` via an explicit `MIGRATION_1_2`, proven by
-`VirlinMigrationTest`); every schema change ships a real migration — never a destructive fallback.
+Schema is **v12** (v2 added `captures`; v10 `workstreams.attentionRank` for Needs You priority ranking; v11 `priority_preferences` for durable priority policies; v12 `workstreams.externalActorId` + `external_stages` for Working For You external runs —
+every step an explicit migration proven by `VirlinMigrationTest`); every schema change ships a real migration — never a destructive fallback.
 Details in the `virlin-data-domain` skill.
 
 **The domain layer exists (`com.virlin.app.domain`).** All WorkStream state changes go

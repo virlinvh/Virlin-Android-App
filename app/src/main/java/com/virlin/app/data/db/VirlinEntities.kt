@@ -48,6 +48,24 @@ data class ProjectEntity(
     val iconId: String? = null
 )
 
+/**
+ * v11 — a durable Needs You priority policy (Phase 07). ONE row per WorkStream (the stable id is
+ * the primary key), so saving again replaces the policy instead of creating a competing one.
+ * `OneTime` is never stored. No foreign key: a preference may outlive its stream and is simply
+ * ignored and cleaned up, so attention can never crash on stale data.
+ */
+@Entity(tableName = "priority_preferences")
+data class PriorityPreferenceEntity(
+    @PrimaryKey val streamId: String,
+    /** 1-based position the user asked for; clamped against the live queue when applied. */
+    val preferredPosition: Int,
+    /** ALWAYS | CURRENT_TERM | UNTIL — the typed scope, never a UI label. */
+    val scopeType: String,
+    val createdAt: Instant,
+    /** Set only for UNTIL. */
+    val expiresAt: Instant?
+)
+
 @Entity(
     tableName = "workstreams",
     indices = [Index("projectId"), Index("state"), Index("checkAt"), Index("activeTaskId")]
@@ -76,6 +94,29 @@ data class WorkStreamEntity(
     val activeTaskId: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    val completedAt: Instant?,
+    /** v10: explicit Needs You position (1-based) while in CHECK; null = unranked. */
+    val attentionRank: Int? = null,
+    /** v12: stable id of the external actor doing the work (Phase 10); null = unknown/none. */
+    val externalActorId: String? = null
+)
+
+/**
+ * v12 — one planned step of an external run (Phase 10). Tracking metadata for the external
+ * process, NOT a hierarchy Task: stages never appear in Project/WorkStream progress.
+ * `sortOrder` is the explicit ordering truth. No foreign key, matching the rest of the schema:
+ * a stale stage is ignored, never a crash.
+ */
+@Entity(tableName = "external_stages", indices = [Index("workStreamId")])
+data class ExternalStageEntity(
+    @PrimaryKey val id: String,
+    val workStreamId: String,
+    val title: String,
+    @ColumnInfo(name = "sortOrder") val order: Int,
+    /** Expected duration in whole minutes; `checkAt = startedAt + expected` when it starts. */
+    val expectedMinutes: Long?,
+    val status: String,
+    val startedAt: Instant?,
     val completedAt: Instant?
 )
 

@@ -165,7 +165,33 @@ colours are restored on exit. Exiting (X or Android Back) returns to Now; the No
 
 Tapping the large timer inside this screen does nothing by design.
 
+### Work hierarchy (Phase 08)
+
+`PROJECT → WORKSTREAM → WORK ITEM → WORK ITEM → …` — one recursive `Task` entity (`parentTaskId`,
+`order`), stable ids, no per-depth types and no depth limit. Progress is DERIVED from executable
+leaves only (never stored, never an average of percentages); empty scopes read "No structured
+progress", never 0%. A parent is never auto-completed by its children. Creation: `+ PROJECT` in
+Streams, `+ WORKSTREAM` in Project Detail, `+ TASK` / `+ SUBTASK` in the tree — all through
+`VirlinActions`. Attention (Needs You / Working For You) stays attached to the WorkStream.
+
 ### Needs You
+
+**Sort / view control (2026-09-23).** A `tune` glyph beside the "Needs You" heading switches the
+DISPLAY order only: Priority (default, canonical rank) · Longest waiting (`dueAt` ascending) · Most
+recent (`dueAt` descending), ties broken by canonical rank then id. It is a session-level
+presentation preference (`NowViewModel.needsYouSort`) and NEVER changes ranks, colours, `dueAt`,
+timers or priority preferences — cards always show their canonical rank. It applies to Needs You
+only; Working For You has no sort control.
+
+**Approved compact card (2026-09-22).** ONE row: rank badge (circle, number only) · project icon ·
+task title (1 line, ellipsised) over ONE secondary line (source · reason) · `HH:MM:SS` tabular
+timer · CHECK / RESUME / FOCUS NOW. ~56dp tall, fixed alignment columns. Colour comes from ONE
+call to `NeedsYouPriority.visualsFor(rank)`: ranks 1–10 carry the approved red → pale-yellow
+accents (badge, icon container, border, surface tint, timer, CHECK), rank 11+ and invalid ranks
+are neutral white. NEVER add: a three-dot menu, "#1 of 4" / "Priority 1" labels, sort or filter
+controls, extra description lines. The rank palette is VISUAL only — reordering beyond the
+existing position sheet, sorting and the priority popup are future phases.
+
 
 Represents streams requiring human attention.
 
@@ -187,6 +213,16 @@ Represents external processes progressing without human attention.
 Uses compact processing rows and subtle animated processing indicators.
 
 PROCESSING does not consume human Focus.
+
+**Phase 10 — external execution (IMPLEMENTED).** A Working For You item is a real external run:
+actor (`ExternalActor`, stable id on the WorkStream), the exact work item, the instruction it was
+given, the current stage and a countdown derived from `checkAt - now`. Zero-to-many runs may
+execute at once, ordered soonest check first (never by the Needs You ranking). When the check time
+arrives the SAME item becomes Needs You — CHECK → RESULT READY (stays attention until focused or
+deferred) / STILL RUNNING (returns here with a new check time) / BLOCKED. Stages are tracking
+metadata for the external process, never hierarchy Tasks, and never advance by themselves:
+START NEXT STAGE is an explicit choice. FOCUS NOW hands the exact work item to Phase 09 focus.
+Virlin TRACKS external work — it runs no external tool and polls no API.
 
 ### When You're Free
 

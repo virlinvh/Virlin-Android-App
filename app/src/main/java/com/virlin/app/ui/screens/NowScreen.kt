@@ -119,18 +119,40 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     // Hierarchy (Project / WorkStream / active Task) comes from the domain, never from MockData.
     val currentFocus by nowViewModel.currentFocus.collectAsState()
     val pendingCompletion by nowViewModel.pendingWorkStreamCompletion.collectAsState()
+    val completedFocus by nowViewModel.completedFocus.collectAsState()
     val attention by nowViewModel.attention.collectAsState()
     val waitingSince by nowViewModel.waitingSince.collectAsState()
+    val dueAt by nowViewModel.attentionDueAt.collectAsState()
+    val needsYouQueue by nowViewModel.needsYouQueue.collectAsState()          // canonical: index + 1 = rank
+    val needsYouDisplay by nowViewModel.needsYouDisplay.collectAsState()      // display order only (Phase 06)
+    val needsYouSort by nowViewModel.needsYouSort.collectAsState()
     val projects by nowViewModel.projects.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
 
     val focusStream = streams.find { it.state == StreamState.FOCUS }
-    // Needs You order = how urgently it needs me: the item waiting LONGEST first (earliest
-    // waitingSince), unknown timestamps last; ties keep their existing (stable) order. The
-    // comparator depends only on persisted timestamps, never on the ticking clock, so the
-    // list never re-sorts on a tick. (No explicit priority field exists on the display model.)
-    val needsYouStreams = WaitingTime.orderLongestWaitingFirst(streams.filter { it.state == StreamState.NEEDS_YOU }) { waitingSince[it.id] }
+    // Needs You order comes from the domain (`NeedsYouOrder`): explicit user rank first, then the
+    // item waiting LONGEST first; it depends only on persisted fields, never on the ticking clock,
+    // so the list never re-sorts on a tick. Display items unknown to the domain keep their
+    // incoming order after the domain-ordered ones (stable).
+    // Rank comes from the canonical queue; the ORDER ON SCREEN comes from the display projection.
+    val needsYouStreams = streams.filter { it.state == StreamState.NEEDS_YOU }
+        .sortedBy { needsYouDisplay.indexOf(it.id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
     val processingStreams = streams.filter { it.state == StreamState.PROCESSING }
+    // WORKING FOR YOU (Phase 10) is a domain projection: real actor, work item, stage and check
+    // time. ONE clock value feeds every row's countdown — no per-row ticker, no stored countdown.
+    val externalWork by nowViewModel.externalWork.collectAsState()
+    val externalNow by produceState(com.virlin.app.domain.VirlinGraph.clock.now()) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            value = com.virlin.app.domain.VirlinGraph.clock.now()
+        }
+    }
+    var openExternal by remember { mutableStateOf<String?>(null) }
+    openExternal?.let { id ->
+        externalWork.firstOrNull { it.id == id }?.let { item ->
+            ExternalWorkDetailSheet(item, externalNow, nowViewModel, onDismiss = { openExternal = null })
+        } ?: run { openExternal = null }
+    }
     val readyStreams = streams.filter { it.state == StreamState.READY }
 
     // Notification routing (navigation only): body tap → WorkStream Detail; CHECK → the
@@ -148,6 +170,14 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     chooser?.let { NowChooserDialog(it, nowViewModel) }
 
     // COMPLETE with no active Task means ending the whole WorkStream — never silently.
+    // Phase 09: after COMPLETE, a quiet continuation. FOCUS NEXT needs intent; DONE FOR NOW just closes.
+    completedFocus?.let { done ->
+        CompletedFocusDialog(
+            completedTitle = done.completedTitle, nextTitle = done.nextTitle,
+            onFocusNext = nowViewModel::focusNextAfterCompletion,
+            onDone = nowViewModel::dismissCompletedFocus
+        )
+    }
     pendingCompletion?.let { id ->
         val title = currentFocus?.takeIf { it.streamId == id }?.workStreamTitle
             ?: streams.firstOrNull { it.id == id }?.title ?: "this WorkStream"
@@ -244,33 +274,107 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                         Text(needsYouStreams.size.toString(), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF92400E))
                     }
                 }
-                Text("Your attention required", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Your attention required", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
+                    // Phase 06: view-only sort. Canonical priority, ranks and colours are untouched.
+                    var sortOpen by remember { mutableStateOf(false) }
+                    NeedsYouSortControl(
+                        mode = needsYouSort, expanded = sortOpen,
+                        onExpandedChange = { sortOpen = it },
+                        onSelect = nowViewModel::setNeedsYouSort
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(10.dp))
             // ONE per-second time source for every card's live timer (lifecycle-aware, drift-free).
             // Only the timer texts read it, so the rest of Now never recomposes on a tick.
             val nowTick = rememberSecondTicker()
+            // Queue-position selector (Phase 2): one sheet for the section, opened from a card's badge.
+            var positionPicker by remember { mutableStateOf<String?>(null) }
+            // Which item's control sheet is open, and which tab it opened on. Transient UI state.
+            var control by remember { mutableStateOf<Pair<String, NeedsYouControlTab>?>(null) }
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 needsYouStreams.forEachIndexed { index, stream ->
-                    NeedsYouCard(
-                        stream = stream, index = index,
-                        kind = attention[stream.id],
-                        waitingSince = waitingSince[stream.id],
-                        now = nowTick,
-                        // Identity is resolved through the project (Project.iconPath), never stored on the stream.
-                        project = com.virlin.app.domain.model.ProjectIdentity.resolve(stream.projectId, projects),
-                        onFocus = nowViewModel::focus,
-                        onCheck = nowViewModel::openCheck,
-                        onDefer = { id -> nowViewModel.deferReturn(id, 5) }
-                    )
+                    // Keyed by id so a card keeps its own animation state when it moves in the queue.
+                    key(stream.id) {
+                        NeedsYouCard(
+                            stream = stream, index = index,
+                            kind = attention[stream.id],
+                            waitingSince = waitingSince[stream.id],
+                            dueAt = dueAt[stream.id],
+                            now = nowTick,
+                            // Identity is resolved through the project (Project.iconPath), never stored on the stream.
+                            project = com.virlin.app.domain.model.ProjectIdentity.resolve(stream.projectId, projects),
+                            // Phase 2: BOTH halves of the pill open the one control sheet; they
+                            // differ only in the tab it opens on. Nothing is decided on the card.
+                            onFocus = { id -> control = id to NeedsYouControlTab.CHECK },
+                            onCheck = { id -> control = id to NeedsYouControlTab.CHECK },
+                            onDefer = { id -> nowViewModel.deferReturn(id, 5) },
+                            // Effective rank = position in the domain queue (never the display index).
+                            position = needsYouQueue.indexOf(stream.id).let { if (it < 0) null else it + 1 },
+                            total = needsYouStreams.size,
+                            onChangePosition = { id -> control = id to NeedsYouControlTab.PRIORITY }
+                        )
+                    }
                 }
+            }
+            // The unified control sheet (Phase 2): one surface for position and check decisions.
+            // It owns no domain logic — every row below calls an existing intent.
+            control?.let { (id, initialTab) ->
+                val item = needsYouStreams.firstOrNull { it.id == id }
+                val rank = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 }
+                NeedsYouControlSheet(
+                    stream = item,
+                    project = item?.let { com.virlin.app.domain.model.ProjectIdentity.resolve(it.projectId, projects) },
+                    kind = attention[id],
+                    position = rank,
+                    total = needsYouQueue.size,
+                    dueAt = dueAt[id] ?: waitingSince[id],
+                    now = nowTick,
+                    initialTab = initialTab,
+                    // Existing queue path; the sheet stays open so one visit can do both things.
+                    onMoveToPosition = { pos -> nowViewModel.reorderNeedsYou(id, pos) },
+                    onOpenPriorityPolicy = { control = null; positionPicker = id },
+                    onAction = { action ->
+                        // Every branch is an EXISTING transition out of CHECK. Actions that take the
+                        // item out of Needs You close the sheet; the list updates from the domain.
+                        when (action) {
+                            is NeedsYouControlAction.FocusNow ->
+                                if (attention[id] == AttentionKind.CHECK_DUE) nowViewModel.resultReadyNow(id) else nowViewModel.focus(id)
+                            is NeedsYouControlAction.StillRunning -> nowViewModel.stillRunning(id, action.minutes)
+                            is NeedsYouControlAction.RemindLater ->
+                                if (attention[id] == AttentionKind.RESULT_READY) nowViewModel.resultReadyLater(id, action.minutes)
+                                else nowViewModel.deferReturn(id, action.minutes)
+                            is NeedsYouControlAction.NotNow -> nowViewModel.markReady(id)
+                            is NeedsYouControlAction.Blocked -> nowViewModel.block(id)
+                        }
+                        control = null
+                    },
+                    onDismiss = { control = null }
+                )
+            }
+            // Priority editor (Phase 04): still the home of durable policies, opened from the sheet.
+            positionPicker?.let { id ->
+                val edited = needsYouStreams.firstOrNull { it.id == id }
+                NeedsYouPriorityEditor(
+                    stream = edited,
+                    currentPosition = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 },
+                    queueSize = needsYouQueue.size,
+                    // Read the durable policy off the main thread; null until it arrives.
+                    existing = androidx.compose.runtime.produceState<com.virlin.app.domain.attention.PriorityPreference?>(null, id) {
+                        value = nowViewModel.priorityPreference(id)
+                    }.value,
+                    onRemoveSaved = { nowViewModel.clearPriorityPreference(id) },
+                    onSave = { pos, scope -> positionPicker = null; nowViewModel.setNeedsYouPriority(id, pos, scope) },
+                    onDismiss = { positionPicker = null }
+                )
             }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
         // 4. WORKING FOR YOU SECTION
-        if (processingStreams.isNotEmpty()) {
+        if (externalWork.isNotEmpty()) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -285,7 +389,7 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                             .background(Color(0xFFEDE9FE), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(processingStreams.size.toString(), fontSize = 11.sp, fontWeight = FontWeight.Black, color = Color(0xFF5B21B6))
+                        Text(externalWork.size.toString(), fontSize = 11.sp, fontWeight = FontWeight.Black, color = Color(0xFF5B21B6))
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -317,8 +421,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                processingStreams.forEachIndexed { index, stream ->
-                    ProcessingRow(stream, index)
+                externalWork.forEachIndexed { index, item ->
+                    ExternalWorkRow(item, externalNow, index, onOpen = { openExternal = it })
                 }
             }
         }
@@ -559,365 +663,6 @@ fun FocusHeroCard(
     }
 }
 
-// ── Helper: smoothstep for organic easing ──────────────────────────
-private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
-    val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
-    return t * t * (3f - 2f * t)
-}
-
-private fun lerpColor(a: Color, b: Color, fraction: Float): Color {
-    val f = fraction.coerceIn(0f, 1f)
-    return Color(
-        red = a.red + (b.red - a.red) * f,
-        green = a.green + (b.green - a.green) * f,
-        blue = a.blue + (b.blue - a.blue) * f,
-        alpha = a.alpha + (b.alpha - a.alpha) * f
-    )
-}
-
-@Composable
-fun NeedsYouCard(
-    stream: WorkStream,
-    index: Int,
-    kind: AttentionKind? = null,
-    /** When this stream started waiting (domain timestamp). Null = treated as just due (00:00). */
-    waitingSince: java.time.Instant? = null,
-    /** Shared per-second clock from the section; null renders a static 00:00 (previews/tests). */
-    now: androidx.compose.runtime.State<java.time.Instant>? = null,
-    /** Owning project (identity icon source); null = projectless → fallback avatar from the stream's own name. */
-    project: com.virlin.app.domain.model.Project? = null,
-    onFocus: (String) -> Unit = {},
-    onCheck: (String) -> Unit = onFocus,
-    onDefer: (String) -> Unit = {}
-) {
-    // Everything time-related derives from ONE timestamp. The urgency LEVEL is a pure function of
-    // the waiting duration (Phase 2); derivedStateOf means the palette recomposes only when the
-    // level actually changes (at 1:00 / 3:00 / 5:00 / 10:00), never on an ordinary tick.
-    val level by remember(waitingSince, now) {
-        derivedStateOf {
-            val since = waitingSince; val n = now
-            if (since == null || n == null) UrgencyLevel.ATTENTION
-            else UrgencyLevel.of(WaitingTime.elapsedSeconds(since, n.value))
-        }
-    }
-    val isDueNow = level == UrgencyLevel.ATTENTION
-    val pal = NeedsYouUrgency.palette(level)
-
-    // ── Colour tokens: one coordinated palette per level, cross-faded (not flashed) on a
-    // threshold crossing. The timer itself never restarts — only these colours move.
-    val paletteTween = tween<Color>(durationMillis = 350)
-    val baseBg       by animateColorAsState(pal.cardBg, paletteTween, label = "ny_bg")
-    val attentionBg  by animateColorAsState(pal.cardBgAttention, paletteTween, label = "ny_bg_peak")
-    val restBorder   by animateColorAsState(pal.border, paletteTween, label = "ny_border")
-    val peakBorder   by animateColorAsState(pal.borderPeak, paletteTween, label = "ny_border_peak")
-    val badgeBg      by animateColorAsState(pal.chipBg, paletteTween, label = "ny_chip_bg")
-    val badgeFg      by animateColorAsState(pal.chipFg, paletteTween, label = "ny_chip_fg")
-    val badgeBorder  by animateColorAsState(pal.chipBorder, paletteTween, label = "ny_chip_border")
-    val beaconCoreColor  by animateColorAsState(pal.indicator, paletteTween, label = "ny_beacon")
-    val glowColor        by animateColorAsState(pal.glow, paletteTween, label = "ny_glow")
-    val beaconRingColor  = badgeBg
-    val beaconRingBorder = beaconCoreColor.copy(alpha = 0.75f)
-    val beaconOuterColor = beaconCoreColor.copy(alpha = 0.55f)
-
-    // ── Single master progress 0→1 ──────────────────────────────────
-    // Due Now:  7000ms cycle,  no offset
-    // Overdue:  6800ms cycle,  1500ms phase offset
-    val cycleDur = if (isDueNow) 7000 else 6800
-    val offsetMs = if (isDueNow) 0 else 1500
-
-    val infiniteTransition = rememberInfiniteTransition(label = "needs_you_$index")
-    val attentionProgress by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = cycleDur, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-            initialStartOffset = StartOffset(offsetMs, StartOffsetType.FastForward)
-        ),
-        label = "attention_progress"
-    )
-
-    // ── Derive all visual properties from the single progress ───────
-    //
-    // Timeline (normalised 0–1):
-    //
-    //  0.00–0.14  REST
-    //  0.14–0.22  beacon arrives
-    //  0.17–0.30  border slowly brightens
-    //  0.22–0.32  surface slowly warms
-    //  0.32–0.50  HOLD (full attention)
-    //  0.50–0.62  surface fades first
-    //  0.55–0.68  border softens
-    //  0.68–1.00  REST
-    //
-    val p = attentionProgress
-
-    // ── Living glow (Phase 2): a very slow breathing halo OUTSIDE the card. Same transition
-    // object (no per-tick allocation), 2.6–3.4 s cycle by level, deterministic phase offset per
-    // item, alpha only — nothing scales or moves. Reduced motion → static half-strength halo.
-    val reducedMotion = rememberNowReducedMotion()
-    val glowBreath by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = NeedsYouUrgency.glowCycleMillis(level), easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-            initialStartOffset = StartOffset(NeedsYouUrgency.glowPhaseOffsetMillis(index), StartOffsetType.FastForward)
-        ),
-        label = "glow_breath"
-    )
-    val glowAlpha = NeedsYouUrgency.glowAlpha(level, if (reducedMotion) 0f else glowBreath, reducedMotion)
-
-    // Surface color: slow single warm pulse
-    val surfaceIntensity = when {
-        p < 0.22f -> smoothstep(0.22f, 0.14f, p) * 0f           // rest → 0
-        p < 0.32f -> smoothstep(0.22f, 0.32f, p)                 // arrive
-        p < 0.50f -> 1f                                           // hold
-        p < 0.62f -> 1f - smoothstep(0.50f, 0.62f, p)            // depart
-        else -> 0f                                                // rest
-    }
-    val bgColor = lerpColor(baseBg, attentionBg, surfaceIntensity)
-
-    // Border: leads surface slightly, lingers slightly longer
-    val borderIntensity = when {
-        p < 0.17f -> 0f
-        p < 0.30f -> smoothstep(0.17f, 0.30f, p)
-        p < 0.50f -> 1f
-        p < 0.68f -> 1f - smoothstep(0.55f, 0.68f, p)
-        else -> 0f
-    }
-    val borderColor = lerpColor(restBorder, peakBorder, borderIntensity)
-    val borderWidthFloat = 1f + 0.4f * borderIntensity     // 1dp → 1.4dp
-    val borderAlpha = 0.65f + 0.35f * borderIntensity       // 0.65 → 1.0
-
-    // Beacon core: leads everything
-    val beaconPhase = when {
-        p < 0.14f -> 0f
-        p < 0.22f -> smoothstep(0.14f, 0.22f, p)
-        p < 0.36f -> 1f - smoothstep(0.22f, 0.36f, p)
-        else -> 0f
-    }
-    val maxCoreScale = if (isDueNow) 1.12f else 1.15f
-    val beaconCoreScale = 1f + (maxCoreScale - 1f) * beaconPhase
-
-    // Beacon outer ring: expands and fades
-    val maxOuterScale = if (isDueNow) 1.45f else 1.50f
-    val maxOuterAlpha = if (isDueNow) 0.26f else 0.30f
-    val outerPhase = when {
-        p < 0.14f -> 0f
-        p < 0.38f -> smoothstep(0.14f, 0.38f, p)
-        else -> 1f
-    }
-    val beaconOuterScale = 0.95f + (maxOuterScale - 0.95f) * outerPhase
-    val beaconOuterAlpha = when {
-        p < 0.14f -> maxOuterAlpha
-        p < 0.38f -> maxOuterAlpha * (1f - smoothstep(0.14f, 0.38f, p))
-        p < 0.68f -> 0f  // stays invisible during rest
-        else -> maxOuterAlpha * smoothstep(0.68f, 1.0f, p)  // reset for next cycle
-    }
-
-    // ── Card rendering (layout unchanged) ───────────────────────────
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("needs_you_card_${stream.id}")
-            .drawBehind {
-                // Soft halo: two feathered strokes just outside the card edge (cheap; no blur/shader).
-                if (glowAlpha > 0.005f) {
-                    val r = 16.dp.toPx()
-                    val w1 = 10.dp.toPx(); val w2 = 4.dp.toPx()
-                    drawRoundRect(
-                        color = glowColor.copy(alpha = glowAlpha * 0.45f),
-                        topLeft = Offset(-w1 / 2f, -w1 / 2f), size = Size(size.width + w1, size.height + w1),
-                        cornerRadius = CornerRadius(r + w1 / 2f), style = Stroke(width = w1)
-                    )
-                    drawRoundRect(
-                        color = glowColor.copy(alpha = glowAlpha),
-                        topLeft = Offset(-w2 / 2f, -w2 / 2f), size = Size(size.width + w2, size.height + w2),
-                        cornerRadius = CornerRadius(r + w2 / 2f), style = Stroke(width = w2)
-                    )
-                }
-            }
-            .background(bgColor, RoundedCornerShape(16.dp))
-            .border(borderWidthFloat.dp, borderColor.copy(alpha = borderAlpha), RoundedCornerShape(16.dp))
-            .padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Project identity (Phase icons): the project's icon — custom image or deterministic fallback —
-        // inside the SAME 36dp footprint the beacon used. The icon itself is never tinted or animated;
-        // urgency shows only around it: a thin ring in the level colour (cross-faded with the palette)
-        // and the existing soft arrive→hold→leave outer pulse behind it. Decorative: the source text
-        // beside it already names the project, so nothing is announced twice.
-        Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-            if (beaconOuterAlpha > 0.01f) {
-                Box(
-                    modifier = Modifier
-                        .size((34 * beaconOuterScale).dp)
-                        .background(beaconOuterColor.copy(alpha = beaconOuterAlpha * 0.6f), CircleShape)
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .border(1.5.dp, beaconCoreColor.copy(alpha = 0.55f + 0.45f * beaconPhase), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                com.virlin.app.ui.components.ProjectIcon(
-                    projectId = project?.id ?: stream.id,
-                    name = project?.title ?: stream.title,
-                    iconPath = project?.iconPath,
-                    iconId = project?.iconId,
-                    size = 28.dp,
-                    decorative = true
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        // Hierarchy (Phase 3): 1. the task that needs me · 3. its project/source · 5. why (context).
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stream.subtitle,                      // WHAT needs me
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = Charcoal,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                lineHeight = 16.sp
-            )
-            Text(
-                text = stream.title,                         // source: "Claude · Virlin"
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Charcoal.copy(alpha = 0.72f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 1.dp)
-            )
-            // WHY it needs me — human return vs external check vs result ready are distinct.
-            val sub2 = when (kind) {
-                AttentionKind.RETURN_DUE -> "Ready to continue"
-                AttentionKind.RESULT_READY -> "Result ready"
-                AttentionKind.CHECK_DUE -> "Check due"
-                null -> null   // no fabricated context line
-            }
-            if (sub2 != null) Text(
-                text = sub2,
-                modifier = Modifier.testTag("needs_you_kind_${stream.id}").padding(top = 1.dp),
-                fontSize = 10.5.sp,
-                fontWeight = FontWeight.Normal,
-                color = Charcoal.copy(alpha = 0.6f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        Column(horizontalAlignment = Alignment.End) {
-            // Live negative waiting timer — replaces the static DUE NOW / 1M OVERDUE badge.
-            WaitingTimerChip(
-                streamId = stream.id, waitingSince = waitingSince, now = now,
-                background = badgeBg, foreground = badgeFg, border = badgeBorder
-            )
-
-            // Action (Phase 3): a light tonal pill in the card's urgency palette — visibly smaller
-            // than the timer chip's weight, but with a 44dp-tall hit box (+ the card padding above
-            // and below it ≈ 48dp of touch). Same callbacks, same test tag, same semantics.
-            var pressed by remember { mutableStateOf(false) }
-            val pressAlpha by animateFloatAsState(if (pressed) 1f else 0f, tween(120), label = "check_press")
-
-            val primary = when (kind) {
-                AttentionKind.RETURN_DUE -> "Resume"
-                AttentionKind.RESULT_READY -> "Focus now"
-                else -> "Check"
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (kind == AttentionKind.RETURN_DUE || kind == AttentionKind.RESULT_READY) {
-                    // Defer the return without changing why it exists.
-                    Text("+5m", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Charcoal.copy(alpha = 0.7f),
-                        modifier = Modifier.testTag("needs_you_defer_${stream.id}")
-                            .clickable(role = Role.Button) { onDefer(stream.id) }
-                            .padding(horizontal = 6.dp, vertical = 12.dp))
-                    Spacer(modifier = Modifier.width(2.dp))
-                }
-                Box(
-                    modifier = Modifier
-                        .height(44.dp)
-                        .testTag("needs_you_primary_${stream.id}")
-                        .semantics { role = Role.Button; contentDescription = "$primary, ${stream.subtitle}" }
-                        .pointerInput(stream.id, kind) {
-                            detectTapGestures(
-                                onPress = {
-                                    pressed = true
-                                    tryAwaitRelease()
-                                    pressed = false
-                                },
-                                onTap = { if (kind == AttentionKind.CHECK_DUE || kind == null) onCheck(stream.id) else onFocus(stream.id) }
-                            )
-                        },
-                    contentAlignment = Alignment.CenterEnd
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .background(lerpColor(badgeBg.copy(alpha = 0.55f), badgeBg, pressAlpha), RoundedCornerShape(14.dp))
-                            .border(1.dp, lerpColor(badgeBorder, badgeFg.copy(alpha = 0.6f), pressAlpha), RoundedCornerShape(14.dp))
-                            .padding(horizontal = 11.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(primary, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = badgeFg, maxLines = 1)
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text("→", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = badgeFg)
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Reduced motion for Now cards: the system animator duration scale is 0 (animations disabled). */
-@Composable
-private fun rememberNowReducedMotion(): Boolean {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    return remember {
-        android.provider.Settings.Global.getFloat(context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-    }
-}
-
-/**
- * The card's waiting timer: `00:00` at the due moment, then `−mm:ss` / `−h:mm:ss` elapsed.
- * Reads the shared ticker HERE (and only here) so a tick recomposes just this chip. Its
- * semantics carry the human-readable form ("Waiting for 3 minutes 42 seconds").
- */
-@Composable
-private fun WaitingTimerChip(
-    streamId: String,
-    waitingSince: java.time.Instant?,
-    now: androidx.compose.runtime.State<java.time.Instant>?,
-    background: Color,
-    foreground: Color,
-    border: Color
-) {
-    val elapsed = if (waitingSince == null || now == null) 0L else WaitingTime.elapsedSeconds(waitingSince, now.value)
-    val label = WaitingTime.format(elapsed)
-    val spoken = WaitingTime.describe(elapsed)
-    Text(
-        text = label,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Bold,
-        color = foreground,
-        // Tabular figures: −09:59 → −10:00 never changes width, so nothing around it jitters.
-        style = androidx.compose.ui.text.TextStyle(fontFeatureSettings = "tnum"),
-        maxLines = 1,
-        softWrap = false,
-        modifier = Modifier
-            .background(background, RoundedCornerShape(12.dp))
-            .border(1.dp, border, RoundedCornerShape(12.dp))
-            .testTag("needs_you_timer_$streamId")
-            .semantics { contentDescription = spoken }
-            .padding(horizontal = 9.dp, vertical = 3.dp)
-    )
-}
 
 @Composable
 fun ProcessingRow(stream: WorkStream, index: Int) {

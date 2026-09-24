@@ -2,6 +2,7 @@ package com.virlin.app.domain.repository
 
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.ExternalStage
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
@@ -43,6 +44,10 @@ interface WorkStreamRepository : CaptureRepository {
     /** [taskId] first, then parents up to the top. Null if broken. */
     suspend fun getAncestry(taskId: String): List<Task>?
 
+    // ---- External work stages (Phase 10). Tracking metadata for an external run; never Tasks.
+    val stages: StateFlow<List<ExternalStage>>
+    suspend fun getStages(workStreamId: String): List<ExternalStage>
+
     /** Atomic unit of work. Either every write in [block] is published, or none is. */
     suspend fun <T> transaction(block: suspend WorkStreamWriter.() -> T): T
 }
@@ -67,5 +72,8 @@ interface WorkStreamWriter : CaptureWriter {
     suspend fun saveCycle(cycle: Cycle)
     suspend fun saveFocusSession(session: FocusSession)
     suspend fun saveSnapshot(snapshot: ContextSnapshot)
+    /** Consistent view of one stream's stages including staged writes. */
+    suspend fun stagesOf(workStreamId: String): List<ExternalStage>
+    suspend fun saveStage(stage: ExternalStage)
     suspend fun appendEvent(event: WorkStreamEvent)
 }

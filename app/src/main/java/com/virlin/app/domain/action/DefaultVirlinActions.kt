@@ -1,9 +1,17 @@
 package com.virlin.app.domain.action
 
+import com.virlin.app.domain.attention.InMemoryPriorityPreferences
+import com.virlin.app.domain.attention.NeedsYouOrder
+import com.virlin.app.domain.attention.PriorityPreference
+import com.virlin.app.domain.attention.PriorityPreferences
+import com.virlin.app.domain.attention.PriorityScope
 import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
 import com.virlin.app.domain.model.EffectiveExecutionMode
+import com.virlin.app.domain.model.ExternalStage
+import com.virlin.app.domain.model.ExternalStageStatus
+import com.virlin.app.domain.model.ExternalStages
 import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.ExecutionPreference
@@ -33,7 +41,9 @@ import java.time.Instant
 class DefaultVirlinActions(
     private val repository: WorkStreamRepository,
     private val clock: VirlinClock,
-    private val ids: IdProvider
+    private val ids: IdProvider,
+    /** Phase 04 priority preferences (in memory; persistence-ready behind the interface). */
+    private val preferences: PriorityPreferences = InMemoryPriorityPreferences()
 ) : VirlinActions {
 
     private val structure = StructureActions(repository, clock, ids)
@@ -62,7 +72,7 @@ class DefaultVirlinActions(
                 priority = request.priority, nextHumanAction = request.nextHumanAction?.takeIf { it.isNotBlank() },
                 createdAt = now, updatedAt = now
             )
-            saveStream(stream)
+            persist(stream)
             event(stream, EventType.STREAM_CREATED, now, to = READY, cycleId = null, detail = request.executionPreference.name)
             ActionResult.Success(stream)
         }
@@ -180,6 +190,11 @@ class DefaultVirlinActions(
     // ------------------------------------------------------------------ Focus
 
     override suspend fun focusStream(streamId: String): ActionResult<FocusOutcome> = run(streamId) { target ->
+        focusWithin(target)
+    }
+
+    /** The focus transition itself, inside an EXISTING transaction (shared by focusStream and startFocus). */
+    private suspend fun WorkStreamWriter.focusWithin(target: WorkStream): ActionResult<FocusOutcome> = run {
         if (target.state == FOCUS) return@run ActionResult.Rejected(DomainError.AlreadyFocused)
         requireTransition(target, FOCUS)?.let { return@run it }
 
@@ -190,7 +205,7 @@ class DefaultVirlinActions(
             closeOpenSession(prev.id, now)
             saveSnapshot(prev, now, reason = READY)
             val moved = prev.copy(state = READY, updatedAt = now)
-            saveStream(moved)
+            persist(moved)
             event(prev, EventType.FOCUS_LEFT, now, from = FOCUS, to = READY, detail = "displaced by ${target.id}")
             moved
         }
@@ -215,7 +230,7 @@ class DefaultVirlinActions(
             snoozeReason = null,
             updatedAt = now
         )
-        saveStream(focused)
+        persist(focused)
         if (target.state == PAUSED || target.state == SNOOZED || target.state == BLOCKED) {
             event(target, EventType.RESUMED, now, from = target.state, to = FOCUS)
         }
@@ -224,6 +239,87 @@ class DefaultVirlinActions(
     }
 
     // ------------------------------------------------------------------ Hand-off
+
+    // ------------------------------------------------------------------ Phase 09: focus a WORK ITEM
+
+    override suspend fun resolveFocusTarget(workItemId: String): ActionResult<FocusTarget> = try {
+        repository.transaction { resolveTarget(workItemId) }
+    } catch (e: Exception) { ActionResult.Failure(e) }
+
+    override suspend fun startFocus(workItemId: String): ActionResult<FocusTargetOutcome> = try {
+        repository.transaction {
+            val target = when (val r = resolveTarget(workItemId)) {
+                is ActionResult.Success -> r.value
+                else -> return@transaction r as ActionResult<FocusTargetOutcome>
+            }
+            // The exact item first, then the stream: focusStream closes the displaced session,
+            // snapshots context and enforces the single-Focus invariant in this same transaction.
+            saveStream(getStream(target.workStreamId)!!.copy(activeTaskId = target.workItem.id, updatedAt = clock.now()))
+            val stream = getStream(target.workStreamId)!!
+            if (stream.state == FOCUS) {
+                // Already the focused stream: the exact work item changed, so the old session is
+                // committed and a NEW one starts for the new item (investment follows the item).
+                val now = clock.now()
+                getOpenFocusSession(stream.id)?.let { open -> if (open.isOpen) saveFocusSession(open.copy(endedAt = now)) }
+                saveFocusSession(FocusSession(ids.newId("fs"), stream.id, stream.currentCycleId, startedAt = now, taskId = target.workItem.id))
+                event(stream, EventType.FOCUS_STARTED, now, from = FOCUS, to = FOCUS, detail = target.workItem.id)
+                ActionResult.Success(FocusTargetOutcome(target, getStream(stream.id)!!, null))
+            } else when (val focus = focusWithin(stream)) {
+                is ActionResult.Success -> ActionResult.Success(FocusTargetOutcome(target, focus.value.focused, focus.value.displaced))
+                else -> focus as ActionResult<FocusTargetOutcome>
+            }
+        }
+    } catch (e: Exception) { ActionResult.Failure(e) }
+
+    override suspend fun focusNext(streamId: String): ActionResult<FocusTargetOutcome?> {
+        val next = when (val r = nextTaskCandidate(streamId)) {
+            is ActionResult.Success -> r.value ?: return ActionResult.Success(null)
+            else -> return r as ActionResult<FocusTargetOutcome?>
+        }
+        return when (val started = startFocus(next.id)) {
+            is ActionResult.Success -> ActionResult.Success(started.value)
+            else -> started as ActionResult<FocusTargetOutcome?>
+        }
+    }
+
+    /**
+     * Container → first OPEN leaf, leaf → itself. Never mutates: resolving is a pure read so the
+     * switch confirmation can preview it. Terminal items and containers whose leaves are all
+     * terminal are rejected rather than silently reopened.
+     */
+    private suspend fun WorkStreamWriter.resolveTarget(workItemId: String): ActionResult<FocusTarget> {
+        val item = getTask(workItemId) ?: return ActionResult.Rejected(DomainError.TaskNotFound(workItemId))
+        val all = allTasks()
+        val children = all.filter { it.parentTaskId == item.id }
+        val resolved = if (children.isEmpty()) {
+            if (item.status.isTerminal) return ActionResult.Rejected(DomainError.TaskAlreadyClosed)
+            item
+        } else {
+            firstOpenLeaf(all, item.id) ?: return ActionResult.Rejected(DomainError.TaskAlreadyClosed)
+        }
+        val streamId = resolved.workStreamId ?: return ActionResult.Rejected(DomainError.OwnershipMismatch)
+        val current = getActiveFocus()
+        return ActionResult.Success(
+            FocusTarget(
+                workItem = resolved, workStreamId = streamId,
+                displacedStreamId = current?.id?.takeIf { it != streamId || current.activeTaskId != resolved.id },
+                displacedWorkItemId = current?.activeTaskId?.takeIf { current.id != streamId || it != resolved.id }
+            )
+        )
+    }
+
+    /** Depth-first, sibling order, first non-terminal leaf beneath [rootId]. */
+    private fun firstOpenLeaf(all: List<Task>, rootId: String): Task? {
+        val byParent = all.groupBy { it.parentTaskId }
+        val hasChild = all.mapNotNull { it.parentTaskId }.toHashSet()
+        fun walk(parent: String): Task? {
+            for (t in byParent[parent].orEmpty().sortedBy { it.order }) {
+                if (t.id !in hasChild) { if (!t.status.isTerminal) return t } else walk(t.id)?.let { return it }
+            }
+            return null
+        }
+        return walk(rootId)
+    }
 
     override suspend fun handOffStream(
         streamId: String, waitingFor: String?, nextHumanAction: String?, checkAt: Instant?
@@ -254,7 +350,7 @@ class DefaultVirlinActions(
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = PROCESSING)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.HANDOFF, now, from = FOCUS, to = PROCESSING, cycleId = cycle.id,
             detail = waitingFor ?: updated.waitingFor)
         event(stream, EventType.PROCESSING_STARTED, now, cycleId = cycle.id, detail = checkAt?.toString())
@@ -274,8 +370,11 @@ class DefaultVirlinActions(
         requireTransition(stream, CHECK)?.let { return@run it }
         val now = clock.now()
         val updated = stream.copy(state = CHECK, snoozedUntil = null, updatedAt = now)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.CHECK_DUE, now, from = stream.state, to = CHECK, cycleId = stream.currentCycleId)
+        // Phase 04 policy application: an item with an ACTIVE preference re-enters at its preferred
+        // position instead of appending. Ordering still happens only through the queue engine.
+        applyPreferenceOnEntry(streamId, now)
         ActionResult.Success(updated)
     }
 
@@ -293,7 +392,7 @@ class DefaultVirlinActions(
             snoozedUntil = null,
             updatedAt = now
         )
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.PROCESSING_STARTED, now, from = stream.state, to = PROCESSING,
             cycleId = stream.currentCycleId, detail = checkAt.toString())
         ActionResult.Success(updated)
@@ -311,7 +410,7 @@ class DefaultVirlinActions(
             snoozeReason = stream.snoozeReason ?: SnoozeReason.HUMAN_RETURN, updatedAt = now
         )
         saveSnapshot(updated, now, reason = SNOOZED)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.SNOOZED, now, from = stream.state, to = SNOOZED, detail = until.toString())
         ActionResult.Success(updated)
     }
@@ -336,7 +435,7 @@ class DefaultVirlinActions(
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = target)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.LEFT, now, from = FOCUS, to = target, detail = returnAt?.toString())
         if (target == SNOOZED) event(stream, EventType.SNOOZED, now, from = FOCUS, to = SNOOZED, detail = returnAt.toString())
         else event(stream, EventType.READY, now, from = FOCUS, to = READY)
@@ -380,7 +479,7 @@ class DefaultVirlinActions(
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = SNOOZED)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.RESULT_READY, now, from = from, to = SNOOZED, detail = returnAt.toString())
         event(stream, EventType.SNOOZED, now, from = from, to = SNOOZED, detail = returnAt.toString())
         ActionResult.Success(updated)
@@ -397,7 +496,7 @@ class DefaultVirlinActions(
             state = SNOOZED, checkAt = returnAt, snoozedUntil = returnAt, snoozeReason = reason,
             processingStartedAt = null, updatedAt = now
         )
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.RETURN_DEFERRED, now, from = stream.state, to = SNOOZED, detail = returnAt.toString())
         ActionResult.Success(updated)
     }
@@ -410,7 +509,7 @@ class DefaultVirlinActions(
             state = READY, processingStartedAt = null, checkAt = null, snoozedUntil = null, updatedAt = now
         )
         saveSnapshot(updated, now, reason = READY)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.READY, now, from = stream.state, to = READY)
         ActionResult.Success(updated)
     }
@@ -421,7 +520,7 @@ class DefaultVirlinActions(
         closeOpenSession(stream.id, now)
         val updated = stream.copy(state = PAUSED, checkAt = null, snoozedUntil = null, updatedAt = now)
         saveSnapshot(updated, now, reason = PAUSED)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.PAUSED, now, from = stream.state, to = PAUSED)
         ActionResult.Success(updated)
     }
@@ -435,7 +534,7 @@ class DefaultVirlinActions(
             processingStartedAt = null, checkAt = null, snoozedUntil = null, snoozeReason = null, updatedAt = now
         )
         saveSnapshot(updated, now, reason = BLOCKED)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.BLOCKED, now, from = stream.state, to = BLOCKED, detail = reason)
         ActionResult.Success(updated)
     }
@@ -444,7 +543,7 @@ class DefaultVirlinActions(
         if (stream.state != BLOCKED) return@run ActionResult.Rejected(DomainError.NotBlocked)
         val now = clock.now()
         val updated = stream.copy(state = READY, blockerReason = null, updatedAt = now)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.UNBLOCKED, now, from = BLOCKED, to = READY)
         ActionResult.Success(updated)
     }
@@ -461,7 +560,7 @@ class DefaultVirlinActions(
             processingStartedAt = null, checkAt = null, snoozedUntil = null, updatedAt = now
         )
         saveSnapshot(updated, now, reason = DONE)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.COMPLETED, now, from = stream.state, to = DONE, cycleId = stream.currentCycleId)
         ActionResult.Success(updated)
     }
@@ -478,7 +577,7 @@ class DefaultVirlinActions(
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = updated.state, note = update.note)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.CONTEXT_UPDATED, now, cycleId = stream.currentCycleId)
         update.note?.takeIf { it.isNotBlank() }?.let { event(stream, EventType.NOTE_ADDED, now, detail = it.trim()) }
         ActionResult.Success(updated)
@@ -492,7 +591,217 @@ class DefaultVirlinActions(
         ActionResult.Success(stream)
     }
 
+    // ------------------------------------------------------------------ Needs You priority
+
+    override suspend fun reorderNeedsYou(streamId: String, position: Int): ActionResult<List<WorkStream>> = run(streamId) { stream ->
+        if (stream.state != CHECK) return@run ActionResult.Rejected(DomainError.NotInNeedsYou)
+        val move = NeedsYouOrder.planMove(allStreams(), streamId, position)
+            ?: return@run ActionResult.Rejected(DomainError.NotInNeedsYou)
+        // Ranks only — `updatedAt` is deliberately untouched so waiting time / urgency never move.
+        move.changed.forEach { saveStream(it) }
+        ActionResult.Success(move.order)
+    }
+
+    override suspend fun setNeedsYouPriority(streamId: String, position: Int, scope: PriorityScope): ActionResult<List<WorkStream>> {
+        val moved = reorderNeedsYou(streamId, position)
+        if (moved !is ActionResult.Success) return moved
+        // The stored position is what the user asked for, clamped to the queue that accepted it.
+        val effective = NeedsYouOrder.effectiveRank(moved.value, streamId) ?: position
+        when (scope) {
+            // "This time" is a move now: it never creates a durable policy, and (Phase 07) it never
+            // deletes one either — an existing Always/Until keeps applying on the NEXT re-entry.
+            PriorityScope.OneTime -> Unit
+            else -> preferences.save(PriorityPreference(streamId, effective, scope, clock.now()))
+        }
+        return moved
+    }
+
+    override suspend fun priorityPreference(streamId: String): PriorityPreference? = preferences.get(streamId)
+
+    override suspend fun clearPriorityPreference(streamId: String) = preferences.remove(streamId)
+
+    /** Start-up hygiene: drop expired policies without needing any screen to be open. */
+    override suspend fun cleanupExpiredPriorityPreferences(): Int = preferences.cleanupExpired(clock.now())
+
+    /**
+     * Re-entry policy: place a returning item at its preferred position when its preference is
+     * still active, then drop an expired one. Conflicts are resolved by the queue itself — the
+     * item being inserted gets the position it asks for and everyone else shifts, so two items may
+     * both prefer position 1 while effective ranks stay unique.
+     */
+    private suspend fun WorkStreamWriter.applyPreferenceOnEntry(streamId: String, now: Instant) {
+        // `activeFor` also drops an expired policy, so expiry never needs the UI.
+        val pref = preferences.activeFor(streamId, now) ?: return
+        val move = NeedsYouOrder.planMove(allStreams(), streamId, pref.preferredPosition) ?: return
+        move.changed.forEach { saveStream(it) }
+    }
+
+
+    // ================================================================ External work (Phase 10)
+
+    override suspend fun startExternalWork(request: StartExternalWork): ActionResult<WorkStream> =
+        run(request.workStreamId) { stream ->
+            if (stream.state.isTerminal) return@run ActionResult.Rejected(DomainError.StreamAlreadyDone)
+            if (stream.state != PROCESSING) requireTransition(stream, PROCESSING)?.let { return@run it }
+            val now = clock.now()
+
+            // The work item is identified by a stable id and must belong to this stream.
+            val workItemId = request.workItemId
+            if (workItemId != null) {
+                val task = getTask(workItemId) ?: return@run ActionResult.Rejected(DomainError.TaskNotFound(workItemId))
+                if (task.workStreamId != stream.id) return@run ActionResult.Rejected(DomainError.TaskNotInWorkStream)
+            }
+            if (request.stages.any { it.title.isBlank() }) return@run ActionResult.Rejected(DomainError.EmptyTitle)
+
+            // Stages describe the external process. The first one starts with the run.
+            val created = request.stages.mapIndexed { index, s ->
+                ExternalStage(
+                    id = ids.newId("stg"),
+                    workStreamId = stream.id,
+                    title = s.title.trim(),
+                    order = index,
+                    expectedMinutes = s.expectedMinutes,
+                    status = if (index == 0) ExternalStageStatus.IN_PROGRESS else ExternalStageStatus.PENDING,
+                    startedAt = if (index == 0) now else null
+                )
+            }
+            created.forEach { saveStage(it) }
+
+            // checkAt is derived once, from timestamps - never a stored countdown.
+            val checkAt = request.checkAt
+                ?: request.checkInMinutes?.let { now.plus(Duration.ofMinutes(it)) }
+                ?: created.firstOrNull()?.expected?.let { now.plus(it) }
+
+            closeOpenSession(stream.id, now)
+            val cycle = (getCurrentCycle(stream.id) ?: newCycle(stream, now)).copy(handedOffAt = now)
+            saveCycle(cycle)
+
+            val updated = stream.copy(
+                state = PROCESSING,
+                externalActorId = request.actor?.id ?: stream.externalActorId,
+                tool = request.actor?.displayName ?: stream.tool,
+                waitingFor = request.instruction ?: stream.waitingFor,
+                activeTaskId = workItemId ?: stream.activeTaskId,
+                processingStartedAt = now,
+                checkAt = checkAt,
+                snoozedUntil = null,
+                snoozeReason = null,
+                currentCycleId = cycle.id,
+                updatedAt = now
+            )
+            saveSnapshot(updated, now, reason = PROCESSING)
+            persist(updated)
+            event(stream, EventType.PROCESSING_STARTED, now, from = stream.state, to = PROCESSING,
+                cycleId = cycle.id, detail = request.instruction ?: updated.waitingFor)
+            ActionResult.Success(updated)
+        }
+
+    override suspend fun scheduleExternalCheck(streamId: String, checkAt: Instant): ActionResult<WorkStream> =
+        continueProcessing(streamId, checkAt)
+
+    override suspend fun markExternalStillRunning(streamId: String, checkAt: Instant): ActionResult<WorkStream> =
+        stillRunning(streamId, checkAt)
+
+    override suspend fun markExternalBlocked(streamId: String, reason: String?): ActionResult<WorkStream> =
+        blockStream(streamId, reason)
+
+    override suspend fun deferReadyResult(streamId: String, returnAt: Instant): ActionResult<WorkStream> =
+        resultReadyLater(streamId, returnAt)
+
+    override suspend fun markExternalResultReady(streamId: String): ActionResult<WorkStream> = run(streamId) { stream ->
+        if (stream.state != CHECK && stream.state != PROCESSING) return@run ActionResult.Rejected(DomainError.NotAnExternalCheck)
+        val now = clock.now()
+        if (stream.state == PROCESSING) requireTransition(stream, CHECK)?.let { return@run it }
+        // The external stage is finished; the human work item is NOT touched.
+        ExternalStages.current(stagesOf(stream.id), stream.id)?.let { current ->
+            saveStage(current.copy(status = ExternalStageStatus.DONE, completedAt = now))
+        }
+        val updated = stream.copy(
+            state = CHECK,
+            processingStartedAt = null,
+            checkAt = stream.checkAt ?: now,      // keep the due moment so the overdue timer stays honest
+            snoozedUntil = null,
+            snoozeReason = null,
+            updatedAt = now
+        )
+        saveSnapshot(updated, now, reason = CHECK)
+        persist(updated)
+        event(stream, EventType.RESULT_READY, now, from = stream.state, to = CHECK)
+        ActionResult.Success(updated)
+    }
+
+    override suspend fun focusExternalResult(streamId: String): ActionResult<WorkStream> {
+        val stream = repository.getStream(streamId) ?: return ActionResult.NotFound(streamId)
+        val workItemId = stream.activeTaskId
+        // Same work item, same Phase 09 focus rules - no second task, no second switching system.
+        return if (workItemId != null) {
+            when (val r = startFocus(workItemId)) {
+                is ActionResult.Success -> ActionResult.Success(r.value.focused)
+                is ActionResult.Rejected -> ActionResult.Rejected(r.reason)
+                is ActionResult.NotFound -> ActionResult.NotFound(r.streamId)
+                is ActionResult.Failure -> ActionResult.Failure(r.cause)
+            }
+        } else when (val r = resultReadyNow(streamId)) {
+            is ActionResult.Success -> ActionResult.Success(r.value.focused)
+            is ActionResult.Rejected -> ActionResult.Rejected(r.reason)
+            is ActionResult.NotFound -> ActionResult.NotFound(r.streamId)
+            is ActionResult.Failure -> ActionResult.Failure(r.cause)
+        }
+    }
+
+    override suspend fun startNextExternalStage(streamId: String, checkAt: Instant?): ActionResult<WorkStream> =
+        run(streamId) { stream ->
+            if (stream.state.isTerminal) return@run ActionResult.Rejected(DomainError.StreamAlreadyDone)
+            val now = clock.now()
+            val all = stagesOf(stream.id)
+            if (all.isEmpty()) return@run ActionResult.Rejected(DomainError.NotExternalWork)
+            // The stage to start is the one that is merely PLANNED; a stage still running is
+            // completed first and its successor begins. Nothing is ever skipped.
+            val current = ExternalStages.current(all, stream.id)
+            val next = when {
+                current == null -> null
+                current.status == ExternalStageStatus.PENDING -> current
+                else -> ExternalStages.next(all, stream.id, current)
+            } ?: return@run ActionResult.Rejected(DomainError.NoNextStage)
+            if (stream.state != PROCESSING) requireTransition(stream, PROCESSING)?.let { return@run it }
+
+            current?.takeIf { it.id != next.id && it.status != ExternalStageStatus.DONE }
+                ?.let { saveStage(it.copy(status = ExternalStageStatus.DONE, completedAt = now)) }
+            saveStage(next.copy(status = ExternalStageStatus.IN_PROGRESS, startedAt = now))
+
+            val due = checkAt ?: next.expected?.let { now.plus(it) }
+            closeOpenSession(stream.id, now)
+            val updated = stream.copy(
+                state = PROCESSING,
+                processingStartedAt = now,
+                checkAt = due,
+                snoozedUntil = null,
+                snoozeReason = null,
+                updatedAt = now
+            )
+            saveSnapshot(updated, now, reason = PROCESSING)
+            persist(updated)
+            event(stream, EventType.PROCESSING_STARTED, now, from = stream.state, to = PROCESSING, detail = next.title)
+            ActionResult.Success(updated)
+        }
+
+    override suspend fun externalStages(streamId: String): List<ExternalStage> = repository.getStages(streamId)
+
     // ------------------------------------------------------------------ Shared mechanics
+
+    /**
+     * The one save path for attention transitions: an explicit Needs You rank belongs to the current
+     * CHECK membership, so any stream saved in another state leaves unranked (a later return enters
+     * Needs You at its longest-waiting position).
+     */
+    private suspend fun WorkStreamWriter.persist(stream: WorkStream) {
+        val leaving = stream.state != CHECK
+        saveStream(if (leaving && stream.attentionRank != null) stream.copy(attentionRank = null) else stream)
+        // An item leaving Needs You closes the gap it left: the remaining ranked block re-densifies
+        // to 1..k. Effective ranks (positions) are always dense anyway; this keeps the stored keys
+        // dense too, so the persisted queue and what the user sees can never drift apart.
+        if (leaving) NeedsYouOrder.normalize(allStreams()).forEach { saveStream(it) }
+    }
 
     /** Load → run inside one transaction → map unexpected throwables to [ActionResult.Failure]. */
     private suspend fun <T> run(

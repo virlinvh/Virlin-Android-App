@@ -76,12 +76,7 @@ object NowPresentation {
      * - Fallback in every case: `updatedAt` (always present, persisted in Room).
      */
     fun waitingSince(streams: List<WorkStream>): Map<String, java.time.Instant> =
-        streams.filter { it.state == WorkStreamState.CHECK }.associate { s ->
-            s.id to when (s.snoozeReason) {
-                null -> s.checkAt ?: s.updatedAt
-                else -> s.updatedAt
-            }
-        }
+        streams.filter { it.state == WorkStreamState.CHECK }.associate { s -> s.id to com.virlin.app.domain.attention.NeedsYouOrder.waitingSince(s) }
 
     /** Streams currently in CHECK, classified. Pure; nothing is scheduled or mutated here. */
     fun attention(streams: List<WorkStream>): Map<String, AttentionKind> =

@@ -54,6 +54,7 @@ const val TaskDetailTag = "task_detail"
 const val TaskCancelTag = "task_cancel"
 const val TaskCancelConfirmTag = "task_cancel_confirm"
 const val StartNextTag = "start_next_task"
+const val FocusWorkItemTag = "focus_work_item"
 
 private val Hairline = VirlinColors.TextPrimary.copy(alpha = 0.08f)
 private val DueFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d · h:mm a")
@@ -71,6 +72,7 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
     val standalone = HierarchyPresentation.rows(s.tasks.filter { it.projectId == project.id && it.workStreamId == null }, null, null, s.expanded)
     val progress = remember(s) { ProgressCalculator.ofProject(s.tasks, s.streams, project.id).toLabel() }
     var adding by remember { mutableStateOf(false) }
+    var addingStream by remember { mutableStateOf(false) }
     var editingIcon by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     if (editingIcon) {
@@ -148,6 +150,10 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
             StreamSummaryRow(sum) { navController.navigate(workStreamDetail(ws.id)) }
         }
         item {
+            Spacer(Modifier.height(10.dp))
+            AddButton("+ WORKSTREAM", onClick = { addingStream = true }, tag = AddWorkStreamButtonTag)
+        }
+        item {
             Spacer(Modifier.height(20.dp)); SectionLabel("STANDALONE TASKS"); Spacer(Modifier.height(6.dp))
             if (standalone.isEmpty()) Text("None", fontSize = 13.sp, color = VirlinColors.TextTertiary)
         }
@@ -157,6 +163,7 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
         item { Spacer(Modifier.height(16.dp)); AddButton("+ ADD TASK", onClick = { adding = true }) }
     }
     if (adding) AddTaskDialog("New task in ${project.title}", onDismiss = { adding = false }) { t, e -> vm.addStandaloneTask(project.id, t, e); adding = false }
+    if (addingStream) AddNameDialog("New WorkStream in ${project.title}", "WorkStream name", onDismiss = { addingStream = false }) { vm.addWorkStream(project.id, it) }
 }
 
 @Composable
@@ -276,6 +283,12 @@ fun WorkStreamDetailScreen(streamId: String?, navController: NavController, vm: 
 
 @Composable
 fun TaskDetailScreen(taskId: String?, navController: NavController, vm: HierarchyViewModel = viewModel()) {
+    // One human focus at a time: a request that would displace live work asks first.
+    val pendingSwitch by vm.pendingSwitch.collectAsState()
+    pendingSwitch?.let { p ->
+        SwitchFocusDialog(currentTitle = p.currentTitle, nextTitle = p.target.workItem.title,
+            onCancel = vm::cancelSwitch, onConfirm = vm::confirmSwitch)
+    }
     val s by vm.snapshot.collectAsState()
     val task = s.tasks.firstOrNull { it.id == taskId }
     if (task == null) { Missing("Task"); return }
@@ -288,6 +301,7 @@ fun TaskDetailScreen(taskId: String?, navController: NavController, vm: Hierarch
     LaunchedEffect(task.id, s.streams) { focused = vm.focusedOn(task) }
     var adding by remember { mutableStateOf(false) }
     var confirmCancel by remember { mutableStateOf(false) }
+    var delegating by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(VirlinColors.Background).testTag(TaskDetailTag),
@@ -347,6 +361,14 @@ fun TaskDetailScreen(taskId: String?, navController: NavController, vm: Hierarch
                 Spacer(Modifier.width(10.dp))
                 if (!task.status.isTerminal && stream != null && !isCurrent)
                     AddButton("SET CURRENT", onClick = { vm.setActiveTask(stream.id, task.id) }, modifier = Modifier.testTag("set_current"))
+                // Phase 09: start working on this item now (a container resolves to its first open leaf).
+                if (!task.status.isTerminal && stream != null) {
+                    Spacer(Modifier.width(10.dp))
+                    AddButton("FOCUS", onClick = { vm.focusWorkItem(task.id) }, tag = FocusWorkItemTag)
+                    // Phase 10: hand this exact work item to an external actor (Working For You).
+                    Spacer(Modifier.width(10.dp))
+                    AddButton("DELEGATE", onClick = { delegating = true }, tag = DelegateButtonTag)
+                }
             }
             task.notes?.let { Spacer(Modifier.height(22.dp)); SectionLabel("NOTES"); Spacer(Modifier.height(4.dp)); Text(it, fontSize = 13.sp, color = VirlinColors.TextSecondary) }
             if (!task.status.isTerminal) {
@@ -358,6 +380,12 @@ fun TaskDetailScreen(taskId: String?, navController: NavController, vm: Hierarch
         }
     }
     if (adding) AddTaskDialog("New subtask under ${task.title}", onDismiss = { adding = false }) { t, e -> vm.addSubtask(task.id, t, e); adding = false }
+    if (delegating && stream != null) {
+        DelegateDialog(task.title, onDismiss = { delegating = false }) { actor, instruction, minutes, stages ->
+            vm.delegate(stream.id, task.id, actor, instruction, minutes, stages)
+            delegating = false
+        }
+    }
     if (confirmCancel) Dialog(onDismissRequest = { confirmCancel = false }) {
         Column(Modifier.background(VirlinColors.Background, RoundedCornerShape(20.dp)).padding(20.dp)) {
             Text("Cancel “${task.title}”?", fontSize = 15.sp, fontWeight = FontWeight.Black, color = VirlinColors.TextPrimary)

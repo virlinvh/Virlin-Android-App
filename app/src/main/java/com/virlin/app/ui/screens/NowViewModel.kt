@@ -57,6 +57,80 @@ class NowViewModel(
         .map { NowPresentation.waitingSince(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NowPresentation.waitingSince(repository.streams.value))
 
+    /**
+     * THE Needs You attention queue: ordered stream ids, index + 1 = the item's effective rank.
+     * Projected once from the domain (`NeedsYouOrder.queue`) — the UI never computes an order or a
+     * rank of its own, so there is exactly one source of truth for "who is #1".
+     */
+    val needsYouQueue: StateFlow<List<String>> = repository.streams
+        .map { s -> com.virlin.app.domain.attention.NeedsYouOrder.queue(s).map { it.stream.id } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            com.virlin.app.domain.attention.NeedsYouOrder.queue(repository.streams.value).map { it.stream.id })
+
+    /**
+     * The Needs You DISPLAY sort (Phase 06) — a presentation preference owned here, so it survives
+     * recomposition and navigation for the session. It never touches the canonical queue: it only
+     * chooses the order the same entries are rendered in. Not persisted (no database).
+     */
+    private val _needsYouSort = MutableStateFlow(NeedsYouSortMode.PRIORITY)
+    val needsYouSort: StateFlow<NeedsYouSortMode> = _needsYouSort.asStateFlow()
+    fun setNeedsYouSort(mode: NeedsYouSortMode) { _needsYouSort.value = mode }
+
+    /** The ids to render, in DISPLAY order. Each card still takes its rank from [needsYouQueue]. */
+    val needsYouDisplay: StateFlow<List<String>> = combine(repository.streams, _needsYouSort) { streams, mode ->
+        NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(streams), mode).map { it.stream.id }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+        NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(repository.streams.value), NeedsYouSortMode.PRIORITY).map { it.stream.id })
+
+    /**
+     * Each Needs You item's attention target (`checkAt`) — the Phase 05 temporal truth the card's
+     * `HH:MM:SS` / `+HH:MM:SS` timer is derived from. One projection, no per-card state.
+     */
+    val attentionDueAt: StateFlow<Map<String, java.time.Instant>> = repository.streams
+        .map { list -> list.filter { it.state == com.virlin.app.domain.model.WorkStreamState.CHECK }.mapNotNull { s -> s.checkAt?.let { s.id to it } }.toMap() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            repository.streams.value.filter { it.state == com.virlin.app.domain.model.WorkStreamState.CHECK }.mapNotNull { s -> s.checkAt?.let { s.id to it } }.toMap())
+
+    /**
+     * WORKING FOR YOU (Phase 10): the external runs projected from the domain — soonest check
+     * first. The same WorkStream leaves this list and appears in Needs You when its check time
+     * arrives; nothing is duplicated, and no countdown is stored anywhere.
+     */
+    val externalWork: StateFlow<List<com.virlin.app.domain.external.ExternalWorkItem>> =
+        combine(repository.streams, repository.stages, repository.projects, repository.tasks) { s, st, p, t ->
+            com.virlin.app.domain.external.ExternalWork.workingForYou(s, clock.now(), st, p, t)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            com.virlin.app.domain.external.ExternalWork.workingForYou(
+                repository.streams.value, clock.now(), repository.stages.value,
+                repository.projects.value, repository.tasks.value))
+
+    /** Stages of one external run, for the detail surface. Read through the action layer. */
+    suspend fun stagesOf(streamId: String) = actions.externalStages(streamId)
+
+    /** Delegate work to an external actor (Phase 10 creation path). */
+    fun startExternalWork(request: com.virlin.app.domain.action.StartExternalWork) {
+        viewModelScope.launch { log("startExternalWork", actions.startExternalWork(request)) }
+    }
+
+    /** START NEXT STAGE — the next planned external step begins; back to Working For You. */
+    fun startNextExternalStage(streamId: String) {
+        viewModelScope.launch { log("startNextExternalStage", actions.startNextExternalStage(streamId)) }
+    }
+
+    /** CHECK -> "result ready": stays human attention until focused or deferred. */
+    fun markExternalResultReady(streamId: String) {
+        viewModelScope.launch { log("markExternalResultReady", actions.markExternalResultReady(streamId)) }
+    }
+
+    /** FOCUS NOW on a ready external result (Phase 09 focus rules, same work item). */
+    fun focusExternalResult(streamId: String) {
+        viewModelScope.launch { log("focusExternalResult", actions.focusExternalResult(streamId)) }
+    }
+
+    private fun log(name: String, result: ActionResult<*>) {
+        if (result !is ActionResult.Success) Log.w(TAG, "$name -> $result")
+    }
+
     /** The single lightweight chooser open on Now, if any. Never more than one at a time. */
     sealed interface Chooser {
         val streamId: String
@@ -96,6 +170,25 @@ class NowViewModel(
     override fun customMinutes(streamId: String, intent: TimedIntent, minutes: Long) = intents.customMinutes(streamId, intent, minutes)
 
     fun focus(streamId: String) = intents.focus(streamId)
+    /** "Not now" from the control sheet: the existing markReady action. */
+    fun markReady(streamId: String) = intents.markReady(streamId)
+    /** Move a Needs You item to a 1-based queue position; the others shift automatically (Phase 1 rule). */
+    /** Phase 09: the post-COMPLETE continuation (FOCUS NEXT / DONE FOR NOW). */
+    val completedFocus: StateFlow<AttentionIntentController.CompletedFocus?> get() = intents.completedFocus
+    fun focusNextAfterCompletion() = intents.focusNextAfterCompletion()
+    fun dismissCompletedFocus() = intents.dismissCompletedFocus()
+
+    fun reorderNeedsYou(streamId: String, position: Int) = intents.reorderNeedsYou(streamId, position)
+    /** Priority editor SAVE (Phase 04): move now + remember the preference according to its scope. */
+    fun setNeedsYouPriority(streamId: String, position: Int, scope: com.virlin.app.domain.attention.PriorityScope) =
+        intents.setNeedsYouPriority(streamId, position, scope)
+    /** The item's stored durable policy, if any (Room-backed; read off the main thread). */
+    suspend fun priorityPreference(streamId: String) = actions.priorityPreference(streamId)
+
+    /** "Remove saved priority": forget the durable policy; the current queue order is untouched. */
+    fun clearPriorityPreference(streamId: String) {
+        viewModelScope.launch { actions.clearPriorityPreference(streamId) }
+    }
     /** A planned check/return time arrived (the in-app ticker's scheduling stand-in). */
     fun checkDue(streamId: String) = intents.checkDue(streamId)
     /** "Still running — give it N more minutes." From CHECK or PROCESSING. */

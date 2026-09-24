@@ -36,6 +36,8 @@ sealed interface DomainError {
     data object NotAReturn : DomainError
     data object NotBlocked : DomainError
     data object EmptyNote : DomainError
+    /** Needs You reorder asked for a stream that is not in CHECK. */
+    data object NotInNeedsYou : DomainError
 
     // ---- Structure
     data object EmptyTitle : DomainError
@@ -50,6 +52,12 @@ sealed interface DomainError {
     /** Task does not belong to that WorkStream. */
     data object TaskNotInWorkStream : DomainError
     data object InvalidEffort : DomainError
+
+    // ---- External work (Phase 10)
+    /** START NEXT STAGE was asked for but the run has no stage left to start. */
+    data object NoNextStage : DomainError
+    /** The action needs an external run (a stream with an actor / PROCESSING context). */
+    data object NotExternalWork : DomainError
 
     // ---- Execution responsibility
     /** Hand Off / external-processing verbs require effective EXTERNAL. */

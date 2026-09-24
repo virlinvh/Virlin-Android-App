@@ -37,7 +37,11 @@ import org.junit.Test
 class ProjectIconEditorUiTest {
 
     @get:Rule val permissions: GrantPermissionRule = GrantPermissionRule.grant(android.Manifest.permission.POST_NOTIFICATIONS)
-    @get:Rule val composeRule = createAndroidComposeRule<MainActivity>()
+    val composeRule = createAndroidComposeRule<MainActivity>()
+
+    /** Deterministic start state whatever ran before (shared process + shared `virlin.db`). */
+    @get:Rule val rules: org.junit.rules.RuleChain =
+        org.junit.rules.RuleChain.outerRule(com.virlin.app.DemoStateRule()).around(composeRule)
 
     @Before fun setUp() { composeRule.mainClock.autoAdvance = false }
 

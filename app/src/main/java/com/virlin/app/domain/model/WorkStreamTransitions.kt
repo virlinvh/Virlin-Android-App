@@ -11,6 +11,9 @@ import com.virlin.app.domain.model.WorkStreamState.*
  *   which is a different concept from a human choosing not to look.
  * - FOCUS → SNOOZED is "Leave with a return time" (human return). FOCUS → PROCESSING is
  *   "Hand off" (an external process keeps working). They are different intents.
+ * - READY -> PROCESSING is Phase 10 DELEGATE: work the human is NOT doing is handed to an
+ *   external actor. FOCUS -> PROCESSING remains Hand Off (the human leaves Focus). Both end in
+ *   the same place; only PROCESSING ever means "something else is working".
  * - DONE is terminal until an explicit reopen action exists.
  */
 object WorkStreamTransitions {
@@ -19,7 +22,7 @@ object WorkStreamTransitions {
         FOCUS      to setOf(PROCESSING, READY, SNOOZED, PAUSED, BLOCKED, DONE),
         PROCESSING to setOf(CHECK, READY, BLOCKED, DONE),
         CHECK      to setOf(PROCESSING, FOCUS, SNOOZED, READY, BLOCKED),
-        READY      to setOf(FOCUS, SNOOZED, BLOCKED, PAUSED, DONE),
+        READY      to setOf(FOCUS, PROCESSING, SNOOZED, BLOCKED, PAUSED, DONE),
         SNOOZED    to setOf(CHECK, READY, FOCUS),
         BLOCKED    to setOf(READY, FOCUS, DONE),
         PAUSED     to setOf(READY, FOCUS, DONE),

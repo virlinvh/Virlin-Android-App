@@ -3,6 +3,7 @@ package com.virlin.app.domain.repository
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.ExternalStage
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
@@ -32,6 +33,10 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     private val _projects = MutableStateFlow<List<Project>>(emptyList())
     private val _tasks = MutableStateFlow<List<Task>>(emptyList())
     private val _captures = MutableStateFlow<List<CaptureItem>>(emptyList())
+    private val _stages = MutableStateFlow<List<ExternalStage>>(emptyList())
+
+    override val stages: StateFlow<List<ExternalStage>> = _stages.asStateFlow()
+    override suspend fun getStages(workStreamId: String) = inner?.getStages(workStreamId) ?: emptyList()
 
     override val streams: StateFlow<List<WorkStream>> = _streams.asStateFlow()
     override val projects: StateFlow<List<Project>> = _projects.asStateFlow()
@@ -52,11 +57,13 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
             _projects.value = ready.projects.value
             _tasks.value = ready.tasks.value
             _captures.value = ready.captures.value
+            _stages.value = ready.stages.value
             forwardJobs = listOf(
                 scope.launch { ready.streams.collect { _streams.value = it } },
                 scope.launch { ready.projects.collect { _projects.value = it } },
                 scope.launch { ready.tasks.collect { _tasks.value = it } },
                 scope.launch { ready.captures.collect { _captures.value = it } },
+                scope.launch { ready.stages.collect { _stages.value = it } },
             )
         }
     }
@@ -71,6 +78,7 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
             _projects.value = emptyList()
             _tasks.value = emptyList()
             _captures.value = emptyList()
+            _stages.value = emptyList()
         }
     }
 

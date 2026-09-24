@@ -5,6 +5,8 @@ import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.ExternalStage
+import com.virlin.app.domain.model.ExternalStageStatus
 import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.ExecutionPreference
@@ -19,6 +21,8 @@ import com.virlin.app.domain.model.PromptDocument
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskStatus
+import com.virlin.app.domain.attention.PriorityPreference
+import com.virlin.app.domain.attention.PriorityScope
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamEvent
 import com.virlin.app.domain.model.WorkStreamState
@@ -45,7 +49,8 @@ object VirlinMappers {
         priority = priority.name, pinned = pinned, lastHumanAction = lastHumanAction, waitingFor = waitingFor,
         nextHumanAction = nextHumanAction, blockerReason = blockerReason, processingStartedAt = processingStartedAt,
         checkAt = checkAt, snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.name, currentCycleId = currentCycleId,
-        cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
+        cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt,
+        attentionRank = attentionRank, externalActorId = externalActorId
     )
     fun WorkStreamEntity.toDomain() = WorkStream(
         id = id, title = title, projectId = projectId, tool = tool,
@@ -55,7 +60,18 @@ object VirlinMappers {
         blockerReason = blockerReason, processingStartedAt = processingStartedAt, checkAt = checkAt,
         snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.let(SnoozeReason::valueOf),
         currentCycleId = currentCycleId, cycleCount = cycleCount, activeTaskId = activeTaskId,
-        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
+        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt, attentionRank = attentionRank,
+        externalActorId = externalActorId
+    )
+
+    fun ExternalStage.toEntity() = ExternalStageEntity(
+        id = id, workStreamId = workStreamId, title = title, order = order,
+        expectedMinutes = expectedMinutes, status = status.name, startedAt = startedAt, completedAt = completedAt
+    )
+    fun ExternalStageEntity.toDomain() = ExternalStage(
+        id = id, workStreamId = workStreamId, title = title, order = order,
+        expectedMinutes = expectedMinutes, status = ExternalStageStatus.valueOf(status),
+        startedAt = startedAt, completedAt = completedAt
     )
 
     fun Task.toEntity() = TaskEntity(
@@ -188,4 +204,29 @@ object VirlinMappers {
         id, workStreamId, EventType.valueOf(type), at, cycleId,
         fromState?.let(WorkStreamState::valueOf), toState?.let(WorkStreamState::valueOf), detail
     )
+
+    // ---------------------------------------------------------------- priority preferences (v11)
+
+    fun PriorityPreference.toEntity() = PriorityPreferenceEntity(
+        streamId = streamId, preferredPosition = preferredPosition,
+        scopeType = when (scope) {
+            PriorityScope.Always -> "ALWAYS"
+            PriorityScope.CurrentTerm -> "CURRENT_TERM"
+            is PriorityScope.Until -> "UNTIL"
+            PriorityScope.OneTime -> error("OneTime is transient and is never stored")
+        },
+        createdAt = createdAt,
+        expiresAt = (scope as? PriorityScope.Until)?.expiresAt
+    )
+
+    /** Unknown/corrupt scope values read as null so a bad row can never crash attention. */
+    fun PriorityPreferenceEntity.toDomain(): PriorityPreference? {
+        val scope = when (scopeType) {
+            "ALWAYS" -> PriorityScope.Always
+            "CURRENT_TERM" -> PriorityScope.CurrentTerm
+            "UNTIL" -> expiresAt?.let { PriorityScope.Until(it) }
+            else -> null
+        } ?: return null
+        return PriorityPreference(streamId, preferredPosition, scope, createdAt)
+    }
 }

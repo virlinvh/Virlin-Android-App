@@ -89,6 +89,59 @@ Load on demand. UI rules live in `virlin-android-compose`; verification in `virl
 - Time only from `VirlinClock`; ids only from `IdProvider`. Tests use `FakeClock` and
   `SequentialIdProvider` — no sleeps, no real time.
 
+## Needs You attention queue (Phase 03)
+
+`NeedsYouOrder.queue(streams)` is the ONE canonical Needs You ordering: CHECK items, explicit
+`attentionRank` block first then longest-waiting, each entry carrying its EFFECTIVE rank (dense
+1..N position). Identity is the stream id and never depends on position. `VirlinActions.
+reorderNeedsYou(id, rank)` is the only move: it shifts the displaced items, re-densifies the whole
+queue in one transaction, clamps out-of-range targets, and never touches `updatedAt`, `checkAt` or
+the waiting basis. Leaving CHECK clears that item's rank and re-densifies the rest. New arrivals are
+unranked and append. UI (`NowViewModel.needsYouQueue`) only reads this projection — never compute an
+order or a rank in a composable, and never add a second ordering source.
+
+Phase 07: `PriorityPreferences` is Room-backed in production (`RoomPriorityPreferences`, table
+`priority_preferences`, schema v11, one row per stream id); the interface is suspend, `OneTime` is
+never stored and never deletes an existing policy, `Until` carries `expiresAt` and is cleaned up in
+SQL, `CurrentTerm` keeps its own scope type (expiration still unresolved).
+
+Phase 04 adds `PriorityPreference(streamId, preferredPosition, scope)` with typed `PriorityScope`
+(`OneTime` · `Always` · `CurrentTerm` · `Until`), stored behind `PriorityPreferences`
+(Room-backed since Phase 07). `VirlinActions.setNeedsYouPriority` = the Phase 03 move plus
+the preference; `checkDue` re-applies an ACTIVE preference on re-entry. Keep EFFECTIVE RANK,
+PREFERRED POSITION and SCOPE distinct: a preference never owns a rank, and duplicate preferred
+positions are fine because the queue keeps effective ranks unique.
+
+Phase 05 formalises attention TIME in `AttentionTiming`: `dueAt` = `WorkStream.checkAt`, and
+WAITING / DUE / OVERDUE plus the `HH:MM:SS` / `+HH:MM:SS` display are DERIVED from `dueAt − now`
+(never counted, never written per second). Needs You holds only items whose time has arrived
+(`CHECK`); future-due items are PROCESSING and show their countdown in Working For You. CHECK AGAIN
+= `continueProcessing(id, now + N)` with presets 3/5/10 min; it never changes rank or a priority
+preference, and a reorder never changes `dueAt`.
+
+## External work — Working For You (Phase 10)
+
+- An external run IS the WorkStream while `state == PROCESSING`: `checkAt` (when to look again),
+  `activeTaskId` (the exact work item), `waitingFor` (the instruction), plus
+  `externalActorId` (stable `ExternalActor` id; `tool` is the display fallback). There is NO
+  second execution entity — Working For You and Needs You are projections of one row.
+- `ExternalWork.workingForYou(streams, now, stages, projects, tasks)` is the only projection:
+  PROCESSING and not yet due, soonest `checkAt` first, ties by id, no-check runs last. Never
+  order it by the Needs You ranking; due items enter Needs You through `NeedsYouOrder`.
+- Countdown = `checkAt - now` via `AttentionTiming`. One hoisted clock value renders the whole
+  section: no per-row ticker, no per-second write, no stored countdown.
+- `ExternalStage` (table `external_stages`, schema v12) is TRACKING METADATA for the external
+  process — never a Task, never part of `ProgressCalculator`. `sortOrder` is the only ordering
+  truth; `ExternalStages` does all stage arithmetic.
+- Verbs: `startExternalWork` · `scheduleExternalCheck` · `markExternalResultReady` ·
+  `markExternalStillRunning` · `markExternalBlocked` · `deferReadyResult` ·
+  `focusExternalResult` · `startNextExternalStage`. RESULT READY completes the STAGE and keeps
+  the item as attention — it never completes the human Task. STILL RUNNING returns the same run
+  to PROCESSING; a deferred ready result goes to SNOOZED(EXTERNAL_RESULT_READY), never back to
+  Working For You. FOCUS NOW delegates to Phase 09 `startFocus`, so there is one switch flow.
+- `READY -> PROCESSING` is DELEGATE (work the human is not doing); `FOCUS -> PROCESSING` is
+  still HAND OFF.
+
 ## Boundaries
 
 - `WorkStreamRepository` (which also implements the small `CaptureRepository`, same transaction

@@ -42,6 +42,17 @@ object WaitingTime {
         else "−%02d:%02d".format(minutes, seconds)
     }
 
+    /**
+     * The approved card presentation: fixed-width `HH:MM:SS` since the item became due —
+     * `00:00:00`, `00:04:19`, `01:07:38`, `12:18:37`. Same semantics as [format] (elapsed since
+     * the due moment, never a countdown); only the presentation differs, so hours are always
+     * zero-padded and the width never changes. Rendered with tabular figures by the card.
+     */
+    fun formatClock(elapsedSeconds: Long): String {
+        val s = elapsedSeconds.coerceAtLeast(0)
+        return "%02d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
+    }
+
     /** Human-readable equivalent for accessibility: "Waiting for 3 minutes 42 seconds". */
     fun describe(elapsedSeconds: Long): String {
         val s = elapsedSeconds.coerceAtLeast(0)

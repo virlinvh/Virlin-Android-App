@@ -51,6 +51,10 @@ fun StreamsScreen(navController: NavController) {
     var searchQuery by remember { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf("All") }
     val hierarchy: com.virlin.app.ui.hierarchy.HierarchyViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    var addingProject by remember { mutableStateOf(false) }
+    if (addingProject) com.virlin.app.ui.hierarchy.AddNameDialog(
+        "New project", "Project name", onDismiss = { addingProject = false }
+    ) { hierarchy.addProject(it) }
     val snapshot by hierarchy.snapshot.collectAsState()
     val projectSummaries = remember(snapshot) { hierarchy.projectSummaries(snapshot) }
     
@@ -115,8 +119,18 @@ fun StreamsScreen(navController: NavController) {
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            if ((filter == "All" || filter == "Projects") && projectSummaries.isNotEmpty()) {
-                item { GroupHeader("PROJECTS", projectSummaries.size, FocusGreen) }
+            if (filter == "All" || filter == "Projects") {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        GroupHeader("PROJECTS", projectSummaries.size, FocusGreen)
+                        Spacer(modifier = Modifier.weight(1f))
+                        // Phase 08: creating a Project must take a second (one field), same action layer as the Agent.
+                        com.virlin.app.ui.hierarchy.AddButton(
+                            "+ PROJECT", onClick = { addingProject = true },
+                            tag = com.virlin.app.ui.hierarchy.AddProjectButtonTag
+                        )
+                    }
+                }
                 items(projectSummaries, key = { "p_" + it.project.id }) { ps ->
                     Row(
                         modifier = Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp))

@@ -645,6 +645,366 @@ Needs You cards now answer WHAT · WHY · HOW LONG from one persisted timestamp.
   placeholder ("Preparing your attention…"), i.e. the harness captures before hydration on this branch, so
   that golden cannot currently validate Needs You and was not re-recorded.
 
+## PHASE 08 COMPLETE — WORK HIERARCHY FOUNDATION (2026-09-23, branch `feature/needs-you-priority-ranking`)
+
+**The permanent model.** `PROJECT → WORKSTREAM → WORK ITEM → WORK ITEM → …`
+
+Most of this foundation ALREADY EXISTED (Passes 2–3) and was verified rather than rebuilt; Phase 08
+closed the real gaps. **No schema change was needed: the database stays at v11, no migration.**
+
+- **Recursive work item:** `Task` with `parentTaskId` (null = root), `order` (sibling ordering),
+  stable ids, owned by a WorkStream or standalone in a Project. There is ONE table for every depth —
+  no Subtask/Sub-subtask entities — and no depth limit (a 25-deep chain is tested).
+- **Ordering:** explicit `order`, auto-assigned per sibling list on create; never `createdAt`, row
+  order or title.
+- **Completion:** checklist semantics (`TODO/IN_PROGRESS/DONE/CANCELLED`), completion is per item and
+  a parent is NEVER auto-completed by its children. `CANCELLED` is terminal but not completed.
+- **Progress is DERIVED, never stored:** `ProgressCalculator` counts EXECUTABLE LEAVES only, so
+  containers are never double-counted. WorkStream = leaves of its root tasks; Project = leaves across
+  its WorkStreams plus standalone task trees (real leaf counts, not an average of percentages);
+  a scope with no leaves is `Unstructured` ("No structured progress"), never a misleading 0%.
+- **NEXT:** `nextTaskCandidate` = the first open leaf in depth-first sibling order; parents are never
+  candidates, terminal items are skipped, and it is null when nothing is open.
+- **Current Focus linkage:** `WorkStream.activeTaskId` targets a stable WorkItem id — renaming never
+  breaks focus — and `activePath` resolves the ancestry (leaf-first; the UI reverses it for
+  breadcrumbs). The frozen Current Focus card was NOT redesigned.
+- **UI:** Streams → Project Detail → WorkStream Detail → Task Detail, with a tree that expands and
+  collapses (presentation state only), bounded indentation (`MaxIndentDepth = 3`), per-row
+  completion control with a 40dp target and spoken state, breadcrumbs, and progress shown as a
+  percentage at Project level and counts deeper down.
+- **Phase 08 additions:** quick creation of a **Project** (`+ PROJECT` in Streams) and a
+  **WorkStream** (`+ WORKSTREAM` in Project Detail) through a one-field dialog and the same
+  `VirlinActions` the Agent uses — previously only the Agent could create them. Task and Subtask
+  creation already existed.
+- **Attention untouched:** Needs You / Working For You still attach to the WorkStream (not to a
+  WorkItem); rank, priority policies, `checkAt`, Check Again and sorting are unchanged.
+- **Tests:** `WorkHierarchyTest` (8: NEXT traversal incl. end-of-subtree and skipping, focus by id,
+  1 project × 10 streams × 120 items projected in one pass with correct roll-up, 25-deep chain,
+  empty scopes) on top of the existing `StructureActionsTest` (37) and `HierarchyPresentationTest`
+  (13); instrumented `WorkHierarchyCreationUiTest` (create project → workstream → task → subtask →
+  deeper → complete → progress follows, parents not auto-completed).
+
+## NEEDS YOU PHASE 07 COMPLETE — local priority persistence (2026-09-23, branch `feature/needs-you-priority-ranking`)
+
+Durable Needs You priority policies now survive process death in the app's own Room database.
+Offline-first: nothing here talks to a network, and no cloud/auth/sync code was added.
+
+- **Boundary unchanged:** `PriorityPreferences` is still the only thing the app talks to; every
+  member is now `suspend` so a durable store never runs on the main thread. Production binding is
+  `data/db/RoomPriorityPreferences` (`VirlinGraph.priorityPreferences`);
+  `InMemoryPriorityPreferences` remains for tests, previews and fakes. No Room entity leaves the
+  data layer; mapping lives in `VirlinMappers`.
+- **Schema v10 → v11**, additive `MIGRATION_10_11`, no destructive fallback: new table
+  `priority_preferences(streamId PK, preferredPosition, scopeType, createdAt, expiresAt)`. One row
+  per item, so saving again REPLACES the policy. No foreign key: a preference may outlive its
+  stream; orphans are ignored and cleaned up rather than cascading deletes into attention.
+- **Scopes:** `Always` and `CurrentTerm` persist indefinitely; `Until` persists `expiresAt` and is
+  ignored (and deleted) once past; **`OneTime` is never stored**. `CurrentTerm` keeps its own
+  `scopeType` on disk — it is NOT collapsed into `Always`, and its **term-expiration semantics
+  remain unresolved** until a real term concept exists.
+- **Phase 04 contract refined:** a `OneTime` move no longer deletes an existing durable policy. It
+  moves the current occurrence; the stored `Always`/`CurrentTerm`/`Until` still applies on the next
+  re-entry. (Phase 04 previously cleared it — the new behaviour matches "this time" semantics.)
+- **Expiry** is handled in SQL (`deleteExpired`) via `cleanupExpired`, so it never depends on a
+  screen being open; `activeFor` also drops an expired row when it is read.
+- **Removal:** the only UI addition — "Remove saved priority" inside the existing Priority Editor,
+  shown ONLY when a durable policy exists. No other visual change.
+- **Separation preserved:** `PriorityPreference` (policy) · `NeedsYouOrder` (canonical queue) ·
+  `AttentionTiming`/`checkAt` (time) · `NeedsYouSortMode` (session-only view). Re-entry resolves the
+  policy first, the queue then fixes effective rank, and the Phase 06 projection applies last.
+  A stored position larger than the current queue clamps on apply and the stored intent is kept.
+- **Tests:** `PriorityPersistenceTest` (20 contract cases) and instrumented `PriorityPersistenceRoomTest`
+  (8: v10 → v11 migration preserving projects/workstreams/tasks/`checkAt`/`attentionRank`, fresh
+  install v11, database-reopen recovery, Until before/after expiry, SQL cleanup, replacement and
+  removal, orphan and corrupt-scope safety).
+
+## Visual-baseline reconciliation (2026-09-23)
+
+Outcome of inspecting every failing Roborazzi golden after the Needs You redesign (Phases 01–06):
+
+1. **Three Needs You baselines are APPROVED but PENDING RE-RECORD** — `needs_you_check_due`,
+   `needs_you_return_due`, `needs_you_result_ready`. Each was compared old vs new: the difference is
+   entirely the approved compact card (Phase 01), rank identity (Phase 02) and `HH:MM:SS` timer
+   (Phase 05); no clipping, no misalignment, no missing content. They could not be re-recorded
+   because Windows Application Control blocks the freshly extracted
+   `robolectric-nativeruntime.dll`. Re-record them (and then `git checkout` the two Current Focus
+   goldens that the same test class would overwrite) when the environment permits.
+2. **Current Focus differences are unrelated** — `now_focus_human`, `now_focus_external` differ only
+   through the earlier focus-investment pass ("FOCUS INVESTED" → "CURRENT SESSION", timer seed).
+   Left untouched.
+3. **Technical debt:** `now_screen_hierarchy` and `app_scaffold_hierarchy` currently render the
+   startup placeholder "Preparing your attention…" because `VirlinGraph` never becomes ready under
+   Robolectric. Those goldens validate nothing today; this is a TEST-INFRASTRUCTURE defect to fix
+   separately — never re-record them as-is.
+4. **No genuine Needs You regression was found.** The remaining Agent / Hierarchy golden failures
+   are stale from earlier unrelated passes.
+
+## NEEDS YOU PHASE 06 COMPLETE — sort / view control (2026-09-23, branch `feature/needs-you-priority-ranking`)
+
+**CANONICAL PRIORITY ≠ DISPLAY SORT.** The Phase 03 queue stays the single authoritative order (and
+therefore every card's rank number and Phase 02 colour); Phase 06 only adds a way to LOOK at that
+queue in a different order.
+
+- **Control:** one quiet `tune` glyph beside "Needs You" (`NeedsYouSortControl`, 40dp touch target,
+  a 5dp dot when a non-default view is active). Tap → compact anchored `DropdownMenu` with three
+  radio options; choosing one applies immediately and closes the menu (no Save — it is a view
+  preference). Spoken: "Sort Needs You" / "Sort Needs You. Longest waiting selected."
+- **Modes** (`NeedsYouSortMode`, typed — never a UI string):
+  - `PRIORITY` (default) — canonical effective rank ascending.
+  - `LONGEST_WAITING` — `dueAt` ascending (earliest due = waiting longest first).
+  - `MOST_RECENT` — `dueAt` descending (most recently due first).
+- **Ties:** identical `dueAt` → canonical rank → stable id. Timestamps only; never the formatted
+  timer string. Deterministic for any input and identical on every recomposition.
+- **Projection:** `NeedsYouSort.display(queue, mode)` returns the SAME `NeedsYouOrder.Entry` objects
+  re-ordered, so each card keeps its canonical `rank`. Now renders in display order
+  (`NowViewModel.needsYouDisplay`) but takes each card's rank from `needsYouQueue`. No second list,
+  no duplicated truth.
+- **Ownership / persistence:** `NowViewModel.needsYouSort` — a session-level presentation
+  preference. It survives recomposition and navigation while the ViewModel lives; it is NOT
+  persisted (no Room, no DataStore) and resets when the process dies.
+- **Never mutates:** ranks, `attentionRank`, `dueAt`, timers, priority preferences. A priority edit
+  under an alternate view changes the canonical rank and leaves the view selected; CHECK / CHECK
+  AGAIN behave exactly as in Phase 05 and the remaining items simply re-project. An
+  "Always position 2" preference still means canonical #2, never "second card on screen".
+- **Scope:** Needs You only. Working For You is untouched and has no sort control; future-due items
+  are never pulled into Needs You by a view choice.
+- **Motion:** none added — the section is still a `Column`, so reorder is instant and deterministic
+  (no LazyColumn migration, per the brief).
+- **Tests:** `NeedsYouSortTest` (15 covering the 16 specified cases incl. ties, 25 items, rapid
+  switching, policy interplay) and instrumented `NeedsYouSortUiTest` (flows A–J).
+
+## NEEDS YOU PHASE 05 COMPLETE — attention time (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+**`dueAt` (`WorkStream.checkAt`) is the temporal source of truth.** Everything shown is derived from
+`dueAt − now` (`domain/attention/AttentionTiming.kt`); nothing counts down in memory and nothing is
+written per second, so backgrounding, rotation and process recreation cannot drift.
+
+- **States:** `WAITING` (`now < dueAt`) · `DUE` (same second) · `OVERDUE` (`now > dueAt`). An item
+  with no `dueAt` reads as DUE — nothing is invented.
+- **Format:** WAITING `HH:MM:SS` remaining · DUE `00:00:00` · OVERDUE `+HH:MM:SS` elapsed. Hours
+  accumulate and never wrap (`27:15:42`, `125:08:17`, `8760:00:00`); a negative countdown is never
+  shown. Tabular figures keep the column fixed. Spoken: "Due in 5 minutes" / "Due now" / "Overdue by
+  3 minutes 42 seconds".
+- **NEEDS YOU CONTRACT (resolved):** Needs You contains ONLY items whose attention time has arrived
+  (domain state `CHECK`), so its cards are DUE or OVERDUE. Items with a future `dueAt` are
+  PROCESSING and appear under **Working For You** with their "Check in mm:ss" countdown. This is the
+  existing Virlin model (`checkDue` promotes an item when its time arrives) and was NOT changed; the
+  `+HH:MM:SS` card format now makes the overdue direction explicit. The Phase 05 brief guessed
+  Needs You might hold future-due items — it does not, and changing that would restructure Now.
+- **CHECK AGAIN:** the existing flow — CHECK → "What happened?" → STILL RUNNING → "Check again:"
+  with the approved presets **3m / 5m / 10m** (`AttentionTiming.checkAgainPresets`) + CUSTOM
+  (minutes) → `VirlinActions.continueProcessing(id, now + N)`. It sets a NEW `dueAt`, hands the item
+  back to the external process until then (Working For You), and it returns to Needs You at the new
+  time as the SAME item — no duplicate, no timer restart. Cancel/dismiss change nothing.
+- **Time ⟂ priority:** a reorder never touches `dueAt`; CHECK AGAIN never touches rank or a stored
+  `PriorityPreference` (an `Always` item returning at its due time re-enters at its preferred
+  position). Timing never re-sorts the queue.
+- **Performance:** ONE shared second ticker for the section (`rememberSecondTicker`), read only
+  inside the timer text; there is no per-card coroutine and no per-second write.
+- **Persistence:** `dueAt` is already persisted in Room (existing column), so timing survives process
+  death. Phase 04 priority preferences remain in memory only. No new storage was added.
+- **Notifications:** not part of this phase. The existing Pass 6–7 scheduler still schedules the
+  reminder for a new check time (that is why the notification permission prompt appears) — no new
+  WorkManager/AlarmManager code was written.
+- **Tests:** `AttentionTimingTest` (17 covering the 20 specified cases: states, formatting, >24h,
+  >99h, presets, custom, clock jumps, no-duplicate, unknown item, 25 timers from one clock) and
+  instrumented `AttentionTimingUiTest` (flows A–J).
+
+## NEEDS YOU PHASE 04 COMPLETE — priority editor (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+The rank badge is the priority editor's ONLY entry point (no three-dot menu, no long press, no
+drag). Tapping it opens `NeedsYouPriorityEditor` — a compact `ModalBottomSheet`
+(`ui/screens/NeedsYouPriorityEditor.kt`): what is being changed (badge · title · context), the live
+queue count ("12 activities waiting"), POSITION (1..min(10,N) as coloured chips, 11..N in a compact
+scrolling row), APPLY (scope) and CANCEL / SAVE.
+
+- **Preview only.** Position and scope live in sheet state; nothing is written until SAVE. CANCEL,
+  back and swipe-dismiss never mutate the queue or store a preference. The sheet opens on the item's
+  CURRENT effective rank, never on 1.
+- **SAVE** calls `VirlinActions.setNeedsYouPriority(id, position, scope)`, which performs the move
+  through the Phase 03 `reorderNeedsYou` (no second ordering path) and then records the preference.
+  Phase 02 visuals follow automatically.
+- **Three separate concepts:** EFFECTIVE RANK (current queue position) · PREFERRED POSITION (what a
+  policy wants) · SCOPE (how long it applies). A preference never owns a rank.
+- **Scopes** (`domain/attention/PriorityPreference.kt`, typed — never UI labels):
+  - `OneTime` — "This time", the DEFAULT. Applies to this occurrence; clears any stored preference;
+    after the item leaves and returns it appends normally.
+  - `Always` — "Always prioritize here". On re-entry (`checkDue`) the item is inserted at its
+    preferred position and the others shift.
+  - `CurrentTerm` — "This term". Stored and behaves like `Always`: Virlin has no term/semester
+    boundary in the domain, so expiration is deliberately UNRESOLVED rather than faked.
+  - `Until(expiresAt)` — "Custom" (Today / Tomorrow / Next week). Applies while unexpired; an
+    expired preference is dropped on the next entry and the item appends.
+- **Conflicts:** two items may both prefer position 1. The item being (re)introduced takes the
+  position, everyone else shifts, and effective ranks stay unique — no conflict engine.
+- **Persistence:** NONE. `InMemoryPriorityPreferences` is process-local and does not survive process
+  death; the model is persistence-ready behind the `PriorityPreferences` interface. No Room/Supabase.
+- **Untouched:** card geometry and rank palette (frozen), timers (a move never resets one), CHECK
+  (independent action), the rest of Now. Sorting / mixer controls are NOT implemented.
+- **Superseded:** the earlier simple "Move to position" sheet was removed — the editor replaces it,
+  so there is one entry point and one flow.
+- **Tests:** `PriorityPreferenceTest` (18 — the specified cases incl. scopes, re-entry, expiry,
+  conflicts, clamping, item-gone, queue-shrank) and instrumented `PriorityEditorUiTest` (flows
+  A–G). Reorder motion: still none (the section is a `Column`; see Phase 03).
+
+## NEEDS YOU PHASE 03 COMPLETE — ordered attention queue (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+Needs You is now a real ORDERED ATTENTION QUEUE with one canonical owner.
+
+- **Canonical queue:** `domain/attention/NeedsYouOrder.queue(streams)` → `List<Entry(stream, rank)>`.
+  `rank` is the EFFECTIVE rank: the item's 1-based position, always dense `1..N` regardless of the
+  stored keys, so `1, 2, 4, 7` can never reach the UI. `effectiveRank(streams, id)` answers for one
+  item; duplicate ids collapse (first wins).
+- **Identity:** `WorkStream.id`. It never depends on rank, index or position — moving item #8 to #2
+  is a new rank on the SAME item (persistence/sync-ready).
+- **Ordering rule (unchanged):** explicit `attentionRank` block first (ascending), then unranked
+  items longest-waiting first, ties by id. The stored `attentionRank` is only a persisted sort key;
+  the position IS the rank.
+- **State owner:** the existing chain — repository flow → `NowViewModel.needsYouQueue` (ordered ids)
+  → Now. The card receives its rank; it computes nothing. No second ViewModel, no UI-local rank.
+- **Move:** `VirlinActions.reorderNeedsYou(id, targetRank)` — remove + insert, displaced items shift,
+  then the whole queue is re-densified to `1..N` in one transaction. Target clamps to `1` (0, negative)
+  and to `N` (beyond the end); moving to the current position writes nothing; unknown id →
+  `NotFound`; not in Needs You → `Rejected(NotInNeedsYou)`. `updatedAt`, `checkAt` and the waiting
+  basis are never touched.
+- **Insertion:** a new arrival (`checkDue`) is unranked and therefore appends after the ranked block.
+  No "always first" policy exists yet.
+- **Removal:** leaving CHECK (check/resolve, focus, ready, snooze …) clears that item's rank and
+  re-densifies the remaining ranked block (`NeedsYouOrder.normalize`, applied in
+  `DefaultVirlinActions.persist`), so the gap closes in the stored keys as well as on screen.
+- **Visuals:** rank drives everything through Phase 02's `NeedsYouPriority.visualsFor(rank)` — a
+  queue change automatically re-colours badge, icon, border, surface, timer and CHECK, including
+  items crossing the 10 ↔ 11 colour threshold. Zero manual colour work anywhere.
+- **Timer:** independent of position. Queue order never re-sorts by time, and a move never resets a
+  timer (asserted in unit and rendered tests).
+- **Reorder animation:** NOT added — the Needs You section is a plain `Column`, so there is no
+  placement animation to attach; correctness first. Colour still cross-fades as one identity (220ms,
+  Phase 02). Converting the section to a `LazyColumn` for `animateItem` is a later refinement.
+- **NOT implemented (later phases):** the rank-edit popup/policies (Always First, Only This Time,
+  Only This Term), drag-and-drop, sorting / mixer controls. NOTE: the position badge already opens
+  the simple "Move to position" sheet delivered earlier on this branch; the richer Phase 04 editor
+  replaces it. Persistence beyond the existing Room column is unchanged — no new storage was added.
+- **Tests:** `NeedsYouQueueTest` (14: the 15 specified cases incl. 25 items move 23 → 3, duplicates,
+  unknown id, clamping, no-op, removal normalization, timer preservation, 10 ↔ 11 threshold) plus the
+  rendered `NeedsYouQueueUiTest` (12-item queue, L → #1, colours recalculated, no timer reset,
+  before/after PNGs).
+
+## Needs You compact attention card + rank colour system (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+**APPROVED CARD — do not redesign without an explicit request.** The Needs You card is ONE compact
+row (`ui/screens/NeedsYouCard.kt`, ~56dp tall, was ~118dp):
+
+```
+[ 1 ] [project icon]  Navigation · Route structure      01:07:38   CHECK →
+                      Claude · Virlin · Check due
+```
+
+- **Belongs on the card:** rank badge · project icon · task title (1 line, ellipsised) · ONE
+  secondary line (source · reason) · `HH:MM:SS` waiting timer · the single action
+  (CHECK / RESUME / FOCUS NOW, plus `+5m` for a due return).
+- **Must NOT be added:** a three-dot / overflow menu (intentionally absent), priority words
+  ("#1 of 4", "Priority 1", "High priority"), sort or filter controls, descriptions, commands,
+  file paths, debug metadata, a second secondary line, or a giant timer pill.
+- **Grid:** badge (44dp touch, 24dp circle) → 30dp icon container → weighted title column →
+  timer → action. Fixed columns, so no card shifts because a title is longer; long titles
+  ellipsise, never wrap.
+- **Timer:** `WaitingTime.formatClock` → `00:04:19` / `01:07:38` / `12:18:37` / `100:00:00`,
+  rendered with tabular figures (`tnum`). Same semantics as before (elapsed since due; the
+  `−mm:ss` `WaitingTime.format` is retained for other callers/tests). The timer engine is unchanged.
+
+**Rank colour system (`ui/screens/NeedsYouPriority.kt`) — ONE source of truth.** A card asks
+`NeedsYouPriority.visualsFor(rank)` once and uses the returned `PriorityVisuals` for the badge,
+the icon container, the border, the surface tint, the timer ink and the CHECK pill, so a rank
+change re-colours all of them at once.
+
+| rank | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11+ |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| accent | `#D93636` | `#E64A35` | `#EF6332` | `#E89B00` | `#EBAF00` | `#E8C400` | `#E6D43A` | `#E8E05A` | `#F1EA8E` | `#F7F5BC` | neutral white |
+
+Surface = 8% accent over white, container = 22%, border = 38%; `onAccent` flips to Charcoal on
+pale accents; timer/CHECK ink is the accent darkened until it reads on its container. Ranks 11+,
+rank 0/negative and a missing rank all resolve to the ONE neutral identity — nothing is
+interpolated past rank 10. The resolver is a cached list, so it allocates nothing per frame.
+
+**Resolved conflict:** the earlier five-level urgency palette (card tint, border pulse, breathing
+glow) competed with the rank identity. The card now takes its colour ONLY from the rank;
+`UrgencyLevel`, the thresholds and the waiting-time semantics are untouched and still available
+(`NeedsYouUrgency`), but they no longer tint the card, and the attention glow/pulse animation is
+gone — the list is calm and one hierarchy is visible at a time.
+
+**Not implemented (later phases):** priority re-assignment from the badge beyond the existing
+Phase-2 position sheet, sorting / mixer controls, "Always First / Only This Time / Only This
+Term", drag-and-drop. Rank still comes from the existing `attentionRank` + `NeedsYouOrder`
+ordering; this pass changed presentation only.
+
+**Tests:** `NeedsYouPriorityVisualsTest` (9: exact accents 1–10, progression, neutral 11/25/50 and
+invalid ranks, derivation, contrast, HH:MM:SS formatting), instrumented `NeedsYouCardStackUiTest`
+(12 cards ranks 1–12: one alignment grid, one card height, no overlap, narrow 335dp/1.3×, and a
+rendered `needs_you_stack.png`). Roborazzi: 18 goldens were already failing at `70da695` (stale
+from earlier Stitch / execution-selector / icon passes); this pass adds no new failure and no
+golden was re-recorded.
+
+## Needs You Priority Ranking — Phase 2: card hierarchy + position selection UI (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+The queue position is now visible and changeable on every Needs You card; ordering still comes ONLY
+from Phase 1 (`attentionRank` + `VirlinActions.reorderNeedsYou`). Timer, `waitingSince`, urgency
+thresholds/palette/glow, project icons, Check/Resume/Focus now, +5m are untouched.
+
+- **Card (`NeedsYouCard`, `NowScreen.kt`):** two rows. Top: project icon (36dp ring) · task title
+  (2 lines) / source / reason · waiting timer chip top-right (weighted title column → never collides).
+  Bottom (indented under the text column): queue-position badge on the LEFT, `+5m` / Check on the
+  RIGHT. Cards are `key(stream.id)`-ed so a card keeps its own animation state when it moves.
+- **Badge (`NeedsYouPositionBadge`, `ui/screens/NeedsYouPosition.kt`):** `#n ▾` pill + muted
+  `of N`. #1 = filled Charcoal / white text (the next item), #2+ = quiet outlined pill. Shape and
+  weight only — no colour hierarchy competing with urgency. 44dp touch target; semantics
+  "Attention position n of N. Double tap to change."; tag `needs_you_rank_<id>`.
+- **Selector (`NeedsYouPositionSheet`):** `ModalBottomSheet` "Move to position" with exactly one row
+  per current Needs You item — number medallion (#1 filled) · ordinal (First…Tenth, then
+  "Position n") · the task currently there; the current row is highlighted, `selected`, ✓, and reads
+  "Current position n"; the others read "Move to position n, <ordinal>". Tapping applies at once (no
+  Save) → `NowViewModel.reorderNeedsYou` → `AttentionIntentController.reorderNeedsYou` →
+  `VirlinActions.reorderNeedsYou`. Tags `needs_you_position_<n>`, `needs_you_position_sheet`.
+- **Motion:** the section is a plain `Column` (Now is not a LazyColumn), so there is no placement
+  animation; the move is immediate and keyed. Deliberately not converted.
+- **Tests:** instrumented `NeedsYouPriorityUiTest` (6: badge semantics/first stronger/44dp/click,
+  hidden without position + Check + icons, sheet count/selected/apply, single item, position change
+  keeps timer text + urgency, 335dp/1.3× long titles no overlap) and `NeedsYouPriorityJourneyTest`
+  (real app: A default order, N sheet size, B last→2, E dense ranks, persisted rank, J
+  waitingSince/updatedAt/checkAt untouched, D third→1, C first→last, H leaving clears). Test-harness
+  note: after `performScrollTo()` on Now, let the scroll animation settle (~1.2 s of pumped frames)
+  before tapping — a tap on still-moving content is read as a scroll and cancelled.
+
+## Needs You Priority Ranking — Phase 1: domain / ordering foundation (2026-09-22, branch `feature/needs-you-priority-ranking`)
+
+Explicit user priority for Needs You, separate from urgency. **No UI in this phase** (no card
+redesign, no priority popup, no drag-and-drop); the timer, five urgency levels, glow, Check action
+and project icons are untouched.
+
+- **Persisted field:** `WorkStream.attentionRank: Int?` (Room `workstreams.attentionRank INTEGER`,
+  schema **v10**, additive `MIGRATION_9_10`; existing rows read back as `null` = unranked). It is
+  the WorkStream's own row — no second list, no UI state. `Priority` (importance) was NOT reused: it
+  is a coarse enum, not an ordering.
+- **Rule (`domain/attention/NeedsYouOrder`):** ranked block first (rank ascending; ties → longest
+  waiting, then id), then every unranked stream longest-waiting-first (`waitingSince` = the same
+  timestamp the negative timer counts from; ties → id). Depends only on persisted fields — a tick
+  can never re-sort, and waiting time never disturbs an established manual order.
+- **Atomic reorder:** `VirlinActions.reorderNeedsYou(streamId, position)` — remove + insert at the
+  1-based position in the current order, then persist a dense rank `1..n` on every Needs You
+  stream whose rank changed (`updatedAt` untouched, so waiting time / urgency do not move).
+  Out-of-range clamps to first/last; current position = no-op (nothing written); not in CHECK →
+  `DomainError.NotInNeedsYou`. `[A,B,C,D]`: D→2 = `[A,D,B,C]`, A→4 = `[B,C,D,A]`, C→1 = `[C,A,B,D]`.
+- **Membership:** a rank belongs to the current CHECK membership. Every save through a non-CHECK
+  state (`DefaultVirlinActions.persist`) clears it, so a stream that leaves (Focus, still running,
+  snooze, ready, block …) and later returns enters unranked, after the ranked block, by waiting
+  time. New arrivals (`checkDue`) are unranked the same way — the user never renumbers anything.
+- **Now:** `NowViewModel.needsYouOrder` (ids from `NeedsYouOrder.order`) replaces the UI-side
+  `WaitingTime.orderLongestWaitingFirst` call; with no ranks the order is identical to before.
+  `NowPresentation.waitingSince` now delegates to `NeedsYouOrder.waitingSince` (one rule).
+- **Tests:** `NeedsYouOrderTest` (17: A default/ties/snoozed origin, B/C/D moves, E dense &
+  clamped & rejected, F re-read, G enter/leave/return, I timer independence, J no-op);
+  `NeedsYouRankPersistenceTest` (Room file round trip across close/reopen, leave/return);
+  `VirlinMigrationTest.migrate9To10_…` + fresh install v10.
+
 ## Project Icon Editor + Built-in Icon Library (2026-09-21, branch `feature/project-icons`)
 
 - **Persistence:** one additive nullable column `projects.iconId` (Room v8 → v9, `MIGRATION_8_9`) holding a
@@ -2117,3 +2477,106 @@ Additive `MIGRATION_3_4`: `note_documents` + unique index on `captureItemId`. Ca
 - Inbox row opens editor (never auto-launches browser). Legacy LINK hydrates the same CaptureItem.
 
 ## Repository
+
+
+## PHASE 09 COMPLETE — CURRENT FOCUS EXECUTION (2026-09-23)
+
+Human focus now starts on an EXACT work item. `VirlinActions.startFocus(workItemId)` resolves a
+leaf (a container resolves to its first open leaf), sets `activeTaskId` and focuses the owning
+WorkStream in ONE transaction, so the single-human-Focus invariant is unchanged;
+`resolveFocusTarget` is the pure read behind the SWITCH FOCUS? confirmation, and `focusNext`
+powers FOCUS NEXT after COMPLETE (DONE FOR NOW simply closes). Investment stays derived from
+FocusSessions; the approved Current Focus card was not redesigned.
+
+## PHASE 10 COMPLETE — WORKING FOR YOU EXECUTION SYSTEM (2026-09-23)
+
+### The permanent conceptual model
+
+```
+CURRENT FOCUS      = ONE human-active WorkItem
+WORKING FOR YOU    = zero-to-many externally executing items
+NEEDS YOU          = items currently requiring human attention
+```
+
+These are three PROJECTIONS of the same persisted state, never three stores.
+
+### Lifecycle
+
+```
+EXTERNAL EXECUTION
+        |
+     PROCESSING  ->  WORKING FOR YOU
+        |  checkAt reached
+      CHECK      ->  NEEDS YOU
+        |
+ +--------------+----------------+
+RESULT READY   STILL RUNNING    BLOCKED
+   |                |              |
+FOCUS / DEFER   CHECK AGAIN    HUMAN ACTION
+                    |
+              WORKING FOR YOU
+```
+
+For a staged run: `STAGE -> PROCESSING -> CHECK -> RESULT -> START NEXT STAGE -> PROCESSING`.
+
+### Architecture decision
+
+The WorkStream already WAS the external execution: `PROCESSING` + `checkAt` + `activeTaskId` +
+`waitingFor` (the instruction) + `currentCycleId`. Phase 10 therefore added no parallel
+`ExternalExecution` entity — only the two things the model could not express:
+
+- `WorkStream.externalActorId` — the stable actor identity (`ExternalActor`, an open catalogue,
+  not an enum; `tool` remains the free-text display fallback).
+- `external_stages` — lightweight tracking metadata for the external process. Stages are NOT
+  hierarchy Tasks, never enter `ProgressCalculator`, and are ordered by an explicit `sortOrder`.
+
+### Rules
+
+- **One identity across projections.** A due run is the SAME row in Needs You; nothing is copied.
+- **Countdown is `checkAt - now`** (`AttentionTiming`), rendered from ONE hoisted clock value for
+  the whole section. No per-row ticker, no per-second Room write, no stored countdown.
+- **Ordering** in Working For You is soonest `checkAt` first, ties by id, no-check runs last —
+  deliberately NOT the Needs You priority ranking. Due runs enter Needs You through the existing
+  canonical `NeedsYouOrder` queue, so Phase 07 policies still apply.
+- **External completion is not human completion.** RESULT READY completes the external stage and
+  leaves the item as attention; it never completes the hierarchy Task.
+- **STILL RUNNING** returns the same run to PROCESSING with a new check time; **RESULT READY but
+  deferred** goes to SNOOZED(EXTERNAL_RESULT_READY) — never back to Working For You.
+- **FOCUS NOW** hands the exact work item to Phase 09 `startFocus`, so there is exactly one
+  focus-switching system and no second Task.
+- **START NEXT STAGE** completes the running stage and starts the next in explicit order, deriving
+  `checkAt = now + expectedMinutes`. REVIEW FIRST simply does not call it.
+- Virlin TRACKS external work. It executes no external tool, polls no API and detects no status.
+
+### Domain surface
+
+`startExternalWork` · `scheduleExternalCheck` · `markExternalResultReady` ·
+`markExternalStillRunning` · `markExternalBlocked` · `deferReadyResult` · `focusExternalResult` ·
+`startNextExternalStage` · `externalStages` — all on `VirlinActions`, all routed to the existing
+attention verbs where one already existed. The Agent can call them later unchanged.
+
+### Transition table change
+
+`READY -> PROCESSING` is now legal: DELEGATE hands work the human is NOT doing to an external
+actor. `FOCUS -> PROCESSING` remains HAND OFF. Both end in PROCESSING, which is still the only
+state that means "something else is working".
+
+### Persistence
+
+Schema **v11 -> v12** (`MIGRATION_11_12`, additive only): `workstreams.externalActorId` and the
+`external_stages` table. Projects, streams, tasks, focus sessions, `checkAt`, `attentionRank` and
+`priority_preferences` are untouched; schema `12.json` is exported.
+
+### UI
+
+`ExternalWorkRow` replaces the demo-counter processing row inside the approved Working For You
+container (actor · work item + instruction · current stage · countdown), a compact detail sheet
+shows the stage list and CHECK NOW, and `DelegateDialog` (Task Detail -> DELEGATE) is the minimum
+creation path: who, what, check-in, optional stages. Now, Needs You, Current Focus, the Orb and
+the Agent were not redesigned.
+
+### Known debt
+
+The Roborazzi screenshot classes already fail at the Phase 09 commit (stale goldens from the
+earlier baseline reconciliation) and `CaptureBoundaryTest.types_are_explicit_and_payloads_raw`
+also fails at that commit. Neither was introduced by Phase 10, and no golden was re-recorded.
