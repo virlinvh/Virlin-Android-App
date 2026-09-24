@@ -57,6 +57,11 @@ class NowViewModel(
         .map { NowPresentation.waitingSince(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NowPresentation.waitingSince(repository.streams.value))
 
+    /** Needs You display order (ids): explicit rank first, then longest waiting — `NeedsYouOrder`, never computed in UI. */
+    val needsYouOrder: StateFlow<List<String>> = repository.streams
+        .map { s -> com.virlin.app.domain.attention.NeedsYouOrder.order(s).map { it.id } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.virlin.app.domain.attention.NeedsYouOrder.order(repository.streams.value).map { it.id })
+
     /** The single lightweight chooser open on Now, if any. Never more than one at a time. */
     sealed interface Chooser {
         val streamId: String

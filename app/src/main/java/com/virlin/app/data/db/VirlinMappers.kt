@@ -45,7 +45,8 @@ object VirlinMappers {
         priority = priority.name, pinned = pinned, lastHumanAction = lastHumanAction, waitingFor = waitingFor,
         nextHumanAction = nextHumanAction, blockerReason = blockerReason, processingStartedAt = processingStartedAt,
         checkAt = checkAt, snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.name, currentCycleId = currentCycleId,
-        cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
+        cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt,
+        attentionRank = attentionRank
     )
     fun WorkStreamEntity.toDomain() = WorkStream(
         id = id, title = title, projectId = projectId, tool = tool,
@@ -55,7 +56,7 @@ object VirlinMappers {
         blockerReason = blockerReason, processingStartedAt = processingStartedAt, checkAt = checkAt,
         snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.let(SnoozeReason::valueOf),
         currentCycleId = currentCycleId, cycleCount = cycleCount, activeTaskId = activeTaskId,
-        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
+        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt, attentionRank = attentionRank
     )
 
     fun Task.toEntity() = TaskEntity(

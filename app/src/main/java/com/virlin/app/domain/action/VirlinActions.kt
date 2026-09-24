@@ -120,6 +120,15 @@ interface VirlinActions {
     /** Additive note → NOTE_ADDED history entry. */
     suspend fun addNote(streamId: String, text: String): ActionResult<WorkStream>
 
+    /**
+     * Needs You priority: put [streamId] at 1-based [position] in the current Needs You order and
+     * shift the others automatically (one atomic reorder — the user never renumbers anything).
+     * Out-of-range positions clamp to first / last; the current position is a no-op. Rejected with
+     * [DomainError.NotInNeedsYou] unless the stream is in CHECK. Returns the new Needs You order.
+     * Rule + examples: `NeedsYouOrder`.
+     */
+    suspend fun reorderNeedsYou(streamId: String, position: Int): ActionResult<List<WorkStream>>
+
     // ================================================================ Structure: Project
 
     suspend fun createProject(request: CreateProject): ActionResult<Project>

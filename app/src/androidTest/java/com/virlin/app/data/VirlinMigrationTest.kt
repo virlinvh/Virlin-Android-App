@@ -238,6 +238,26 @@ class VirlinMigrationTest {
         } finally { db.close() }
     }
 
+    @Test fun migrate9To10_addsAttentionRank_preservesWorkStreams() {
+        helper.createDatabase(dbName, 9).apply {
+            execSQL("INSERT INTO workstreams (id,title,projectId,tool,executionPreference,state,priority,pinned,lastHumanAction,waitingFor,nextHumanAction,blockerReason,processingStartedAt,checkAt,snoozedUntil,snoozeReason,currentCycleId,cycleCount,activeTaskId,createdAt,updatedAt,completedAt) " +
+                "VALUES ('s3','Claude · Virlin',NULL,'Claude','EXTERNAL','CHECK','NORMAL',0,NULL,'route decision',NULL,NULL,$t0,${t0 + 600_000},NULL,NULL,NULL,1,NULL,$t0,$t0,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 10, true, VirlinDatabase.MIGRATION_9_10).close()
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                val s = db.workStreams().byId("s3")!!
+                assertEquals("CHECK", s.state); assertEquals(t0 + 600_000, s.checkAt!!.toEpochMilli())   // existing row intact
+                assertEquals(null, s.attentionRank)                                                       // H: unranked → waiting-time order
+                db.workStreams().upsert(s.copy(attentionRank = 1))
+                assertEquals(1, db.workStreams().byId("s3")!!.attentionRank)                              // reload reads it back
+            }
+        } finally { db.close() }
+    }
+
     @Test fun migrate7To8_addsProjectIconPath_preservesProjects() {
         helper.createDatabase(dbName, 7).apply {
             execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL)")
@@ -292,7 +312,7 @@ class VirlinMigrationTest {
         }
     }
 
-    @Test fun freshInstall_isV9_andNoMigrationNeeded() {
+    @Test fun freshInstall_isV10_andNoMigrationNeeded() {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         ctx.deleteDatabase("virlin-fresh-test.db")
         val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, "virlin-fresh-test.db").addMigrations(*VirlinDatabase.MIGRATIONS).build()
@@ -304,7 +324,7 @@ class VirlinMigrationTest {
                 assertEquals(0, db.attachmentDocuments().count())
                 assertEquals(0, db.voiceDocuments().count())
             }
-            assertEquals(9, db.openHelper.readableDatabase.version)
+            assertEquals(10, db.openHelper.readableDatabase.version)
         } finally { db.close(); ctx.deleteDatabase("virlin-fresh-test.db") }
     }
 }

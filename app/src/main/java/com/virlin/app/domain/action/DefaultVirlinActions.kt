@@ -1,5 +1,6 @@
 package com.virlin.app.domain.action
 
+import com.virlin.app.domain.attention.NeedsYouOrder
 import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
@@ -62,7 +63,7 @@ class DefaultVirlinActions(
                 priority = request.priority, nextHumanAction = request.nextHumanAction?.takeIf { it.isNotBlank() },
                 createdAt = now, updatedAt = now
             )
-            saveStream(stream)
+            persist(stream)
             event(stream, EventType.STREAM_CREATED, now, to = READY, cycleId = null, detail = request.executionPreference.name)
             ActionResult.Success(stream)
         }
@@ -190,7 +191,7 @@ class DefaultVirlinActions(
             closeOpenSession(prev.id, now)
             saveSnapshot(prev, now, reason = READY)
             val moved = prev.copy(state = READY, updatedAt = now)
-            saveStream(moved)
+            persist(moved)
             event(prev, EventType.FOCUS_LEFT, now, from = FOCUS, to = READY, detail = "displaced by ${target.id}")
             moved
         }
@@ -215,7 +216,7 @@ class DefaultVirlinActions(
             snoozeReason = null,
             updatedAt = now
         )
-        saveStream(focused)
+        persist(focused)
         if (target.state == PAUSED || target.state == SNOOZED || target.state == BLOCKED) {
             event(target, EventType.RESUMED, now, from = target.state, to = FOCUS)
         }
@@ -254,7 +255,7 @@ class DefaultVirlinActions(
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = PROCESSING)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.HANDOFF, now, from = FOCUS, to = PROCESSING, cycleId = cycle.id,
             detail = waitingFor ?: updated.waitingFor)
         event(stream, EventType.PROCESSING_STARTED, now, cycleId = cycle.id, detail = checkAt?.toString())
@@ -274,7 +275,7 @@ class DefaultVirlinActions(
         requireTransition(stream, CHECK)?.let { return@run it }
         val now = clock.now()
         val updated = stream.copy(state = CHECK, snoozedUntil = null, updatedAt = now)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.CHECK_DUE, now, from = stream.state, to = CHECK, cycleId = stream.currentCycleId)
         ActionResult.Success(updated)
     }
@@ -293,7 +294,7 @@ class DefaultVirlinActions(
             snoozedUntil = null,
             updatedAt = now
         )
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.PROCESSING_STARTED, now, from = stream.state, to = PROCESSING,
             cycleId = stream.currentCycleId, detail = checkAt.toString())
         ActionResult.Success(updated)
@@ -311,7 +312,7 @@ class DefaultVirlinActions(
             snoozeReason = stream.snoozeReason ?: SnoozeReason.HUMAN_RETURN, updatedAt = now
         )
         saveSnapshot(updated, now, reason = SNOOZED)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.SNOOZED, now, from = stream.state, to = SNOOZED, detail = until.toString())
         ActionResult.Success(updated)
     }
@@ -336,7 +337,7 @@ class DefaultVirlinActions(
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = target)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.LEFT, now, from = FOCUS, to = target, detail = returnAt?.toString())
         if (target == SNOOZED) event(stream, EventType.SNOOZED, now, from = FOCUS, to = SNOOZED, detail = returnAt.toString())
         else event(stream, EventType.READY, now, from = FOCUS, to = READY)
@@ -380,7 +381,7 @@ class DefaultVirlinActions(
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = SNOOZED)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.RESULT_READY, now, from = from, to = SNOOZED, detail = returnAt.toString())
         event(stream, EventType.SNOOZED, now, from = from, to = SNOOZED, detail = returnAt.toString())
         ActionResult.Success(updated)
@@ -397,7 +398,7 @@ class DefaultVirlinActions(
             state = SNOOZED, checkAt = returnAt, snoozedUntil = returnAt, snoozeReason = reason,
             processingStartedAt = null, updatedAt = now
         )
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.RETURN_DEFERRED, now, from = stream.state, to = SNOOZED, detail = returnAt.toString())
         ActionResult.Success(updated)
     }
@@ -410,7 +411,7 @@ class DefaultVirlinActions(
             state = READY, processingStartedAt = null, checkAt = null, snoozedUntil = null, updatedAt = now
         )
         saveSnapshot(updated, now, reason = READY)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.READY, now, from = stream.state, to = READY)
         ActionResult.Success(updated)
     }
@@ -421,7 +422,7 @@ class DefaultVirlinActions(
         closeOpenSession(stream.id, now)
         val updated = stream.copy(state = PAUSED, checkAt = null, snoozedUntil = null, updatedAt = now)
         saveSnapshot(updated, now, reason = PAUSED)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.PAUSED, now, from = stream.state, to = PAUSED)
         ActionResult.Success(updated)
     }
@@ -435,7 +436,7 @@ class DefaultVirlinActions(
             processingStartedAt = null, checkAt = null, snoozedUntil = null, snoozeReason = null, updatedAt = now
         )
         saveSnapshot(updated, now, reason = BLOCKED)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.BLOCKED, now, from = stream.state, to = BLOCKED, detail = reason)
         ActionResult.Success(updated)
     }
@@ -444,7 +445,7 @@ class DefaultVirlinActions(
         if (stream.state != BLOCKED) return@run ActionResult.Rejected(DomainError.NotBlocked)
         val now = clock.now()
         val updated = stream.copy(state = READY, blockerReason = null, updatedAt = now)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.UNBLOCKED, now, from = BLOCKED, to = READY)
         ActionResult.Success(updated)
     }
@@ -461,7 +462,7 @@ class DefaultVirlinActions(
             processingStartedAt = null, checkAt = null, snoozedUntil = null, updatedAt = now
         )
         saveSnapshot(updated, now, reason = DONE)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.COMPLETED, now, from = stream.state, to = DONE, cycleId = stream.currentCycleId)
         ActionResult.Success(updated)
     }
@@ -478,7 +479,7 @@ class DefaultVirlinActions(
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = updated.state, note = update.note)
-        saveStream(updated)
+        persist(updated)
         event(stream, EventType.CONTEXT_UPDATED, now, cycleId = stream.currentCycleId)
         update.note?.takeIf { it.isNotBlank() }?.let { event(stream, EventType.NOTE_ADDED, now, detail = it.trim()) }
         ActionResult.Success(updated)
@@ -492,7 +493,26 @@ class DefaultVirlinActions(
         ActionResult.Success(stream)
     }
 
+    // ------------------------------------------------------------------ Needs You priority
+
+    override suspend fun reorderNeedsYou(streamId: String, position: Int): ActionResult<List<WorkStream>> = run(streamId) { stream ->
+        if (stream.state != CHECK) return@run ActionResult.Rejected(DomainError.NotInNeedsYou)
+        val move = NeedsYouOrder.planMove(allStreams(), streamId, position)
+            ?: return@run ActionResult.Rejected(DomainError.NotInNeedsYou)
+        // Ranks only — `updatedAt` is deliberately untouched so waiting time / urgency never move.
+        move.changed.forEach { saveStream(it) }
+        ActionResult.Success(move.order)
+    }
+
     // ------------------------------------------------------------------ Shared mechanics
+
+    /**
+     * The one save path for attention transitions: an explicit Needs You rank belongs to the current
+     * CHECK membership, so any stream saved in another state leaves unranked (a later return enters
+     * Needs You at its longest-waiting position).
+     */
+    private suspend fun WorkStreamWriter.persist(stream: WorkStream) =
+        saveStream(if (stream.state == CHECK || stream.attentionRank == null) stream else stream.copy(attentionRank = null))
 
     /** Load → run inside one transaction → map unexpected throwables to [ActionResult.Failure]. */
     private suspend fun <T> run(

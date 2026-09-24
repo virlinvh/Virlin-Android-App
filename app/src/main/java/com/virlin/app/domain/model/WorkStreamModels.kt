@@ -73,6 +73,13 @@ data class WorkStream(
     val state: WorkStreamState,
     val priority: Priority = Priority.NORMAL,
     val pinned: Boolean = false,
+    /**
+     * Explicit Needs You position chosen by the user (1 = handle first). Meaningful ONLY while
+     * the stream is in CHECK; every transition out of CHECK clears it, so a stream that returns
+     * later enters Needs You unranked (longest-waiting order). Unrelated to [priority]
+     * (importance) and to waiting time (urgency). Ordering rules: `NeedsYouOrder`.
+     */
+    val attentionRank: Int? = null,
 
     // ---- External working memory (also captured in ContextSnapshot on every exit)
     val lastHumanAction: String? = null,

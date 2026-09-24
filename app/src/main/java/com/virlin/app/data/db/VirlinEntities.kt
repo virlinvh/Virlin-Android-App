@@ -76,7 +76,9 @@ data class WorkStreamEntity(
     val activeTaskId: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
-    val completedAt: Instant?
+    val completedAt: Instant?,
+    /** v10: explicit Needs You position (1-based) while in CHECK; null = unranked. */
+    val attentionRank: Int? = null
 )
 
 @Entity(
