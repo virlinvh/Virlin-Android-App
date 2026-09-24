@@ -556,3 +556,12 @@ Rules:
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
 
+## Agent first-level sheet (entry launcher) — UX rule
+
+The Orb's first sheet is a COMPACT, CONTENT-DRIVEN command launcher: it wraps its content
+(no full-screen / percentage height), Control · Create · Capture and the composer are one
+cluster, and there is NEVER a weighted spacer between the Capture card and the composer —
+only a fixed ~20–32dp gap (`EntryMetrics.afterCards`). Responsiveness comes from Compose
+constraints + insets; on short devices the launcher scrolls instead of compressing controls,
+and the IME must keep the composer reachable. Deeper Control/Create/Capture workspaces keep
+their own larger layouts. Do not change this without an explicit UX requirement.

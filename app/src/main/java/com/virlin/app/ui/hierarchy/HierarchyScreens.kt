@@ -9,6 +9,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -45,6 +48,7 @@ fun workStreamDetail(id: String) = "workstream_detail/$id"
 fun taskDetail(id: String) = "task_detail/$id"
 
 const val ProjectDetailTag = "project_detail"
+const val ProjectDetailIconTag = "project_detail_icon"
 const val WorkStreamDetailTag = "workstream_detail"
 const val TaskDetailTag = "task_detail"
 const val TaskCancelTag = "task_cancel"
@@ -67,6 +71,18 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
     val standalone = HierarchyPresentation.rows(s.tasks.filter { it.projectId == project.id && it.workStreamId == null }, null, null, s.expanded)
     val progress = remember(s) { ProgressCalculator.ofProject(s.tasks, s.streams, project.id).toLabel() }
     var adding by remember { mutableStateOf(false) }
+    var editingIcon by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    if (editingIcon) {
+        com.virlin.app.ui.components.ProjectIconEditorSheet(
+            project = project,
+            onSelectBuiltIn = { vm.selectBuiltInIcon(context, project.id, it) },
+            onCustomImported = { vm.setCustomIcon(project.id, it) },
+            onRemoveCustom = { vm.removeCustomIcon(context, project.id) },
+            onUseAuto = { vm.useAutoIcon(context, project.id) },
+            onDismiss = { editingIcon = false }
+        )
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(VirlinColors.Background).testTag(ProjectDetailTag),
@@ -75,8 +91,36 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
         item { BackRow(navController) }
         item {
             Spacer(Modifier.height(8.dp))
-            Text(project.title.uppercase(), fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 0.5.sp, color = VirlinColors.TextPrimary)
-            project.description?.let { Text(it, fontSize = 13.sp, color = VirlinColors.TextSecondary) }
+            // Project identity (Phase 3): the icon sits in the heading; tapping it (or its ✎) opens the editor.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(60.dp)
+                        .testTag(ProjectDetailIconTag)
+                        .clickable(role = Role.Button) { editingIcon = true }
+                        .semantics { contentDescription = "Change ${project.title} icon" },
+                    contentAlignment = Alignment.Center
+                ) {
+                    com.virlin.app.ui.components.ProjectIcon(project = project, size = 52.dp, decorative = true)
+                    Box(
+                        modifier = Modifier.align(Alignment.BottomEnd).size(20.dp)
+                            .background(VirlinColors.Background, CircleShape)
+                            .padding(2.dp)
+                            .background(VirlinColors.TextPrimary, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.material3.Icon(
+                            imageVector = Icons.Rounded.Edit, contentDescription = null,
+                            tint = Color.White, modifier = Modifier.size(10.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(project.title.uppercase(), fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 0.5.sp, color = VirlinColors.TextPrimary, lineHeight = 26.sp)
+                    project.description?.let { Text(it, fontSize = 13.sp, color = VirlinColors.TextSecondary) }
+                }
+            }
             Spacer(Modifier.height(14.dp))
             ProgressLine(progress, large = true)
             val facts = listOfNotNull(

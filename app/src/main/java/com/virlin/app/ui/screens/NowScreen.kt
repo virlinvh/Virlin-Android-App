@@ -121,6 +121,7 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val pendingCompletion by nowViewModel.pendingWorkStreamCompletion.collectAsState()
     val attention by nowViewModel.attention.collectAsState()
     val waitingSince by nowViewModel.waitingSince.collectAsState()
+    val projects by nowViewModel.projects.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
 
     val focusStream = streams.find { it.state == StreamState.FOCUS }
@@ -256,6 +257,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                         kind = attention[stream.id],
                         waitingSince = waitingSince[stream.id],
                         now = nowTick,
+                        // Identity is resolved through the project (Project.iconPath), never stored on the stream.
+                        project = com.virlin.app.domain.model.ProjectIdentity.resolve(stream.projectId, projects),
                         onFocus = nowViewModel::focus,
                         onCheck = nowViewModel::openCheck,
                         onDefer = { id -> nowViewModel.deferReturn(id, 5) }
@@ -581,6 +584,8 @@ fun NeedsYouCard(
     waitingSince: java.time.Instant? = null,
     /** Shared per-second clock from the section; null renders a static 00:00 (previews/tests). */
     now: androidx.compose.runtime.State<java.time.Instant>? = null,
+    /** Owning project (identity icon source); null = projectless → fallback avatar from the stream's own name. */
+    project: com.virlin.app.domain.model.Project? = null,
     onFocus: (String) -> Unit = {},
     onCheck: (String) -> Unit = onFocus,
     onDefer: (String) -> Unit = {}
@@ -714,6 +719,7 @@ fun NeedsYouCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .testTag("needs_you_card_${stream.id}")
             .drawBehind {
                 // Soft halo: two feathered strokes just outside the card edge (cheap; no blur/shader).
                 if (glowAlpha > 0.005f) {
@@ -736,29 +742,32 @@ fun NeedsYouCard(
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Beacon
+        // Project identity (Phase icons): the project's icon — custom image or deterministic fallback —
+        // inside the SAME 36dp footprint the beacon used. The icon itself is never tinted or animated;
+        // urgency shows only around it: a thin ring in the level colour (cross-faded with the palette)
+        // and the existing soft arrive→hold→leave outer pulse behind it. Decorative: the source text
+        // beside it already names the project, so nothing is announced twice.
         Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-            // Outer pulse ring
             if (beaconOuterAlpha > 0.01f) {
                 Box(
                     modifier = Modifier
-                        .size((28 * beaconOuterScale).dp)
-                        .background(beaconOuterColor.copy(alpha = beaconOuterAlpha), CircleShape)
+                        .size((34 * beaconOuterScale).dp)
+                        .background(beaconOuterColor.copy(alpha = beaconOuterAlpha * 0.6f), CircleShape)
                 )
             }
-            // Static ring
             Box(
                 modifier = Modifier
-                    .size(24.dp)
-                    .background(beaconRingColor, CircleShape)
-                    .border(1.dp, beaconRingBorder, CircleShape),
+                    .size(34.dp)
+                    .border(1.5.dp, beaconCoreColor.copy(alpha = 0.55f + 0.45f * beaconPhase), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                // Pulsing core
-                Box(
-                    modifier = Modifier
-                        .size((10 * beaconCoreScale).dp)
-                        .background(beaconCoreColor, CircleShape)
+                com.virlin.app.ui.components.ProjectIcon(
+                    projectId = project?.id ?: stream.id,
+                    name = project?.title ?: stream.title,
+                    iconPath = project?.iconPath,
+                    iconId = project?.iconId,
+                    size = 28.dp,
+                    decorative = true
                 )
             }
         }

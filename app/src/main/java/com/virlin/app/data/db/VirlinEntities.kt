@@ -41,7 +41,11 @@ data class ProjectEntity(
     val defaultExecutionMode: String,
     val createdAt: Instant,
     val updatedAt: Instant,
-    val completedAt: Instant?
+    val completedAt: Instant?,
+    /** v8: relative path of the custom project icon in the managed store; null = fallback avatar. */
+    val iconPath: String? = null,
+    /** v9: chosen built-in icon id (semantic string); null = automatic. */
+    val iconId: String? = null
 )
 
 @Entity(

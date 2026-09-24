@@ -116,6 +116,26 @@ class HierarchyViewModel(
         }
     }
 
+    // ---- Project identity icon (Phase 3). Priority custom → built-in → auto is resolved by ProjectIconSelection;
+    // these only change the persisted choice. Choosing a built-in or Auto also drops the custom image file.
+    fun selectBuiltInIcon(context: android.content.Context, projectId: String, iconId: String) = dispatch("selectBuiltInIcon") {
+        com.virlin.app.data.projecticon.ProjectIconStore.delete(context.applicationContext, projectId)
+        actions.updateProject(projectId, com.virlin.app.domain.action.ProjectUpdate(
+            iconId = com.virlin.app.domain.action.Field.Set(iconId), iconPath = com.virlin.app.domain.action.Field.Clear))
+    }
+    fun setCustomIcon(projectId: String, relativePath: String) = dispatch("setCustomIcon") {
+        actions.updateProject(projectId, com.virlin.app.domain.action.ProjectUpdate(iconPath = com.virlin.app.domain.action.Field.Set(relativePath)))
+    }
+    fun removeCustomIcon(context: android.content.Context, projectId: String) = dispatch("removeCustomIcon") {
+        com.virlin.app.data.projecticon.ProjectIconStore.delete(context.applicationContext, projectId)
+        actions.updateProject(projectId, com.virlin.app.domain.action.ProjectUpdate(iconPath = com.virlin.app.domain.action.Field.Clear))
+    }
+    fun useAutoIcon(context: android.content.Context, projectId: String) = dispatch("useAutoIcon") {
+        com.virlin.app.data.projecticon.ProjectIconStore.delete(context.applicationContext, projectId)
+        actions.updateProject(projectId, com.virlin.app.domain.action.ProjectUpdate(
+            iconId = com.virlin.app.domain.action.Field.Clear, iconPath = com.virlin.app.domain.action.Field.Clear))
+    }
+
     fun setProjectExecutionDefault(projectId: String, mode: EffectiveExecutionMode) =
         dispatch("setProjectExecutionDefault") { actions.setProjectExecutionDefault(projectId, mode) }
 

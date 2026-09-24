@@ -48,6 +48,10 @@ class NowViewModel(
         .map { NowPresentation.attention(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NowPresentation.attention(repository.streams.value))
 
+    /** Projects (identity source for Needs You cards): the same repository flow, no copy of icon data anywhere else. */
+    val projects: StateFlow<List<com.virlin.app.domain.model.Project>> = repository.projects
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), repository.projects.value)
+
     /** When each Needs You stream started waiting (domain timestamp) — drives the live timer and ordering. */
     val waitingSince: StateFlow<Map<String, java.time.Instant>> = repository.streams
         .map { NowPresentation.waitingSince(it) }

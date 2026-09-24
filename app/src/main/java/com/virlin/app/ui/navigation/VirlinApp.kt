@@ -333,12 +333,13 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
             )
 
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                // Entry + Capture launchers need more safe viewport than Control/Create:
-                // Entry fits 3 modes + composer; Capture fits 5 equal action cards + composer.
-                // Control/Create keep 0.86 / 440. Never exceed the measured safe maxHeight.
+                // The ENTRY launcher is a compact command surface: it WRAPS its content
+                // (Orb · identity · 3 mode cards · composer) and never takes a screen
+                // percentage — only a max bound so a short device can still scroll inside it.
+                // Capture keeps 0.90 / 520 (5 action cards); Control/Create keep 0.86 / 440.
+                val entrySheet = !workspace.modeChosen
                 val sheetHeight = when {
-                    !workspace.modeChosen ||
-                        workspace.mode == com.virlin.app.ui.orb.AgentMode.CAPTURE ->
+                    workspace.mode == com.virlin.app.ui.orb.AgentMode.CAPTURE && !entrySheet ->
                         maxOf(maxHeight * 0.90f, 520.dp).coerceAtMost(maxHeight)
                     else ->
                         maxOf(maxHeight * 0.86f, 440.dp).coerceAtMost(maxHeight)
@@ -347,9 +348,11 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .height(sheetHeight)
+                        .then(if (entrySheet) Modifier.heightIn(max = maxHeight) else Modifier.height(sheetHeight))
                         .graphicsLayer {
-                            translationY = (1f - openProgress.value) * sheetHeight.toPx()
+                            // Content-driven sheets rise by their MEASURED height (sheetHeightPx).
+                            translationY = (1f - openProgress.value) *
+                                (if (entrySheet) sheetHeightPx else sheetHeight.toPx())
                         }
                         .onSizeChanged { sheetHeightPx = it.height.toFloat() }
                         .background(if (workspace.modeChosen) Pearl else Color.White, RoundedCornerShape(topStart = if (workspace.modeChosen) 28.dp else 34.dp, topEnd = if (workspace.modeChosen) 28.dp else 34.dp))
