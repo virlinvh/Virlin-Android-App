@@ -130,7 +130,7 @@ class AgentCaptureLauncherTest {
         val voiceY = voice.fetchSemanticsNode().boundsInRoot.top
         assertTrue(noteY < promptY && promptY < linkY && linkY < fileY && fileY < voiceY)
 
-        composeRule.onNodeWithText("Text Note", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Note", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithText("Prompt", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithText("Link", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithText("File / Image", useUnmergedTree = true).assertIsDisplayed()
@@ -227,8 +227,8 @@ class AgentCaptureLauncherTest {
         file.assertIsDisplayed()
         voice.assertIsDisplayed()
 
-        composeRule.onNodeWithText("Text Note", useUnmergedTree = true).assertIsDisplayed()
-        composeRule.onNodeWithText("Quick thought or idea", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Note", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Open your notes workspace", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithText("Prompt", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithText("Save a prompt", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithText("Link", useUnmergedTree = true).assertIsDisplayed()

@@ -98,7 +98,9 @@ data class WorkStreamEntity(
     /** v10: explicit Needs You position (1-based) while in CHECK; null = unranked. */
     val attentionRank: Int? = null,
     /** v12: stable id of the external actor doing the work (Phase 10); null = unknown/none. */
-    val externalActorId: String? = null
+    val externalActorId: String? = null,
+    /** v14: the user's sibling position under the project (0-based). Backfilled on migration. */
+    @ColumnInfo(name = "sortOrder") val sortOrder: Int = 0
 )
 
 /**
@@ -298,4 +300,84 @@ data class VoiceDocumentEntity(
     val clipsJson: String,
     val createdAt: Instant,
     val updatedAt: Instant
+)
+
+/**
+ * Project tags (schema v13). A tag belongs to one project; `projectId` + a case-folded name is
+ * unique, so the same label cannot exist twice in a project.
+ */
+@Entity(
+    tableName = "project_tags",
+    indices = [Index("projectId"), Index(value = ["projectId", "nameKey"], unique = true)]
+)
+data class ProjectTagEntity(
+    @PrimaryKey val id: String,
+    val projectId: String,
+    val name: String,
+    /** Lower-cased, trimmed name. Stored so the uniqueness rule is the database's, not the UI's. */
+    val nameKey: String,
+    val createdAt: Instant,
+    val updatedAt: Instant
+)
+
+/** One tag attached to one capture or task. The pair is the primary key: applied at most once. */
+@Entity(
+    tableName = "tag_links",
+    primaryKeys = ["tagId", "targetType", "targetId"],
+    indices = [Index("tagId"), Index(value = ["targetType", "targetId"])]
+)
+data class TagLinkEntity(
+    val tagId: String,
+    val targetType: String,
+    val targetId: String,
+    val createdAt: Instant
+)
+
+/**
+ * The ordered checkboxes inside a task (schema v13). Steps are not tasks: they carry no
+ * attention state and never enter progress totals.
+ */
+/**
+ * v16: one Notes-page document, filed under an opaque [ownerKey].
+ *
+ * The Notes page is a self-contained feature: this row stores [VirlinNoteCodec] JSON and shares
+ * no table, codec or model with the capture note documents or with the legacy plain
+ * `tasks.notes` string. Replaces the unused v15 `task_note_documents` table.
+ */
+@Entity(tableName = "virlin_notes")
+data class VirlinNoteEntity(
+    @PrimaryKey val ownerKey: String,
+    val title: String?,
+    val documentJson: String,
+    val revision: Int,
+    val createdAt: Instant,
+    val updatedAt: Instant
+)
+
+@Entity(tableName = "task_steps", indices = [Index("taskId")])
+data class TaskStepEntity(
+    @PrimaryKey val id: String,
+    val taskId: String,
+    val text: String,
+    val done: Boolean,
+    @ColumnInfo(name = "sortOrder") val order: Int,
+    val createdAt: Instant,
+    val updatedAt: Instant
+)
+
+@Entity(
+    tableName = "task_page_blocks",
+    indices = [
+        Index("taskId"),
+        Index(value = ["taskId", "typeKey", "contentId"], unique = true),
+    ],
+)
+data class TaskPageBlockEntity(
+    @PrimaryKey val id: String,
+    val taskId: String,
+    val typeKey: String,
+    val contentId: String,
+    @ColumnInfo(name = "sortOrder") val order: Int,
+    val createdAt: Instant,
+    val updatedAt: Instant,
 )

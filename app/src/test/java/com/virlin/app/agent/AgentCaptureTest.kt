@@ -287,7 +287,7 @@ class AgentCaptureTest {
         val c = repo.captures.value.single(); assertEquals("https://example.com", c.sourceUrl); assertEquals("docs", c.content)
         assertEquals("Saved link", vm.form.value.feedback); assertEquals("", vm.form.value.linkNote)
         vm.save("nope"); advanceUntilIdle()
-        assertEquals("Enter a full link starting with http:// or https://", vm.form.value.error)
+        assertEquals("Enter a valid web link", vm.form.value.error)
     }
 
     @Test fun viewmodel_attach_to_current_focus_is_explicit_and_per_capture() = runTest(dispatcher) {

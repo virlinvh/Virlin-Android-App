@@ -6,6 +6,7 @@ import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.model.NoteBlock
 import com.virlin.app.domain.model.NoteBlockType
 import com.virlin.app.domain.model.PromptDocument
+import com.virlin.app.domain.model.PromptContentMode
 import com.virlin.app.domain.prompt.PromptDocumentCodec
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.domain.repository.WorkStreamWriter
@@ -29,7 +30,11 @@ internal class PromptActions(
         blocks: List<NoteBlock>,
         context: CaptureContext = CaptureContext.None,
         captureId: String? = null,
-        promptId: String? = null
+        promptId: String? = null,
+        sourceText: String = "",
+        mode: PromptContentMode = PromptContentMode.PROMPT,
+        language: String? = null,
+        responseText: String? = null
     ): ActionResult<PromptDocument> = tx {
         val now = clock.now()
         val doc = PromptDocument(
@@ -39,6 +44,10 @@ internal class PromptActions(
             description = description?.trim()?.takeIf { it.isNotEmpty() },
             tags = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
             blocks = blocks.ifEmpty { listOf(NoteBlock(ids.newId("blk"), NoteBlockType.TEXT)) },
+            sourceText = sourceText,
+            mode = mode,
+            language = language,
+            responseText = responseText,
             createdAt = now,
             updatedAt = now
         )
@@ -66,7 +75,11 @@ internal class PromptActions(
         title: String?,
         description: String?,
         tags: List<String>,
-        blocks: List<NoteBlock>
+        blocks: List<NoteBlock>,
+        sourceText: String = "",
+        mode: PromptContentMode = PromptContentMode.PROMPT,
+        language: String? = null,
+        responseText: String? = null
     ): ActionResult<PromptDocument> = tx {
         val cap = getCapture(captureItemId)
             ?: return@tx ActionResult.Rejected(DomainError.CaptureNotFound(captureItemId))
@@ -85,6 +98,10 @@ internal class PromptActions(
             description = description?.trim()?.takeIf { it.isNotEmpty() },
             tags = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
             blocks = blocks,
+            sourceText = sourceText,
+            mode = mode,
+            language = language,
+            responseText = responseText,
             updatedAt = now
         )
         if (!doc.hasMeaningfulContent()) return@tx ActionResult.Rejected(DomainError.EmptyCapture)
@@ -117,6 +134,7 @@ internal class PromptActions(
                 captureItemId = captureItemId,
                 title = cap.title,
                 blocks = blocks,
+                sourceText = cap.content,
                 createdAt = cap.createdAt,
                 updatedAt = now
             )

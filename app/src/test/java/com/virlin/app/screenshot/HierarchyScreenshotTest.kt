@@ -21,7 +21,6 @@ import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
 import com.virlin.app.ui.hierarchy.HierarchyViewModel
 import com.virlin.app.ui.hierarchy.ProjectDetailScreen
-import com.virlin.app.ui.hierarchy.TaskDetailScreen
 import com.virlin.app.ui.hierarchy.WorkStreamDetailScreen
 import com.virlin.app.ui.theme.VirlinColors
 import com.virlin.app.ui.theme.VirlinTheme
@@ -86,17 +85,13 @@ class HierarchyScreenshotTest {
     }
 
     @Test fun workStreamDetailNested() {
-        composeRule.setContent { Host { WorkStreamDetailScreen("s4", rememberNavController(), it) } }
+        composeRule.setContent { Host { WorkStreamDetailScreen("s4", rememberNavController(), vm = it) } }
         capture("workstream_detail_nested")
     }
 
     @Test fun projectlessWorkStreamDetail() {
-        composeRule.setContent { Host { WorkStreamDetailScreen("s1", rememberNavController(), it) } }
+        composeRule.setContent { Host { WorkStreamDetailScreen("s1", rememberNavController(), vm = it) } }
         capture("projectless_workstream_detail")
     }
 
-    @Test fun taskDetail() {
-        composeRule.setContent { Host { TaskDetailScreen("t_rem", rememberNavController(), it) } }
-        capture("task_detail")
-    }
 }

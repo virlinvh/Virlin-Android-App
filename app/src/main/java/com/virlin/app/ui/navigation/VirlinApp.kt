@@ -57,6 +57,7 @@ import com.virlin.app.ui.orb.toOrbParameters
 import com.virlin.app.ui.screens.*
 import com.virlin.app.ui.hierarchy.*
 import com.virlin.app.debug.VirlinStartup
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /** Test identities for the Agent overlay. */
@@ -72,6 +73,14 @@ private val OrbAboveNavZone = 90.dp
 
 /** Orb V2: the visible liquid-glass sphere is 52dp (the accessible target is the same node). */
 private val OrbSize = 52.dp
+
+/**
+ * The vertical band the floating Orb occupies at the bottom of the content area: its own height
+ * plus the margin it sits on. A page that puts a control in its own bottom-right corner reserves
+ * this much so the two cannot land on top of each other. Derived from the Orb's real values, so
+ * moving or resizing the Orb moves the reservation with it.
+ */
+val OrbReservedSpace = OrbSize + 12.dp
 private val AgentOrbSlotSize = 64.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -98,7 +107,75 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
     }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: "now"
-    val orbOnThisRoute = currentRoute in RootDestination.routes
+    val noteScope = rememberCoroutineScope()
+    val noteRepository = com.virlin.app.domain.VirlinGraph.repository
+    val noteTasks by noteRepository.tasks.collectAsState()
+    val noteProjects by noteRepository.projects.collectAsState()
+    val routeTaskId = when (currentRoute) {
+        TaskDetailRoute, com.virlin.app.ui.todo.TaskTodoRoute -> backStackEntry?.arguments?.getString("id")
+        com.virlin.app.ui.page.TaskPageRoute -> backStackEntry?.arguments?.getString("taskId")
+        else -> null
+    }
+    val routeProjectId = when (currentRoute) {
+        ProjectDetailRoute, ProjectTaskIndexRoute, com.virlin.app.ui.map.ProjectMapRoute ->
+            backStackEntry?.arguments?.getString("id")
+        else -> routeTaskId?.let { id -> noteTasks.firstOrNull { it.id == id }?.projectId }
+    }
+    /** All NEW notes use the redesigned owner-scoped workspace. Legacy capture ids stay legacy. */
+    val openRedesignedNotes: (String?, String?) -> Unit = { explicitTaskId, explicitProjectId ->
+        val taskId = explicitTaskId ?: routeTaskId
+        val projectId = explicitProjectId ?: routeProjectId
+        when {
+            taskId != null -> {
+                val title = noteTasks.firstOrNull { it.id == taskId }?.title ?: "Notes"
+                noteScope.launch {
+                    com.virlin.app.domain.action.TaskPageActions(
+                        noteRepository, com.virlin.app.domain.VirlinGraph.clock,
+                        com.virlin.app.domain.VirlinGraph.ids
+                    ).ensure(taskId, com.virlin.app.domain.model.TaskPageTypeKeys.NOTE,
+                        com.virlin.app.domain.model.TaskPageTypeKeys.noteOwner(taskId))
+                    navController.navigate(com.virlin.app.ui.notes.notesForTask(taskId, title)) {
+                        launchSingleTop = true
+                    }
+                }
+            }
+            projectId != null -> {
+                val title = noteProjects.firstOrNull { it.id == projectId }?.title?.let { "$it Notes" }
+                    ?: "Project Notes"
+                navController.navigate(com.virlin.app.ui.notes.notesForProject(projectId, title)) {
+                    launchSingleTop = true
+                }
+            }
+            else -> navController.navigate(com.virlin.app.ui.notes.globalNotes()) { launchSingleTop = true }
+        }
+    }
+    /**
+     * A project, its workstreams and its tasks are all reached FROM Streams, so as far as the
+     * app shell is concerned they are Streams: the footer and the Orb stay, and Streams stays
+     * the selected tab. Opening one never selects Pulse and never resets the Streams stack.
+     *
+     * The capture editors (text note, prompt, link, file, voice) and the fullscreen focus clock
+     * are deliberately NOT here: each owns its own bottom actions or is immersive by design, so
+     * the shared footer would sit on top of their controls.
+     */
+    val streamsSubRoute = STREAMS_SUB_ROUTES.any { currentRoute.startsWith(it) }
+    // The capture Inbox and the map picker are now reached FROM Apps, so the shell treats them
+    // as Apps: the footer and Orb stay and the Apps tab stays selected.
+    val appsSubRoute = currentRoute == "inbox" ||
+        currentRoute.startsWith("apps_mind_maps")
+    // A project's Pulse drilldown is still Pulse.
+    val pulseSubRoute = currentRoute.startsWith("pulse_project/")
+    // One predicate for both the bar and the Orb: they appear and disappear together, so a
+    // screen can never show one without the other.
+    val orbOnThisRoute = currentRoute in RootDestination.routes || streamsSubRoute ||
+        pulseSubRoute || appsSubRoute
+    val barOnThisRoute = orbOnThisRoute
+    val barRoute = when {
+        streamsSubRoute -> RootDestination.STREAMS.route
+        pulseSubRoute -> RootDestination.PULSE.route
+        appsSubRoute -> RootDestination.INBOX.route
+        else -> currentRoute
+    }
     // Live Inbox count for the bottom-nav badge: the same capture projection the Inbox shows.
     // Safe before READY (bootstrap emits emptyList).
     val captures by com.virlin.app.domain.VirlinGraph.repository.captures.collectAsState()
@@ -184,10 +261,12 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
         // 2dp only while the Agent is visible (never animated per frame; API 31+ RenderEffect, no-op below).
         Box(Modifier.fillMaxSize().then(if (agentVisible) Modifier.blur(2.dp) else Modifier)) {
         Scaffold(
-            containerColor = Color(0xFFF8F7F4),
+            // The Inbox is a pure-white surface by design; every other route keeps the app's
+            // warm off-white, so the container follows the route rather than being tinted for all.
+            containerColor = if (currentRoute == "inbox") Color.White else Color(0xFFF8F7F4),
             // Bottom-attached root navigation (Now · Streams · Pulse · Inbox). The bar owns the
             // navigation-bar inset itself; nothing else pads the bottom, so there is no gap.
-            bottomBar = { if (orbOnThisRoute) VirlinBottomNav(currentRoute, inboxCount, navController) }
+            bottomBar = { if (barOnThisRoute) VirlinBottomNav(barRoute, inboxCount, navController) }
         ) { innerPadding ->
             // Content ends above the bar (innerPadding); the Orb slot is an overlay in the
             // bottom-right of that content area, so it floats above the bar and never over Inbox.
@@ -206,7 +285,10 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
             ) {
                 composable("now") { NowScreen(navController) }
                 composable("streams") { StreamsScreen(navController) }
-                composable("pulse") { PulseScreen() }
+                composable("pulse") { com.virlin.app.ui.pulse.PulseScreen(navController) }
+                composable(com.virlin.app.ui.pulse.PulseProjectRoute) { e ->
+                    com.virlin.app.ui.pulse.PulseProjectScreen(e.arguments?.getString("id"), navController)
+                }
                 composable("stream_detail/{id}") { backStackEntry ->
                     val id = backStackEntry.arguments?.getString("id")
                     StreamDetailScreen(id, navController)
@@ -214,11 +296,39 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 // Root Inbox tab: capture review/manage (organize / archive / convert).
                 // Agent CAPTURE is creation-only (five cards + composer); review lives here —
                 // own ViewModel instance so a selection here never redirects the Agent.
+                composable("apps") {
+                    com.virlin.app.ui.apps.VirlinAppsScreen(
+                        onOpenInbox = {
+                            navController.navigate("inbox") { launchSingleTop = true }
+                        },
+                        // No "all maps" screen exists; a map belongs to a project, so this
+                        // opens the smallest honest thing: pick the project, open ITS map.
+                        onOpenMindMaps = {
+                            navController.navigate("apps_mind_maps") { launchSingleTop = true }
+                        },
+                        // Pages is not built. This opens the existing note editor, which is the
+                        // nearest real screen — it is not a Pages home and is not called one.
+                        onOpenPages = { openRedesignedNotes(null, null) },
+                        // Flashcards has no feature behind it, so the tile stays disabled.
+                        flashcardsAvailable = false,
+                        animateIcons = !reducedMotion,
+                    )
+                }
+                composable(com.virlin.app.ui.apps.MindMapsHomeRoute) {
+                    com.virlin.app.ui.apps.MindMapsHomeHost(navController)
+                }
+                composable(com.virlin.app.ui.apps.MindMapsFolderRoute) { e ->
+                    com.virlin.app.ui.apps.MindMapsFolderHost(
+                        e.arguments?.getString("id"), navController
+                    )
+                }
                 composable("inbox") {
                     InboxScreen(
                         viewModel(key = "inbox_tab"),
+                        onBack = { navController.popBackStack() },
                         onOpenTextNote = { id ->
-                            navController.navigate(textNoteRoute(id)) { launchSingleTop = true }
+                            if (id == null) openRedesignedNotes(null, null)
+                            else navController.navigate(textNoteRoute(id)) { launchSingleTop = true }
                         },
                         onOpenPrompt = { id ->
                             navController.navigate(promptEditorRoute(id)) { launchSingleTop = true }
@@ -237,8 +347,36 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
 
             // Hierarchy surfaces (Pass 2): Streams -> Project -> WorkStream -> Task (any depth).
             composable(ProjectDetailRoute) { e -> ProjectDetailScreen(e.arguments?.getString("id"), navController) }
-            composable(WorkStreamDetailRoute) { e -> WorkStreamDetailScreen(e.arguments?.getString("id"), navController) }
-            composable(TaskDetailRoute) { e -> TaskDetailScreen(e.arguments?.getString("id"), navController) }
+            composable(WorkStreamDetailRoute) { e ->
+                // `path` carries the ancestor task ids to open at, so a deep link and a process
+                // restart rebuild the same level from stable ids rather than a live breadcrumb.
+                WorkStreamDetailScreen(
+                    e.arguments?.getString("id"),
+                    navController,
+                    initialPath = e.arguments?.getString("path")
+                        ?.split(',')?.filter { it.isNotBlank() }.orEmpty()
+                )
+            }
+            composable(com.virlin.app.ui.map.ProjectMapRoute) { e ->
+                com.virlin.app.ui.map.ProjectMapScreen(e.arguments?.getString("id"), navController)
+            }
+            composable(ProjectTaskIndexRoute) { e ->
+                ProjectTaskIndexScreen(e.arguments?.getString("id"), navController)
+            }
+            composable(TaskDetailRoute) { e ->
+                TaskHierarchyRedirectScreen(e.arguments?.getString("id"), navController)
+            }
+            composable(com.virlin.app.ui.page.TaskPageRoute) { e ->
+                com.virlin.app.ui.page.TaskPageScreen(e.arguments?.getString("taskId"), navController)
+            }
+            // A task's Note as its OWN page - not a sheet, not a dialog, not a map node - so it
+            // gets the shared footer and Orb and the same Back behaviour as every other page.
+            // A task's To-do list as its own page: the task's real `task_steps`, nothing new.
+            composable(com.virlin.app.ui.todo.TaskTodoRoute) { e ->
+                com.virlin.app.ui.todo.TaskTodoScreen(
+                    e.arguments?.getString("id"), navController
+                )
+            }
 
                 // Fullscreen landscape Focus Clock. Not a bottom-navigation destination; it is
                 // another presentation of the SAME running FocusSession shown on Now.
@@ -254,9 +392,6 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 ) { FocusClockScreen(navController) }
 
                 // Full-screen Capture Text Note editor (not a bottom-nav destination).
-                composable("text_note") {
-                    TextNoteEditorScreen(navController, captureId = null)
-                }
                 composable(
                     route = "text_note/{captureId}",
                     arguments = listOf(navArgument("captureId") { type = NavType.StringType })
@@ -274,8 +409,33 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 ) { entry ->
                     PromptEditorScreen(navController, captureId = entry.arguments?.getString("captureId"))
                 }
+                composable(
+                    route = "prompt_editor/new/{taskId}",
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    PromptEditorScreen(
+                        navController,
+                        captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(
+                            taskId = entry.arguments?.getString("taskId")
+                        )
+                    )
+                }
 
                 // Full-screen Capture Link editor (not a bottom-nav destination).
+                composable(
+                    route = com.virlin.app.ui.notes.NOTES_ROUTE,
+                    arguments = listOf(
+                        navArgument("ownerKey") { type = NavType.StringType },
+                        navArgument("title") { type = NavType.StringType; defaultValue = "" },
+                    ),
+                ) { entry ->
+                    com.virlin.app.ui.notes.NotesRoute(
+                        navController = navController,
+                        ownerKey = entry.arguments?.getString("ownerKey").orEmpty(),
+                        title = entry.arguments?.getString("title").orEmpty(),
+                    )
+                }
                 composable("link_editor") {
                     LinkEditorScreen(navController, captureId = null)
                 }
@@ -284,6 +444,30 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     arguments = listOf(navArgument("captureId") { type = NavType.StringType })
                 ) { entry ->
                     LinkEditorScreen(navController, captureId = entry.arguments?.getString("captureId"))
+                }
+                composable(
+                    route = "link_editor/new/project/{projectId}",
+                    arguments = listOf(navArgument("projectId") { type = NavType.StringType })
+                ) { entry ->
+                    LinkEditorScreen(
+                        navController,
+                        captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(
+                            projectId = entry.arguments?.getString("projectId")
+                        )
+                    )
+                }
+                composable(
+                    route = "link_editor/new/task/{taskId}",
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    LinkEditorScreen(
+                        navController,
+                        captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(
+                            taskId = entry.arguments?.getString("taskId")
+                        )
+                    )
                 }
 
                 // Full-screen Capture File / Image viewer (single screen; not a bottom-nav destination).
@@ -418,7 +602,8 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                                 vm = captureViewModel,
                                 onOpenTextNote = { id ->
                                     agentViewModel.dismiss()
-                                    navController.navigate(textNoteRoute(id)) { launchSingleTop = true }
+                                    if (id == null) openRedesignedNotes(null, null)
+                                    else navController.navigate(textNoteRoute(id)) { launchSingleTop = true }
                                 },
                                 onOpenPrompt = { id ->
                                     agentViewModel.dismiss()
@@ -560,3 +745,18 @@ private fun rememberReducedMotion(): Boolean {
         ) == 0f
     }
 }
+
+/**
+ * Routes that live under Streams: the project pages, the project's task index, a WorkStream and
+ * any task level inside it, and a task's own detail. They keep the shared footer and Orb.
+ */
+private val STREAMS_SUB_ROUTES = listOf(
+    "project_detail/",
+    "project_map/",
+    "project_task_index/",
+    "workstream_detail/",
+    "task_detail/",
+    // The Note page belongs to the Projects branch, so the footer keeps Projects selected.
+    "task_todo/",
+    "notes/"
+)

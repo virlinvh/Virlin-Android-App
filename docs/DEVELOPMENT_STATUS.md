@@ -1,5 +1,9 @@
 # Virlin — Development Status
 
+> Historical pass log. For the current cross-feature architecture, routes, persistence and parallel
+> agent rules, start with `PROJECT_DOCUMENTATION_INDEX.md`. This file remains valuable history but
+> does not include every feature added after its last-updated date.
+
 Last updated: 2026-09-18
 
 ## Permanent startup architecture — 2026-09-18
@@ -1164,10 +1168,85 @@ Tests: `StructureActionsTest` **37/37** (incl. 11 projectless / cancellation cor
 | Agent Hierarchy Control | NOT IMPLEMENTED |
 | Room / Reminders / NLP / TTS | NOT IMPLEMENTED |
 
-Navigation: **Streams → Project Detail → WorkStream Detail → Task tree → Task Detail** (a
-task with subtasks opens its own detail; depth is unbounded). Projects live INSIDE the
-Streams tab (filter row `All · Projects · Need You · Processing · Ready` + PROJECTS section);
-Projects are not a navigation destination (the fourth tab, added later, is the capture Inbox). Stream rows now open `workstream_detail/{id}`
+### The map as a hierarchy editor (structural placement)
+
+The map's **Edit structure** mode turns it into an editor of the canonical records. A tap selects
+a branch; the bar names it and says how many items it contains; **Move here…** lists every legal
+destination in the project with its breadcrumb; **Copy** / **Paste into** duplicate a task branch.
+
+Every one of those ends in ONE command — `VirlinActions.placeBranch(projectId, Placement)` in
+`domain/structure/HierarchyPlacement.kt` + `StructureActions.placeBranch`. The UI never writes a
+parent id. It validates inside the transaction that applies it: same project, source and target
+exist, legal type mapping (a workstream reorders under the root and never becomes a task by a
+drop), no self or descendant destination, the insertion point is a sibling of the destination and
+is outside the moved branch, and the caller's hierarchy revision still matches.
+
+A MOVE keeps every id and all task metadata and re-homes the whole subtree, rewriting the
+redundant `workStreamId` / `projectId` on each descendant and clearing a stream's active-task
+pointer when the task it pointed at leaves. A COPY allocates all ids first, then writes
+parent-first, and deliberately does not clone completion, `completedAt` or the current marker.
+Sibling order is renumbered from zero in the destination list only.
+
+**Revision** is derived, not stored: `HierarchyRules.revisionOf` folds the ids, parents, kinds and
+orders of the project's nodes. It changes when and only when the hierarchy changes, so it needs no
+schema column that could drift from the rows it describes, and it is recomputed identically after
+a restart.
+
+**Undo** is the transactional inverse (`inverseOf`), re-validated against a freshly read revision,
+so an undo after somebody else's edit is refused rather than applied blindly. It is offered only
+for a MOVE: reversing a COPY would mean deleting the clones, and this app cancels rather than
+deletes, so `inverseOf` returns null for a copy and the snackbar shows no Undo.
+
+**Not implemented:** canvas long-press drag with ghost, valid-target highlight, insertion line and
+edge panning; branch collapse/expand; Focus branch / Fit branch; map search; and both conversions
+(task branch ↔ workstream). The action sheet is the working path today.
+
+## Project mind map (native)
+
+A project's Overview has a compact **Mind map** action beside Workstreams; it opens
+`project_map/{id}` (`ui/map/`), leaving the Overview in the back stack. A node opens the
+destination it already had — workstream detail or task detail — and Back returns to the map
+with its pan and zoom intact.
+
+The map is a **projection**, never a record: `projectMapTopics` reads the live project,
+workstreams and tasks, so an edit elsewhere appears without any sync, and nothing on the screen
+writes to them. Identity is the entity id, so two workstreams with the same title stay separate;
+a workstream with no tasks appears and reads "No tasks yet" rather than anything resembling
+complete; subtasks nest to their real depth via an iterative traversal. Status carries a word and
+a glyph, never colour alone.
+
+The canvas is unbounded: pan is a world offset that is never clamped, zoom is 0.18x–3x around the
+gesture centroid, and one Canvas draws every node with offscreen nodes and connectors culled, so
+there is no composable per node and no giant bitmap. Layout is recomputed only when the hierarchy
+or template changes. Six templates (Right tree, Balanced, Radial, Top-down, Branch lanes, Compact
+outline) all show the same tree; switching one never touches a task. A screen-reader outline lists
+every node, because a drawn canvas is not accessible on its own.
+
+**Appearance is stored separately** from work — layout, palette and per-entity colour overrides
+per project, in `MapAppearanceStore` (a small JSON file in app storage, not Room, since none of it
+is work and no schema migration should exist for it). Precedence: node override > nearest branch
+override > palette.
+
+Export/import use the Storage Access Framework. `.virlinmap` is a versioned JSON snapshot whose
+decode validates size, schema version, ids, parents and cycles and only ever shows a preview — it
+never writes to live records. **Export .xmind** writes a real workbook ZIP (`content.json`,
+`metadata.json`, `manifest.json`) from `XmindWriter`, implementing the same contract as the
+supplied Node `xmind-generator` adapter, which is unusable here because this repository is
+offline-only with no Node runtime. **XMind interoperability is NOT verified**: no XMind desktop or
+Android build was available to open the output, so the export should be treated as unfinished
+until a real file has been opened in the target versions.
+
+Navigation: **Projects → Project Detail → WorkStream Detail → Task levels** (every task opens
+its own level, leaf or not; depth is unbounded). The second tab is labelled **Projects** and
+is the project directory (`ui/screens/VirlinProjectDirectory.kt`, hosted by `StreamsScreen`):
+a heading with the project count and `+ PROJECT`, a search field, a pinned `All` chip beside a
+scrollable status rail (Need You · Processing · Ready · Free Focus · Snoozed · Blocked) and ONE
+list of project cards. A project matches a status when one of its WorkStreams is in that state
+according to `effectiveAttentionState` — status is never inferred from a progress percentage,
+and a project with no tasks shows a dash rather than 0%. The old `All · Projects · Need You ·
+Processing · Ready` filter row and the WorkStream rows it listed are gone, so a **projectless
+WorkStream currently has no browsing path** (`HierarchyUiTest.projectlessPath_…` is @Ignore'd
+recording exactly that). Stream rows now open `workstream_detail/{id}`
 (`ui/hierarchy/HierarchyScreens.kt`); the legacy `stream_detail/{id}` route is still
 registered for the Now screen and untouched.
 
@@ -2580,3 +2659,274 @@ the Agent were not redesigned.
 The Roborazzi screenshot classes already fail at the Phase 09 commit (stale goldens from the
 earlier baseline reconciliation) and `CaptureBoundaryTest.types_are_explicit_and_payloads_raw`
 also fails at that commit. Neither was introduced by Phase 10, and no golden was re-recorded.
+
+## PROJECT ACTIVITY TAB (2026-09-25)
+
+The project page's Activity tab is real. It is a **record of what happened**, not a second
+dashboard: a pure projection (`domain/activity/ProjectActivity.kt`) over the append-only
+`WorkStreamEvent` history of the project's WorkStreams plus the `CaptureItem`s filed to the
+project. Nothing is synthesised — a project with no history shows an empty record.
+
+- **UI** — `ui/hierarchy/VirlinProjectActivity.kt`: timeline grouped by the user's local day,
+  Filter / calendar / Newest-Oldest controls, active-filter chips, and an entry **detail** that
+  is a state of the same tab, so closing it returns to the same filtered list and scroll
+  position (Android Back included). Prompt/note bodies are selectable and copied verbatim;
+  images decode from managed storage off the main thread; audio uses the same `MediaPlayer`
+  transport as the Voice editor, with the real duration and a working seek.
+- **Bounded height** — the Activity tab is NOT inside the page's `verticalScroll`.
+  `VirlinProjectPage` scrolls for Overview/Knowledge and hands Activity a `weight(1f)` box,
+  because a `LazyColumn` in an unbounded parent crashes.
+- **One batched read, never per row** — `WorkStreamRepository.getEventsForStreams(ids, limit,
+  offset)` (paginated, newest first) and `get{Notes,Prompts,Attachments,Voices}ByCaptureIds`.
+  No schema change: these are new queries over existing tables, so Room stays at **v12**.
+- **Immutable snapshots** — `domain/activity/TaskEventDetail.kt`. Task events now record the
+  task's title and its status transition alongside the id, so a past event is described as it
+  was rather than from the task's state today. History written before this decodes as a bare
+  id and the detail says so; it is never back-filled with today's values.
+
+**Known gaps, deliberately not faked:** a standalone project task (no WorkStream) writes no
+event, so its changes do not appear; checklist counts come from the note's current saved state
+because Virlin stores no per-step history; project-scoped search still opens the global Streams
+search.
+
+## PROJECT ACTIVITY — END-TO-END TEST SET (2026-09-26)
+
+`app/src/androidTest/.../hierarchy/Phase08ActivitySeed.kt` builds a **labelled, reversible**
+record inside "Phase 08 Project" through the app's own actions and its own storage — prompt
+(heading + numbered steps + code fence), note, checklist, document, image, recording, link,
+project-level AI response, a task created → in progress → completed, and a WorkStream
+block/unblock. Every id starts with `p08t-` and every title carries `[TEST]`, so re-running the
+seed writes nothing new and `Phase08ActivityRemovalTest` takes exactly that set back out (it
+also records the ids of the detail-less events it wrote, which nothing else could identify).
+
+Fixes this testing found, all in the Activity UI or its projection:
+
+- A task edit recorded the same status on both sides and rendered "In progress → In progress".
+  A transition is now shown only when something actually moved.
+- Prompt and note bodies were flattened to bare lines. The document's structure — headings,
+  list markers, checkbox state, code fences — is now kept in the text, and Copy puts exactly
+  that on the clipboard.
+- Opening an entry and closing it returned the timeline to the top; the list state is hoisted
+  so it survives, and is reset only when the selection itself changes.
+- Filters and the selected tab were lost when a capture was opened from Activity. Both are now
+  saved state, so returning lands on the same tab with the same filters.
+
+Honest limits: a standalone project task writes no event and so cannot appear; checklist counts
+are the note's current saved state because no per-step history exists; the recording's bytes are
+generated rather than microphone-captured (the capture, storage, duration and playback are the
+app's own). `WorkHierarchyCreationUiTest` needs a clean app state — with many projects present
+its new project row is off-screen — so run it after `pm clear`.
+
+## PROJECT KNOWLEDGE — CONTENT LIBRARY (2026-09-26)
+
+The Knowledge tab is now a content library over the project's captures:
+`ui/hierarchy/VirlinProjectKnowledgeLibrary.kt`, fed by `HierarchyViewModel.knowledge`.
+
+- **One item, two views.** A row is the SAME `CaptureItem` that Activity shows. Knowledge is
+  where an item lives; Activity is when it happened. Neither copies the other's data, and
+  re-filing an item in Knowledge never reorders history.
+- **Type tabs with real counts** (All / Prompts / Images / Audio / Docs), search over titles,
+  document text, filenames and location, `By type / workstream / task` grouping and a workstream
+  selector including **Project-wide** — an item with no WorkStream and no task is normal.
+  Type, grouping, workstream, search and scroll are saved state, so opening an item and coming
+  back lands on the same view.
+- **Real media.** Images decode from managed storage through the same loader Activity uses;
+  audio plays through `VirlinAudioTransport`, the shared MediaPlayer transport (no decorative
+  waveform — Virlin stores no waveform samples). Prompt and note excerpts come from
+  `NoteBlockText.render`, the one renderer Activity and Copy also use.
+- **Item actions**, each mapped to something the app already does: Move to… →
+  `attachCapture` (context only; bytes, id and the original Activity entry untouched, and the
+  destination list is scoped to THIS project); Duplicate → a new capture through the same
+  create actions, with the attachment's or clip's bytes copied so two items never share a file;
+  Download → the existing FileProvider share, offered only when a file backs the item;
+  Delete → `archiveCapture`, the app's real retention policy, worded as "Archive" and confirmed.
+- **Bounded height.** Knowledge and Activity both own a lazy list, so `VirlinProjectPage`
+  scrolls only for Overview and gives both tabs a `weight(1f)` slot.
+
+Not implemented, deliberately: Virlin records no "item moved" event, so a move leaves no trace
+in Activity beyond the item's new location; there is no waveform data and no stored transcript;
+Download shares the file rather than writing to the Downloads collection.
+
+## KNOWLEDGE LIBRARY — GALLERY, STEPS/CHECKLISTS, MULTI-SELECT (2026-09-26)
+
+The Knowledge tab's renderer was replaced, not extended: there is no full-width document or
+audio row left. Every type is a two-column tile, with All and each type filter alike, and a
+single trailing tile keeps the left column with an empty right slot.
+
+- **Six types.** PROMPT / IMAGE / AUDIO / DOCUMENT plus **STEPS** and **CHECKLIST**, which are
+  read from the blocks the writer actually saved (`NoteBlockShape`: `NUMBERED_LIST` and
+  `CHECKBOX`, including inside a toggle). There is no new store and no migration: one canonical
+  capture, classified by what it holds. A PROMPT capture stays a prompt even when numbered.
+  The existing rich note editor is the steps/checklist editor — creating, editing and ticking
+  already work there, and a tile opens that editor.
+- **Real thumbnails.** `ActivityImage` decodes from managed storage, sub-sampled, cropped, with
+  a spinner while loading and a neutral grey glyph when the file is gone — never a coloured
+  block standing in for a picture.
+- **Multi-select.** Long press or the Select button; tiles toggle; the selection survives filter
+  changes and process death (saved state). Select visible applies to the filtered set only.
+- **Bulk move is one transaction.** `VirlinActions.attachCaptures(ids, context, withinProjectId)`
+  moves every selected capture or none, rejects ids outside the project, and reports the outcome
+  in a banner. Ids, bytes and capture timestamps are untouched, so Activity keeps its original
+  chronology.
+
+Still true and still flagged: Virlin records no "item moved" event, no waveform samples and no
+stored transcript, and Download shares the file rather than writing to the Downloads collection.
+
+## ONE PROJECT SCREEN — OVERVIEW · KNOWLEDGE · ACTIVITY (2026-09-26)
+
+`ui/hierarchy/VirlinProjectExperience.kt` is now the composable the Project route reaches.
+`VirlinProjectPage` is no longer mounted anywhere (its UI models are still the contract).
+
+- **One toolbar, three tabs.** Overview keeps the Projects back-bar, the real `ProjectIcon`, the
+  large title, the ring and the task count. Knowledge and Activity replace the toolbar title
+  with the project's name and drop the header block entirely, so the tabs sit under the toolbar
+  and each tab owns all the remaining height. The tab choice is saved state.
+- **Overview shows ONE saved item** — the most recently updated — with `+ Add` beside the
+  heading and `View all →` below, which switches to the Knowledge tab. The library is not
+  duplicated on Overview.
+- **Tasks are a type in Knowledge.** `KnowledgeProjectTask` projects the project's real tasks:
+  same id, status, workstream and update time. A card opens the task page; its menu offers Open
+  task, Move to workstream…, Make standalone (only when assigned) and Add knowledge.
+- **`VirlinActions.placeTask(taskId, workStreamId)`** re-places a top-level task between a
+  WorkStream of its project and the project's standalone list, moving its subtree with it and
+  writing TASK_UPDATED events on both sides. The task is never copied: its id, status and
+  contribution to progress are unchanged, which is why the project total stays put while the
+  WorkStream's own ratio moves.
+- **Mixed bulk placement** (`HierarchyViewModel.organize`) re-files the selected saved items in
+  one `attachCaptures` transaction and then re-places the selected tasks; a selection containing
+  tasks is offered only workstream or standalone destinations, and the screen reports what
+  actually happened instead of assuming success.
+
+Unresolved: "Add knowledge" on a task opens the note editor at project scope — the editors take
+a capture id, not a pre-set task context, so the new note must be filed to the task afterwards.
+
+## STREAM TASK PAGE (2026-09-27)
+
+`ui/hierarchy/VirlinStreamTasks.kt` is the WorkStream route's page; `WorkStreamDetailScreen`
+now maps live state into it and routes every callback to `VirlinActions`.
+
+- **One level per screen.** Root lists top-level tasks with All / Active / Done and a task
+  count; opening a parent shows its children with a breadcrumb back. Depth and child count are
+  unbounded — the page only ever renders one level. A compact amber shortcut at root jumps
+  straight to the current task's level, so deep nesting stays reachable.
+- **Three distinct states.** Green check = truly completed (CANCELLED is never a check), amber =
+  the stream's `activeTaskId`, neutral = pending; a parent containing the current task gets a
+  mint tint. Parent percentages come from `ProgressCalculator.ofTask` — executable leaves, the
+  app's existing rule — not from a second progress store.
+- **Execution** uses `ExecutionPreference` / `ExecutionModeResolver`. The sheet shows the
+  explicit choice, the effective value, and the ancestor it came from. Creating with Inherit
+  stores Inherit; no explicit mode is set on a child's behalf.
+- **New actions:** `VirlinActions.moveTasks(taskIds, newParentId, afterId, withinStreamId)` —
+  re-parent and re-position in ONE transaction, rejecting a move into itself or its own subtree
+  and any id from another stream, renumbering siblings from zero; and `duplicateTask`, which
+  copies a task and its subtree under new ids beside the original.
+
+Deliberate deviations from the reference, because the domain says otherwise:
+
+- **Completion is one-way.** There is no reopen action, so a finished task's mark is displayed,
+  not offered as a toggle.
+- **Delete is cancel.** `cancelTask` is the app's policy: terminal, kept in history, excluded
+  from progress. The dialog says exactly that and counts the nested subtasks affected.
+- **Drag is not implemented.** No reorder library is present in this project, so ordering uses
+  explicit up/down controls and the destination sheet. Drag is not claimed.
+
+## TASK LEVEL IS UNIFORM AT EVERY DEPTH (2026-09-27)
+
+The stream task page had one branch left that treated a childless task as a different kind of
+thing: `if (childCount > 0) openChildList() else openLegacyTaskDetail()`. A current leaf like
+Question 17 therefore fell back to the old detail page, which is where the visual inconsistency
+came from.
+
+That branch is gone. Tapping any task row pushes that task's id onto the page's path, so every
+task — at any depth, with or without children — opens the SAME task-level screen: breadcrumb,
+title, CURRENT badge when it is the active task, its own overflow menu, its children (or "No
+subtasks yet"), Add subtask and Organize. `Open details` in the menu still reaches the task's
+metadata route, but a row tap never lands there.
+
+- **Child count describes a task; it is not permission to open one.** The chevron is no longer
+  conditional either.
+- **No schema change was needed.** `tasks.parentTaskId` already exists, is nullable and is
+  indexed; root tasks use null and every descendant keeps the same project/workstream identity.
+  There is no separate subtask table and no depth column to remove — the model never had a cap.
+- **One level is rendered at a time**, from the observed task snapshot filtered by
+  `parentTaskId`, so arbitrary depth stays usable and nothing recurses in composition.
+
+Covered by `TaskDepthTest`: a twelve-level chain persists with correct parents and ancestry; a
+leaf accepts a child; a deep leaf can be the canonical current task and stays current when a
+child is added beneath it; execution inheritance resolves through many levels, an explicit
+ancestor overrides below it, a descendant's own choice wins for itself and a sibling still
+inherits; a cyclic move at depth is rejected; a deep branch moves whole with every id intact.
+
+## PROJECT TASK INDEX (2026-09-27)
+
+Overview's progress block used to navigate to Pulse, which has no way back to the project. It
+now opens `project_task_index/{id}` — the project's own work items.
+
+- **The rows ARE what the ratio counted.** `domain/progress/ProjectTaskUnits` returns the very
+  units `ProgressCalculator.ofProject` sums: each WorkStream's executable leaves (or a root task
+  with no children), a WorkStream with no tasks as one unit of its own, the project's standalone
+  tasks the same way, and cancelled work excluded from both sides. Remaining / All / Done are
+  three views of that one set, so a filter can never disagree with the header.
+  `ProjectTaskUnitsTest` holds the list and the ratio to the same number.
+- **Navigation is by id.** An entry carries its workstream id and the ordered ancestor task ids;
+  `workStreamDetailAt(streamId, path)` opens `workstream_detail/{id}?path=a,b,c`, so a deep link
+  or a rebuilt process reconstructs the level from stable ids rather than a live breadcrumb. The
+  stream page's path is saved state for the same reason. A standalone task has no WorkStream
+  page and opens its own task route.
+- **One footer, drawn once.** `project_task_index/` and `workstream_detail/` now keep the
+  app-wide bottom bar with **Streams** selected; the index passes an empty `footer` slot so
+  there is never a second bar. Pulse stays reachable only from its own footer item.
+
+Back: task level → index (filter and scroll intact) → Project Overview. System Back matches the
+toolbar arrow because both pop the same back stack.
+
+## ONE APP SHELL FOR THE PROJECT AND TASK ROUTES (2026-09-27)
+
+The shared shell in `VirlinApp` already owned the single footer and the single Orb; the project
+and task routes simply were not counted as part of it, so they lost both. They are now:
+
+- **One predicate for both.** `STREAMS_SUB_ROUTES` — `project_detail/`, `project_task_index/`,
+  `workstream_detail/`, `task_detail/` — are Streams descendants. The footer stays with
+  **Streams** selected (never Pulse, never a reset stack) and the Orb stays with it. The bar and
+  the Orb share one flag, so a screen can never show one without the other.
+- **Nothing was copied.** The existing `VirlinBottomNav` and the existing living Orb in
+  `OrbTravelLayout` are reused exactly; no screen draws its own footer, and insets are still
+  applied once by the shell's Scaffold, whose padding the destinations receive.
+- **The Orb no longer sits on an action.** `OrbClearance` (78dp) is the room a bottom control
+  leaves for it: the project lists end above it, and the stream page's "+ Task" and
+  "Add subtask / Organize" bars stop short of it. Modal sheets still draw above the shell, with
+  the footer and Orb behind them and their buttons reachable.
+
+Deliberately excluded, and why: the capture editors (`text_note`, `prompt_editor`,
+`link_editor`, `file_viewer`, `voice_editor`) each own a bottom action bar and IME handling, so
+the shared footer would sit on their controls; and `focus_clock` is immersive landscape by
+design. Those routes remain full-screen shells of their own.
+
+## PULSE — ALLOCATION (2026-09-27)
+
+The Pulse tab is `ui/pulse/VirlinPulse.kt` fed by `PulseViewModel`. The old placeholder screen
+(`ui/screens/PulseScreen.kt`) is deleted, so there is one Pulse and no sample metrics anywhere.
+
+- **Every number comes from records the app already keeps.** A FOCUS interval is a
+  `FocusSession`; an EXTERNAL interval is a `Cycle`'s hand-off window (`handedOffAt` until the
+  cycle ended). New repository reads `allFocusSessions()` / `allCycles()`; the fold runs on IO
+  and re-reads whenever streams, projects or tasks change.
+- **A running timer is measured to now**, never to the end of the period being viewed.
+- **The union is honest.** A sweep over half-open `[start,end)` slices counts overlapping focus
+  timers once and overlapping external processes once. Overlap belongs to both the focus and the
+  external totals and is drawn once in the bar's wall-clock union; saved time is never added on
+  top of either.
+- **Simultaneous focus is a fault, not extra time.** Virlin allows one focus at a time, so a
+  slice claimed by two records is counted once (earliest id) and the clash is reported on screen
+  as a diagnostic.
+- **"Estimated time saved"** is focus on one task while an external process ran on a different
+  one — excluding pauses, same-task overlap and unknown attribution. The info sheet says plainly
+  that it measures parallel work that happened, not a proven counterfactual saving.
+- Sub-minute time reads `<1m`, never `0m`: recorded work is never shown as nothing.
+
+`PulseAnalyticsTest` (15) covers the union, touching boundaries, paused intervals, saved-time
+exclusions, calendar windows, midnight clipping, open timers, empty periods, attribution
+reconciliation and the bucket sums. `PulseFromRealRecordsTest` focuses a stream through
+`VirlinActions` on the real database and asserts Pulse reports that session.
+
+Unverified: timezone/DST changes mid-period, and a history large enough to test the fold's cost.

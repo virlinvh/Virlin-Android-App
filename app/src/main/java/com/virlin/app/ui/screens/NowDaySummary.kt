@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -87,18 +89,30 @@ fun NowDaySummary(
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Hi, ${values.greetingName} 👋",
-                    fontSize = 22.sp, fontWeight = FontWeight.Black, color = Charcoal,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis
+            // The accent rule sits ON the segment's left edge — the same edge as the summary
+            // card below — and the two lines of text start together just inside it.
+            Row(
+                modifier = Modifier.weight(1f).height(IntrinsicSize.Min),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier.width(3.dp).fillMaxHeight()
+                        .background(SummaryGreen, RoundedCornerShape(50))
                 )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    "Small steps. Big progress.",
-                    fontSize = 13.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Hi, ${values.greetingName} 👋",
+                        fontSize = 22.sp, fontWeight = FontWeight.Black, color = Charcoal,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "Small steps. Big progress.",
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
             Spacer(Modifier.width(10.dp))
             Row(

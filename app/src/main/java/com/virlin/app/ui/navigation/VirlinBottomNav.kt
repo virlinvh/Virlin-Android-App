@@ -4,11 +4,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material3.Badge
@@ -36,9 +36,12 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 /** The four permanent root destinations. Detail routes are nested and never appear here. */
 enum class RootDestination(val route: String, val label: String, val selectedIcon: ImageVector, val icon: ImageVector) {
     NOW("now", "Now", Icons.Filled.Home, Icons.Outlined.Home),
-    STREAMS("streams", "Streams", Icons.Filled.Layers, Icons.Outlined.Layers),
+    // The route and the destination keep their name; only what the tab is called changed.
+    STREAMS("streams", "Projects", Icons.Filled.Layers, Icons.Outlined.Layers),
     PULSE("pulse", "Pulse", Icons.Filled.Timeline, Icons.Outlined.Timeline),
-    INBOX("inbox", "Inbox", Icons.Filled.Inbox, Icons.Outlined.Inbox);
+    // The fourth tab is now the Apps gallery; the capture Inbox is the first app inside it.
+    // The constant keeps its name so the live capture-count badge below is unchanged.
+    INBOX("apps", "Apps", Icons.Filled.Apps, Icons.Outlined.Apps);
 
     companion object { val routes = entries.map { it.route } }
 }

@@ -87,9 +87,11 @@ import com.virlin.app.ui.theme.VirlinColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-const val TextNoteRoute = "text_note"
-fun textNoteRoute(captureId: String?) =
-    if (captureId.isNullOrBlank()) "text_note" else "text_note/$captureId"
+/** Compatibility editor for an existing Capture Note. New Notes use `ui/notes`. */
+fun textNoteRoute(captureId: String): String {
+    require(captureId.isNotBlank()) { "The legacy Text Note editor requires an existing capture ID" }
+    return "text_note/$captureId"
+}
 
 const val TextNoteScreenTag = "text_note_screen"
 const val TextNoteTitleTag = "text_note_title"
@@ -111,6 +113,12 @@ private val QuoteRule = Color(0xFFCBD5C8)
 
 const val TextNotePasteTag = "text_note_paste"
 
+/**
+ * A TASK's note, in the same editor the capture notes use.
+ *
+ * Keyed by task id so switching tasks gets its own ViewModel rather than inheriting the previous
+ * task's document.
+ */
 @Composable
 fun TextNoteEditorScreen(
     navController: NavController,

@@ -29,6 +29,16 @@ local.properties
 # --- Graphify generated knowledge graph (regenerate with `graphify update .`) ---
 graphify-out/
 
+# --- Local emulator / validation artifacts (never checkpoint) ---
+/videos/
+/.tmp/
+/tmp-diff/
+/tmp-blackscreen/
+/tmp-acceptance/
+
+# Machine-local MCP connector configuration; may contain local paths or credentials.
+/.mcp.json
+
 # --- Node ---
 node_modules/
 

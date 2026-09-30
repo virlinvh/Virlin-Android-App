@@ -153,7 +153,7 @@ class CommandExecutor(
         DomainError.TaskAlreadyClosed -> "That task is already closed"
         DomainError.EmptyTitle -> "Give it a name first"
         DomainError.EmptyCapture -> "Nothing to save yet"
-        DomainError.InvalidLink -> "Enter a full link starting with http:// or https://"
+        DomainError.InvalidLink -> "Enter a valid web link"
         DomainError.NotATextNote, DomainError.NotAPrompt, DomainError.NotAnAttachment, DomainError.NotAVoiceNote -> "Wrong capture type"
         DomainError.OwnershipMismatch -> "Choose a WorkStream or Project"
         DomainError.CaptureAlreadyOrganized -> "Already turned into a task"

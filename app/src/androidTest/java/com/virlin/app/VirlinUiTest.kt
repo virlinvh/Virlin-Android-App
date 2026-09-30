@@ -90,7 +90,7 @@ class VirlinUiTest {
     @Test
     fun bottomNavigation_showsAllFourDestinations() {
         composeRule.onNodeWithText("Now").assertIsDisplayed()
-        composeRule.onNodeWithText("Streams").assertIsDisplayed()
+        composeRule.onNodeWithText("Projects").assertIsDisplayed()
         composeRule.onNodeWithText("Pulse").assertIsDisplayed()
         composeRule.onNodeWithText("Inbox").assertIsDisplayed()
     }

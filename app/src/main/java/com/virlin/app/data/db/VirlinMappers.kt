@@ -50,7 +50,7 @@ object VirlinMappers {
         nextHumanAction = nextHumanAction, blockerReason = blockerReason, processingStartedAt = processingStartedAt,
         checkAt = checkAt, snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.name, currentCycleId = currentCycleId,
         cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt,
-        attentionRank = attentionRank, externalActorId = externalActorId
+        attentionRank = attentionRank, externalActorId = externalActorId, sortOrder = sortOrder
     )
     fun WorkStreamEntity.toDomain() = WorkStream(
         id = id, title = title, projectId = projectId, tool = tool,
@@ -61,7 +61,7 @@ object VirlinMappers {
         snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.let(SnoozeReason::valueOf),
         currentCycleId = currentCycleId, cycleCount = cycleCount, activeTaskId = activeTaskId,
         createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt, attentionRank = attentionRank,
-        externalActorId = externalActorId
+        externalActorId = externalActorId, sortOrder = sortOrder
     )
 
     fun ExternalStage.toEntity() = ExternalStageEntity(
@@ -122,7 +122,7 @@ object VirlinMappers {
         title = title,
         description = description,
         tagsJson = com.virlin.app.domain.prompt.PromptDocumentCodec.encodeTags(tags),
-        documentJson = com.virlin.app.domain.prompt.PromptDocumentCodec.encodeBlocks(blocks),
+        documentJson = com.virlin.app.domain.prompt.PromptDocumentCodec.encodeDocument(this),
         createdAt = createdAt,
         updatedAt = updatedAt
     )
@@ -229,4 +229,48 @@ object VirlinMappers {
         } ?: return null
         return PriorityPreference(streamId, preferredPosition, scope, createdAt)
     }
+
+    // ---- Tags and task steps (schema v13)
+    fun ProjectTagEntity.toDomain() =
+        com.virlin.app.domain.model.ProjectTag(id, projectId, name, createdAt, updatedAt)
+    fun com.virlin.app.domain.model.ProjectTag.toEntity() =
+        ProjectTagEntity(id, projectId, name.trim(), key, createdAt, updatedAt)
+
+    fun TagLinkEntity.toDomain() = com.virlin.app.domain.model.TagLink(
+        tagId, com.virlin.app.domain.model.TagTargetType.valueOf(targetType), targetId, createdAt
+    )
+    fun com.virlin.app.domain.model.TagLink.toEntity() =
+        TagLinkEntity(tagId, targetType.name, targetId, createdAt)
+
+    fun TaskStepEntity.toDomain() =
+        com.virlin.app.domain.model.TaskStep(id, taskId, text, done, order, createdAt, updatedAt)
+    fun com.virlin.app.domain.model.TaskStep.toEntity() =
+        TaskStepEntity(id, taskId, text, done, order, createdAt, updatedAt)
+
+    // The Notes page's own document. Blocks travel as VirlinNoteCodec JSON, which is this
+    // feature's own format and is never read by the capture note codec.
+    fun VirlinNoteEntity.toDomain() = com.virlin.app.domain.notedoc.VirlinNoteDoc(
+        ownerKey = ownerKey,
+        title = title,
+        blocks = com.virlin.app.domain.notedoc.VirlinNoteCodec.decode(documentJson),
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        revision = revision,
+    )
+    fun com.virlin.app.domain.notedoc.VirlinNoteDoc.toEntity() = VirlinNoteEntity(
+        ownerKey = ownerKey,
+        title = title,
+        documentJson = com.virlin.app.domain.notedoc.VirlinNoteCodec.encode(blocks),
+        revision = revision,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+    )
+
+    fun TaskPageBlockEntity.toDomain() = com.virlin.app.domain.model.TaskPageBlock(
+        id, taskId, typeKey, contentId, order, createdAt, updatedAt
+    )
+    fun com.virlin.app.domain.model.TaskPageBlock.toEntity() = TaskPageBlockEntity(
+        id, taskId, typeKey, contentId, order, createdAt, updatedAt
+    )
+
 }

@@ -26,6 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import kotlin.math.roundToInt
 import com.virlin.app.mock.MockData
 import com.virlin.app.model.StreamState
 import com.virlin.app.model.WorkStream
@@ -46,142 +47,121 @@ fun streamsFilterTag(label: String) =
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StreamsScreen(navController: NavController) {
-    val streams by MockData.streams.collectAsState()
-    
-    var searchQuery by remember { mutableStateOf("") }
-    var filter by rememberSaveable { mutableStateOf("All") }
-    val hierarchy: com.virlin.app.ui.hierarchy.HierarchyViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-    var addingProject by remember { mutableStateOf(false) }
+    val hierarchy: com.virlin.app.ui.hierarchy.HierarchyViewModel =
+        androidx.lifecycle.viewmodel.compose.viewModel()
+    val snapshot by hierarchy.snapshot.collectAsState()
+    val now = com.virlin.app.domain.VirlinGraph.clock.now()
+
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var filterName by rememberSaveable { mutableStateOf(ProjectDirectoryFilter.ALL.name) }
+    val filter = ProjectDirectoryFilter.entries.firstOrNull { it.name == filterName }
+        ?: ProjectDirectoryFilter.ALL
+    var addingProject by rememberSaveable { mutableStateOf(false) }
+    var pickingFilter by remember { mutableStateOf(false) }
+
     if (addingProject) com.virlin.app.ui.hierarchy.AddNameDialog(
         "New project", "Project name", onDismiss = { addingProject = false }
     ) { hierarchy.addProject(it) }
-    val snapshot by hierarchy.snapshot.collectAsState()
-    val projectSummaries = remember(snapshot) { hierarchy.projectSummaries(snapshot) }
-    
-    val filtered = streams.filter {
-        searchQuery.isEmpty() || 
-        it.title.contains(searchQuery, ignoreCase = true) || 
-        it.subtitle.contains(searchQuery, ignoreCase = true)
-    }
-    
-    val focus = filtered.filter { it.state == StreamState.FOCUS }
-    val needsYou = filtered.filter { it.state == StreamState.NEEDS_YOU }
-    val processing = filtered.filter { it.state == StreamState.PROCESSING }
-    val ready = filtered.filter { it.state == StreamState.READY }
-    val snoozed = filtered.filter { it.state == StreamState.SNOOZED }
-    val blocked = filtered.filter { it.state == StreamState.BLOCKED }
-    val paused = filtered.filter { it.state == StreamState.PAUSED }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Pearl)
-    ) {
-        Spacer(modifier = Modifier.height(16.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("Streams", style = Typography.titleLarge, color = Charcoal)
-                Text("${streams.size} total", fontSize = 12.sp, color = CharcoalMuted)
+    val summaries = remember(snapshot) { hierarchy.projectSummaries(snapshot) }
+
+    // A project's status is its WorkStreams' status, read from the domain's own projection.
+    // Nothing here is inferred from a progress percentage.
+    val items = remember(summaries, snapshot, searchQuery, filter, now) {
+        summaries.asSequence()
+            .filter { summary ->
+                searchQuery.isBlank() || summary.project.title.contains(searchQuery, ignoreCase = true)
+            }
+            .filter { summary ->
+                filter == ProjectDirectoryFilter.ALL || snapshot.streams.any { stream ->
+                    stream.projectId == summary.project.id && stream.matches(filter, now)
+                }
+            }
+            .map { summary ->
+                ProjectDirectoryItem(
+                    id = summary.project.id,
+                    title = summary.project.title,
+                    workstreamCount = summary.streamCount,
+                    progressPercent = summary.progress.fraction?.let { (it * 100).roundToInt() },
+                    iconTint = Charcoal,
+                    iconBackground = Color.Transparent
+                )
+            }
+            .toList()
+    }
+
+    VirlinProjectDirectory(
+        state = ProjectDirectoryState(
+            // The existing source, counting what the heading now names: this project list.
+            totalCount = summaries.size,
+            searchQuery = searchQuery,
+            selectedFilter = filter,
+            visibleProjects = items
+        ),
+        actions = ProjectDirectoryActions(
+            onSearchChanged = { searchQuery = it },
+            onAdvancedFilter = { pickingFilter = true },
+            onFilterChanged = { filterName = it.name },
+            onCreateProject = { addingProject = true },
+            onOpenProject = { navController.navigate(com.virlin.app.ui.hierarchy.projectDetail(it)) }
+        ),
+        projectIcon = { item ->
+            val project = snapshot.projects.firstOrNull { it.id == item.id }
+            if (project != null) {
+                com.virlin.app.ui.components.ProjectIcon(project = project, size = 45.dp, decorative = true)
             }
         }
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(50.dp),
-            placeholder = { Text("Search...", fontSize = 14.sp) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            shape = RoundedCornerShape(12.dp),
-            colors = TextFieldDefaults.outlinedTextFieldColors(
-                containerColor = Color.White,
-                unfocusedBorderColor = Color.Transparent
-            )
-        )
-        
-        Spacer(modifier = Modifier.height(12.dp))
+    )
 
-        // Horizontal filter rail: chips own content width; viewport scrolls — never compress labels.
-        StreamsFilterRail(
-            filter = filter,
-            onFilterSelected = { filter = it }
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        LazyColumn(
-            modifier = Modifier.testTag(StreamsListTag),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            if (filter == "All" || filter == "Projects") {
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        GroupHeader("PROJECTS", projectSummaries.size, FocusGreen)
-                        Spacer(modifier = Modifier.weight(1f))
-                        // Phase 08: creating a Project must take a second (one field), same action layer as the Agent.
-                        com.virlin.app.ui.hierarchy.AddButton(
-                            "+ PROJECT", onClick = { addingProject = true },
-                            tag = com.virlin.app.ui.hierarchy.AddProjectButtonTag
+    if (pickingFilter) {
+        // The same finite statuses, as a list: the app has no separate advanced filter, and a
+        // control that did nothing would be worse than one that offers the same choice plainly.
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pickingFilter = false },
+            title = { Text("Filter projects") },
+            text = {
+                Column {
+                    ProjectDirectoryFilter.entries.forEach { option ->
+                        Text(
+                            option.label,
+                            modifier = Modifier.fillMaxWidth()
+                                .defaultMinSize(minHeight = 44.dp)
+                                .clickable { filterName = option.name; pickingFilter = false }
+                                .padding(vertical = 10.dp),
+                            color = if (option == filter) FocusGreen else Charcoal
                         )
                     }
                 }
-                items(projectSummaries, key = { "p_" + it.project.id }) { ps ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp))
-                            .testTag("project_row_${ps.project.id}")
-                            .clickable { navController.navigate(com.virlin.app.ui.hierarchy.projectDetail(ps.project.id)) }
-                            .semantics { contentDescription = "${ps.project.title}, ${ps.streamCount} WorkStreams, ${ps.progress.text}" }
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Project rows ARE projects: the same identity icon as Project Detail / Needs You.
-                        com.virlin.app.ui.components.ProjectIcon(project = ps.project, size = 38.dp, decorative = true)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(ps.project.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Charcoal, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${ps.streamCount} WorkStreams", fontSize = 12.sp, color = CharcoalMuted)
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(ps.progress.text, fontSize = 13.sp, fontWeight = FontWeight.Black,
-                            color = if (ps.progress.fraction == null) CharcoalLight else Charcoal)
-                    }
-                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { pickingFilter = false }) { Text("Close") }
             }
-            val showStreams = filter != "Projects"
-            if (showStreams && filter == "All" && focus.isNotEmpty()) {
-                item { GroupHeader("FOCUS", focus.size, FocusGreen) }
-                items(focus) { stream -> StreamRow(stream, navController) }
-            }
-            if (showStreams && (filter == "All" || filter == "Need You") && needsYou.isNotEmpty()) {
-                item { GroupHeader("NEEDS YOU", needsYou.size, NeedsYouYellow) }
-                items(needsYou) { stream -> StreamRow(stream, navController) }
-            }
-            if (showStreams && (filter == "All" || filter == "Processing") && processing.isNotEmpty()) {
-                item { GroupHeader("PROCESSING", processing.size, ProcessingLavender) }
-                items(processing) { stream -> StreamRow(stream, navController) }
-            }
-            if (showStreams && (filter == "All" || filter == "Ready") && ready.isNotEmpty()) {
-                item { GroupHeader("READY", ready.size, FreeMint) }
-                items(ready) { stream -> StreamRow(stream, navController) }
-            }
-            if (showStreams && filter == "All" && snoozed.isNotEmpty()) {
-                item { GroupHeader("SNOOZED", snoozed.size, Color.LightGray) }
-                items(snoozed) { stream -> StreamRow(stream, navController) }
-            }
-            if (showStreams && filter == "All" && blocked.isNotEmpty()) {
-                item { GroupHeader("BLOCKED", blocked.size, NeedsYouCoral) }
-                items(blocked) { stream -> StreamRow(stream, navController) }
-            }
-            item { Spacer(modifier = Modifier.height(88.dp)) }
-        }
+        )
     }
 }
+
+/**
+ * Does this WorkStream put its project under [filter]? The states are the app's own, and a due
+ * PROCESSING or SNOOZED stream reads as CHECK exactly as `effectiveAttentionState` says — the
+ * same rule Now uses for "Needs You".
+ */
+private fun com.virlin.app.domain.model.WorkStream.matches(
+    filter: ProjectDirectoryFilter,
+    now: java.time.Instant
+): Boolean {
+    val state = com.virlin.app.domain.model.effectiveAttentionState(this, now)
+    return when (filter) {
+        ProjectDirectoryFilter.ALL -> true
+        ProjectDirectoryFilter.NEED_YOU -> state == com.virlin.app.domain.model.WorkStreamState.CHECK
+        ProjectDirectoryFilter.PROCESSING -> state == com.virlin.app.domain.model.WorkStreamState.PROCESSING
+        ProjectDirectoryFilter.READY -> state == com.virlin.app.domain.model.WorkStreamState.READY
+        // The app's own FOCUS state: the one stream consuming human attention.
+        ProjectDirectoryFilter.FREE_FOCUS -> state == com.virlin.app.domain.model.WorkStreamState.FOCUS
+        ProjectDirectoryFilter.SNOOZED -> state == com.virlin.app.domain.model.WorkStreamState.SNOOZED
+        ProjectDirectoryFilter.BLOCKED -> state == com.virlin.app.domain.model.WorkStreamState.BLOCKED
+    }
+}
+
 
 /**
  * Streams filter rail. Chips keep intrinsic width (`maxLines = 1`, `softWrap = false`);

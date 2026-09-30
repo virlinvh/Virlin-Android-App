@@ -1,11 +1,13 @@
 package com.virlin.app.domain.action
 
 import com.virlin.app.domain.capture.LinkUrl
+import com.virlin.app.domain.capture.LinkDocumentCodec
 import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.model.Task
+import com.virlin.app.domain.model.TaskPageTypeKeys
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.domain.repository.WorkStreamWriter
 import com.virlin.app.domain.time.VirlinClock
@@ -47,6 +49,7 @@ internal class CaptureActions(
             status = CaptureStatus.INBOX, createdAt = now, updatedAt = now
         )
         saveCapture(item)
+        item.taskId?.let { ensureTaskPageBlock(ids, clock, it, TaskPageTypeKeys.capture(item.type), item.id) }
         ActionResult.Success(item)
     }
 
@@ -78,6 +81,35 @@ internal class CaptureActions(
         ActionResult.Success(updated)
     }
 
+    /**
+     * ATTACH MANY: re-file several captures in ONE transaction. Either every id moves or none
+     * does, so a bulk move can never leave half the selection somewhere else. Ids outside
+     * [withinProjectId] are rejected rather than quietly moved, and nothing about the captures
+     * themselves changes — same ids, same content, same created timestamps, so the Activity
+     * record of when each was captured is untouched.
+     */
+    suspend fun attachCaptures(
+        ids: Set<String>,
+        context: CaptureContext,
+        withinProjectId: String
+    ): ActionResult<List<CaptureItem>> = tx {
+        if (ids.isEmpty()) return@tx ActionResult.Success(emptyList())
+        val ctx = resolveContext(context) ?: return@tx contextErrorList(context)
+        if (ctx.projectId != withinProjectId) return@tx ActionResult.Rejected(DomainError.OwnershipMismatch)
+        val now = clock.now()
+        val moved = ArrayList<CaptureItem>(ids.size)
+        for (id in ids) {
+            val c = getCapture(id) ?: return@tx ActionResult.Rejected(DomainError.CaptureNotFound(id))
+            if (c.projectId != withinProjectId) return@tx ActionResult.Rejected(DomainError.OwnershipMismatch)
+            moved += c.copy(
+                projectId = ctx.projectId, workStreamId = ctx.workStreamId,
+                taskId = ctx.taskId, updatedAt = now
+            )
+        }
+        moved.forEach { saveCapture(it) }
+        ActionResult.Success(moved)
+    }
+
     suspend fun archiveCapture(id: String): ActionResult<CaptureItem> = tx {
         val c = getCapture(id) ?: return@tx ActionResult.Rejected(DomainError.CaptureNotFound(id))
         if (c.status == CaptureStatus.ARCHIVED) return@tx ActionResult.Success(c)
@@ -103,9 +135,12 @@ internal class CaptureActions(
     suspend fun convertCaptureToTask(id: String, target: CaptureTaskTarget): ActionResult<Task> = tx {
         val c = getCapture(id) ?: return@tx ActionResult.Rejected(DomainError.CaptureNotFound(id))
         if (c.status == CaptureStatus.ORGANIZED) return@tx ActionResult.Rejected(DomainError.CaptureAlreadyOrganized)
-        val title = (c.title ?: c.content.lineSequence().firstOrNull() ?: "").trim().ifEmpty { c.sourceUrl ?: "" }
+        val linkNote = if (c.type == CaptureType.LINK) LinkDocumentCodec.decode(c.content).note else c.content
+        val title = if (c.type == CaptureType.LINK) {
+            c.title?.trim().orEmpty().ifEmpty { c.sourceUrl.orEmpty() }
+        } else (c.title ?: c.content.lineSequence().firstOrNull() ?: "").trim().ifEmpty { c.sourceUrl ?: "" }
         val notes = buildString {
-            if (c.content.isNotBlank() && c.content.trim() != title) append(c.content)
+            if (linkNote.isNotBlank() && linkNote.trim() != title) append(linkNote)
             c.sourceUrl?.let { if (isNotEmpty()) append('\n'); append(it) }
         }.takeIf { it.isNotBlank() }
         val request = CreateTask(
@@ -146,6 +181,10 @@ internal class CaptureActions(
         ctx.projectId?.let { pid -> getProject(pid) ?: return null; return Resolved(pid, null, null) }
         return Resolved(null, null, null)
     }
+
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun WorkStreamWriter.contextErrorList(ctx: CaptureContext?): ActionResult<List<CaptureItem>> =
+        contextError(ctx) as ActionResult<List<CaptureItem>>
 
     private suspend fun WorkStreamWriter.contextError(ctx: CaptureContext?): ActionResult<CaptureItem> {
         ctx ?: return ActionResult.Rejected(DomainError.OwnershipMismatch)

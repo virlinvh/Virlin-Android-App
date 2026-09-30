@@ -92,7 +92,12 @@ object DomainDisplayBridge {
     }
 
     /** Seed the domain from the initial mock list — once, at start-up. */
-    fun seedFromDisplay(display: List<DisplayStream>, now: Instant): List<DomainStream> = display
+    fun seedFromDisplay(display: List<DisplayStream>, now: Instant): List<DomainStream> {
+        // Sibling position within each project (v14). A fresh install has no migration to
+        // backfill it, so the seed assigns it here; leaving every stream at 0 would hand the
+        // new install an order it could not meaningfully change.
+        val nextOrder = HashMap<String?, Int>()
+        return display
         .filter { it.id.isNotBlank() && it.id != "s" } // MockData pads the list with placeholder rows
         .map { d ->
             DomainStream(
@@ -109,10 +114,12 @@ object DomainDisplayBridge {
                 blockerReason = d.blockerReason,
                 processingStartedAt = if (d.state == StreamState.PROCESSING) now.minusSeconds(d.processingElapsedSec.toLong()) else null,
                 checkAt = d.checkInRemainingSec?.let { now.plusSeconds(it.toLong()) },
+                sortOrder = nextOrder.merge(d.projectId, 1, Int::plus)!! - 1,
                 createdAt = now,
                 updatedAt = now
             )
         }
+    }
 
     private fun project(
         display: DisplayStream,

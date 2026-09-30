@@ -29,6 +29,13 @@ interface CaptureRepository {
     suspend fun getAttachmentDocument(id: String): AttachmentDocument?
     suspend fun getVoiceByCaptureId(captureItemId: String): VoiceDocument?
     suspend fun getVoiceDocument(id: String): VoiceDocument?
+
+    // ---- Batched document reads. Project Activity resolves every document of a project in a
+    // fixed number of queries; it must never fan out into one read per timeline row.
+    suspend fun getNotesByCaptureIds(captureItemIds: List<String>): Map<String, NoteDocument>
+    suspend fun getPromptsByCaptureIds(captureItemIds: List<String>): Map<String, PromptDocument>
+    suspend fun getAttachmentsByCaptureIds(captureItemIds: List<String>): Map<String, AttachmentDocument>
+    suspend fun getVoicesByCaptureIds(captureItemIds: List<String>): Map<String, VoiceDocument>
 }
 
 /** Capture writes inside a repository transaction. */

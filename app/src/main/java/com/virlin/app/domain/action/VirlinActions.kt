@@ -228,6 +228,12 @@ interface VirlinActions {
     suspend fun updateCapture(id: String, update: CaptureUpdate): ActionResult<CaptureItem>
     /** ATTACH: explicit context; the item stays a capture. */
     suspend fun attachCapture(id: String, context: CaptureContext): ActionResult<CaptureItem>
+    /** Re-file several captures atomically, all inside [withinProjectId]. */
+    suspend fun attachCaptures(
+        ids: Set<String>,
+        context: CaptureContext,
+        withinProjectId: String
+    ): ActionResult<List<CaptureItem>>
     suspend fun archiveCapture(id: String): ActionResult<CaptureItem>
     suspend fun restoreCapture(id: String): ActionResult<CaptureItem>
     /** CONVERT: real Task via the structure rules + capture ORGANIZED, atomically; once only. */
@@ -268,7 +274,11 @@ interface VirlinActions {
         blocks: List<com.virlin.app.domain.model.NoteBlock>,
         context: CaptureContext = CaptureContext.None,
         captureId: String? = null,
-        promptId: String? = null
+        promptId: String? = null,
+        sourceText: String = "",
+        mode: com.virlin.app.domain.model.PromptContentMode = com.virlin.app.domain.model.PromptContentMode.PROMPT,
+        language: String? = null,
+        responseText: String? = null
     ): ActionResult<com.virlin.app.domain.model.PromptDocument>
 
     suspend fun savePrompt(
@@ -276,7 +286,11 @@ interface VirlinActions {
         title: String?,
         description: String?,
         tags: List<String>,
-        blocks: List<com.virlin.app.domain.model.NoteBlock>
+        blocks: List<com.virlin.app.domain.model.NoteBlock>,
+        sourceText: String = "",
+        mode: com.virlin.app.domain.model.PromptContentMode = com.virlin.app.domain.model.PromptContentMode.PROMPT,
+        language: String? = null,
+        responseText: String? = null
     ): ActionResult<com.virlin.app.domain.model.PromptDocument>
 
     suspend fun getOrHydratePrompt(captureItemId: String): ActionResult<com.virlin.app.domain.model.PromptDocument>
@@ -377,6 +391,77 @@ interface VirlinActions {
      * from progress numerator and denominator). Clears an active task; never auto-advances.
      */
     suspend fun cancelTask(taskId: String): ActionResult<Task>
+
+    /**
+     * Move a top-level task between one of its project's WorkStreams and the project's
+     * standalone list. Same task, same id, same progress contribution — only its association
+     * changes, and its subtree follows it.
+     */
+    suspend fun placeTask(taskId: String, workStreamId: String?): ActionResult<Task>
+
+    /** Re-parent and re-position tasks inside one WorkStream, atomically. */
+    suspend fun moveTasks(
+        taskIds: List<String>,
+        newParentId: String?,
+        afterId: String?,
+        withinStreamId: String
+    ): ActionResult<List<Task>>
+
+    /**
+     * Move or copy a whole branch inside one project. The single structural command behind the
+     * mind map's Move / Copy / Paste; see `domain/structure/HierarchyPlacement.kt`.
+     */
+    suspend fun placeBranch(
+        projectId: String,
+        request: com.virlin.app.domain.structure.Placement
+    ): ActionResult<com.virlin.app.domain.structure.PlacementCommit>
+
+    /** The project's current hierarchy revision, to send back with a [placeBranch]. */
+    suspend fun hierarchyRevision(projectId: String): Long
+
+    /** A separate task beside the original, with its subtree copied under new ids. */
+    suspend fun duplicateTask(taskId: String): ActionResult<Task>
+
+    // ================================================================ Tags and task steps
+
+    /** Project-scoped label. An existing tag with the same folded name is returned, not doubled. */
+    suspend fun createTag(projectId: String, name: String): ActionResult<com.virlin.app.domain.model.ProjectTag>
+    /** Keeps the id, so every item already carrying the tag keeps carrying it. */
+    suspend fun renameTag(tagId: String, name: String): ActionResult<com.virlin.app.domain.model.ProjectTag>
+    /** Reassigns every link, then removes the old tag — one transaction. */
+    suspend fun mergeTags(fromTagId: String, intoTagId: String): ActionResult<com.virlin.app.domain.model.ProjectTag>
+    /** Removes the label only; what it labelled is untouched. */
+    suspend fun deleteTag(tagId: String): ActionResult<String>
+    /** Applies one set of this project's tags across captures and tasks atomically. */
+    suspend fun setTags(
+        projectId: String,
+        tagIds: Set<String>,
+        captureIds: Set<String>,
+        taskIds: Set<String>
+    ): ActionResult<Int>
+
+    suspend fun addStep(taskId: String, text: String): ActionResult<com.virlin.app.domain.model.TaskStep>
+    suspend fun setStepDone(stepId: String, done: Boolean): ActionResult<com.virlin.app.domain.model.TaskStep>
+    suspend fun editStep(stepId: String, text: String): ActionResult<com.virlin.app.domain.model.TaskStep>
+    suspend fun deleteStep(stepId: String): ActionResult<String>
+    suspend fun moveStep(stepId: String, newIndex: Int): ActionResult<List<com.virlin.app.domain.model.TaskStep>>
+    /** Reorder by a stable anchor: put the step in front of [beforeStepId], or last when null. */
+    suspend fun moveStepBefore(stepId: String, beforeStepId: String?): ActionResult<List<com.virlin.app.domain.model.TaskStep>>
+    /** Remove this task's completed steps in one transaction, returning what was removed. */
+    suspend fun clearCompletedSteps(taskId: String): ActionResult<com.virlin.app.domain.model.ClearedSteps>
+    /** Put a cleared set back exactly, or refuse if the list has changed since. */
+    suspend fun restoreSteps(cleared: com.virlin.app.domain.model.ClearedSteps): ActionResult<List<com.virlin.app.domain.model.TaskStep>>
+
+    // ---- The Notes page's own documents (self-contained; see NoteDocActions).
+    /** The Notes-page document filed under [ownerKey], or null when never written. */
+    suspend fun loadNoteDoc(ownerKey: String): com.virlin.app.domain.notedoc.VirlinNoteDoc?
+
+    /** Writes the whole Notes-page document. Idempotent: identical content is not re-written. */
+    suspend fun saveNoteDoc(
+        ownerKey: String,
+        title: String?,
+        blocks: List<com.virlin.app.domain.notedoc.NoteDocBlock>
+    ): ActionResult<com.virlin.app.domain.notedoc.VirlinNoteDoc>
 
     // ================================================================ Structure: Active task
 

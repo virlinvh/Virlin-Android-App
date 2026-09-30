@@ -67,12 +67,13 @@ class WorkHierarchyCreationUiTest {
     @Test fun createProject_workStream_task_subtask_deeper_thenComplete() {
         pump(900)
         // FLOW A/C: a Project is created from Streams in one field.
-        composeRule.onNodeWithText("Streams").performClick(); pump(900)
-        composeRule.onNodeWithTag("streams_filter_projects").performClick(); pump(400)
+        composeRule.onNodeWithText("Projects").performClick(); pump(900)
         val projectsBefore = projects().size
         touch(AddProjectButtonTag, 900)
         nameAndCreate("Phase 08 Project")
-        val project = projects().first { it.title == "Phase 08 Project" }
+        // The one THIS run created, not the first with that title: a previous run's project (or
+        // a labelled test set filed into it) would otherwise be picked up and already have work.
+        val project = projects().last { it.title == "Phase 08 Project" }
         assert(projects().size == projectsBefore + 1)
 
         // FLOW A: its detail opens and is empty but not "0%".
@@ -90,7 +91,7 @@ class WorkHierarchyCreationUiTest {
         // FLOW C: a root task.
         touch(AddTaskButtonTag, 900)
         taskAndCreate("Build Orb Interaction")
-        val root = tasks().first { it.title == "Build Orb Interaction" }
+        val root = tasks().last { it.title == "Build Orb Interaction" }
         assert(root.workStreamId == stream.id && root.parentTaskId == null)
         tag(taskRowTag(root.id)).assertIsDisplayed()
 
@@ -98,12 +99,12 @@ class WorkHierarchyCreationUiTest {
         touch(taskRowTag(root.id), 1200)
         touch(AddTaskButtonTag, 900)
         taskAndCreate("Implement states")
-        val child = tasks().first { it.title == "Implement states" }
+        val child = tasks().last { it.title == "Implement states" }
         assert(child.parentTaskId == root.id)
         touch(taskRowTag(child.id), 1200)
         touch(AddTaskButtonTag, 900)
         taskAndCreate("Listening")
-        val grandchild = tasks().first { it.title == "Listening" }
+        val grandchild = tasks().last { it.title == "Listening" }
         assert(grandchild.parentTaskId == child.id)
         assert(grandchild.workStreamId == stream.id)                       // ownership inherited, not re-entered
 

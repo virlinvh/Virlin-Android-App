@@ -86,6 +86,13 @@ data class WorkStream(
      * (importance) and to waiting time (urgency). Ordering rules: `NeedsYouOrder`.
      */
     val attentionRank: Int? = null,
+    /**
+     * Sibling position under the owning Project (0-based, contiguous). This is the user's own
+     * arrangement of their workstreams and is the ONLY order any surface may show them in.
+     * Unrelated to [priority], to [attentionRank] (a Needs You queue position) and to
+     * [createdAt]. Streams with no project share one group.
+     */
+    val sortOrder: Int = 0,
 
     // ---- External working memory (also captured in ContextSnapshot on every exit)
     val lastHumanAction: String? = null,

@@ -246,7 +246,7 @@ fun AgentCaptureArea(
 private data class CardLook(val title: String, val subtitle: String, val tile: Color, val icon: ImageVector, val tint: Color)
 
 private fun lookOf(t: CaptureType) = when (t) {
-    CaptureType.NOTE -> CardLook("Text Note", "Quick thought or idea", Color(0xFFE8F8F5), Icons.Rounded.Description, Color(0xFF0D9488))   // mint / teal
+    CaptureType.NOTE -> CardLook("Note", "Open your notes workspace", Color(0xFFE8F8F5), Icons.Rounded.Description, Color(0xFF0D9488))   // mint / teal
     CaptureType.PROMPT -> CardLook("Prompt", "Save a prompt", Color(0xFFF3EBFC), Icons.Rounded.AutoAwesome, Color(0xFF7E57C2))          // soft lavender (restrained)
     CaptureType.LINK -> CardLook("Link", "Save a web link", Color(0xFFE6F7F3), Icons.Rounded.Link, Color(0xFF107C6F))                 // seafoam
     CaptureType.FILE -> FileImageLook
@@ -444,7 +444,10 @@ private fun Detail(
             item.title?.let { Text(it, fontSize = 14.sp, fontWeight = FontWeight.Black, color = VirlinColors.TextPrimary) }
             item.sourceUrl?.let { Text(it, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = VirlinColors.Emerald) }
             // Full content, verbatim (line breaks preserved). Only the detail renders it all.
-            if (item.content.isNotBlank()) Text(item.content, fontSize = 13.sp, color = VirlinColors.TextPrimary, lineHeight = 19.sp, modifier = Modifier.testTag(CaptureDetailContentTag))
+            val displayContent = if (item.type == CaptureType.LINK)
+                com.virlin.app.domain.capture.LinkDocumentCodec.decode(item.content).note
+            else item.content
+            if (displayContent.isNotBlank()) Text(displayContent, fontSize = 13.sp, color = VirlinColors.TextPrimary, lineHeight = 19.sp, modifier = Modifier.testTag(CaptureDetailContentTag))
             state.selectedContextLabel?.let { Spacer(Modifier.height(6.dp)); Text("Attached to · $it", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = VirlinColors.Emerald) }
             if (item.status == CaptureStatus.ORGANIZED) Text("Organized · turned into a task", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = VirlinColors.TextTertiary)
             if (item.status == CaptureStatus.ARCHIVED) Text("Archived", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = VirlinColors.TextTertiary)
@@ -482,7 +485,7 @@ private fun Detail(
 
 /** WorkStreams (with their project) then Projects. Explicit rows; nothing pre-selected. */
 @Composable
-private fun ContextPicker(
+internal fun ContextPicker(
     state: AgentCaptureState,
     streamTag: (String) -> String, projectTag: (String) -> String,
     onStream: (com.virlin.app.domain.model.WorkStream) -> Unit, onProject: (com.virlin.app.domain.model.Project) -> Unit,

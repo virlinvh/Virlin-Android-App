@@ -70,7 +70,10 @@ class DefaultVirlinActions(
                 tool = request.tool?.takeIf { it.isNotBlank() },
                 executionPreference = request.executionPreference, state = READY,
                 priority = request.priority, nextHumanAction = request.nextHumanAction?.takeIf { it.isNotBlank() },
-                createdAt = now, updatedAt = now
+                createdAt = now, updatedAt = now,
+                // New work joins the end of its project's list rather than jumping into the
+                // middle of an arrangement the user made.
+                sortOrder = allStreams().count { it.projectId == request.projectId }
             )
             persist(stream)
             event(stream, EventType.STREAM_CREATED, now, to = READY, cycleId = null, detail = request.executionPreference.name)
@@ -92,6 +95,8 @@ class DefaultVirlinActions(
     override suspend fun createCapture(request: CreateCapture) = capture.createCapture(request)
     override suspend fun updateCapture(id: String, update: CaptureUpdate) = capture.updateCapture(id, update)
     override suspend fun attachCapture(id: String, context: CaptureContext) = capture.attachCapture(id, context)
+    override suspend fun attachCaptures(ids: Set<String>, context: CaptureContext, withinProjectId: String) =
+        capture.attachCaptures(ids, context, withinProjectId)
 
     override suspend fun createTextNote(
         title: String?,
@@ -118,16 +123,24 @@ class DefaultVirlinActions(
         blocks: List<com.virlin.app.domain.model.NoteBlock>,
         context: CaptureContext,
         captureId: String?,
-        promptId: String?
-    ) = prompts.createPrompt(title, description, tags, blocks, context, captureId, promptId)
+        promptId: String?,
+        sourceText: String,
+        mode: com.virlin.app.domain.model.PromptContentMode,
+        language: String?,
+        responseText: String?
+    ) = prompts.createPrompt(title, description, tags, blocks, context, captureId, promptId, sourceText, mode, language, responseText)
 
     override suspend fun savePrompt(
         captureItemId: String,
         title: String?,
         description: String?,
         tags: List<String>,
-        blocks: List<com.virlin.app.domain.model.NoteBlock>
-    ) = prompts.savePrompt(captureItemId, title, description, tags, blocks)
+        blocks: List<com.virlin.app.domain.model.NoteBlock>,
+        sourceText: String,
+        mode: com.virlin.app.domain.model.PromptContentMode,
+        language: String?,
+        responseText: String?
+    ) = prompts.savePrompt(captureItemId, title, description, tags, blocks, sourceText, mode, language, responseText)
 
     override suspend fun getOrHydratePrompt(captureItemId: String) = prompts.getOrHydratePrompt(captureItemId)
 
@@ -183,6 +196,50 @@ class DefaultVirlinActions(
     override suspend fun updateTask(taskId: String, update: TaskUpdate) = structure.updateTask(taskId, update)
     override suspend fun completeTask(taskId: String) = structure.completeTask(taskId)
     override suspend fun cancelTask(taskId: String) = structure.cancelTask(taskId)
+    override suspend fun placeTask(taskId: String, workStreamId: String?) = structure.placeTask(taskId, workStreamId)
+    override suspend fun moveTasks(
+        taskIds: List<String>, newParentId: String?, afterId: String?, withinStreamId: String
+    ) = structure.moveTasks(taskIds, newParentId, afterId, withinStreamId)
+    override suspend fun duplicateTask(taskId: String) = structure.duplicateTask(taskId)
+
+    override suspend fun placeBranch(
+        projectId: String,
+        request: com.virlin.app.domain.structure.Placement
+    ) = structure.placeBranch(projectId, request)
+
+    override suspend fun hierarchyRevision(projectId: String): Long =
+        com.virlin.app.domain.structure.HierarchyRules.revisionOf(
+            com.virlin.app.domain.structure.HierarchyRules.nodesOf(
+                projectId, repository.streams.value, repository.tasks.value
+            )
+        )
+
+    private val tagging = TagActions(repository, clock, ids)
+    override suspend fun createTag(projectId: String, name: String) = tagging.createTag(projectId, name)
+    override suspend fun renameTag(tagId: String, name: String) = tagging.renameTag(tagId, name)
+    override suspend fun mergeTags(fromTagId: String, intoTagId: String) = tagging.mergeTags(fromTagId, intoTagId)
+    override suspend fun deleteTag(tagId: String) = tagging.deleteTag(tagId)
+    override suspend fun setTags(
+        projectId: String, tagIds: Set<String>, captureIds: Set<String>, taskIds: Set<String>
+    ) = tagging.setTags(projectId, tagIds, captureIds, taskIds)
+    override suspend fun addStep(taskId: String, text: String) = tagging.addStep(taskId, text)
+    override suspend fun setStepDone(stepId: String, done: Boolean) = tagging.setStepDone(stepId, done)
+    override suspend fun editStep(stepId: String, text: String) = tagging.editStep(stepId, text)
+    override suspend fun deleteStep(stepId: String) = tagging.deleteStep(stepId)
+    override suspend fun moveStep(stepId: String, newIndex: Int) = tagging.moveStep(stepId, newIndex)
+    override suspend fun moveStepBefore(stepId: String, beforeStepId: String?) =
+        tagging.moveStepBefore(stepId, beforeStepId)
+    override suspend fun clearCompletedSteps(taskId: String) = tagging.clearCompletedSteps(taskId)
+    override suspend fun restoreSteps(cleared: com.virlin.app.domain.model.ClearedSteps) =
+        tagging.restoreSteps(cleared)
+
+    private val noteDocs = NoteDocActions(repository, clock)
+    override suspend fun loadNoteDoc(ownerKey: String) = noteDocs.loadNoteDoc(ownerKey)
+    override suspend fun saveNoteDoc(
+        ownerKey: String,
+        title: String?,
+        blocks: List<com.virlin.app.domain.notedoc.NoteDocBlock>
+    ) = noteDocs.saveNoteDoc(ownerKey, title, blocks)
     override suspend fun setActiveTask(streamId: String, taskId: String?) = structure.setActiveTask(streamId, taskId)
     override suspend fun activePath(streamId: String) = structure.activePath(streamId)
     override suspend fun nextTaskCandidate(streamId: String) = structure.nextTaskCandidate(streamId)

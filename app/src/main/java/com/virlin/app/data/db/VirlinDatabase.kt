@@ -26,10 +26,10 @@ interface ProjectDao {
 @Dao
 interface WorkStreamDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(s: WorkStreamEntity)
-    @Query("SELECT * FROM workstreams ORDER BY createdAt, id") suspend fun all(): List<WorkStreamEntity>
+    @Query("SELECT * FROM workstreams ORDER BY sortOrder, createdAt, id") suspend fun all(): List<WorkStreamEntity>
     @Query("SELECT * FROM workstreams WHERE id = :id") suspend fun byId(id: String): WorkStreamEntity?
     @Query("SELECT * FROM workstreams WHERE state = 'FOCUS' LIMIT 1") suspend fun activeFocus(): WorkStreamEntity?
-    @Query("SELECT * FROM workstreams WHERE projectId = :projectId ORDER BY createdAt, id") suspend fun byProject(projectId: String): List<WorkStreamEntity>
+    @Query("SELECT * FROM workstreams WHERE projectId = :projectId ORDER BY sortOrder, createdAt, id") suspend fun byProject(projectId: String): List<WorkStreamEntity>
     @Query("SELECT COUNT(*) FROM workstreams") suspend fun count(): Int
     /** Streams whose planned look-again time has passed — startup reconciliation. */
     @Query("SELECT * FROM workstreams WHERE state IN ('PROCESSING','SNOOZED') AND checkAt IS NOT NULL AND checkAt <= :now")
@@ -39,7 +39,10 @@ interface WorkStreamDao {
 @Dao
 interface TaskDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(t: TaskEntity)
-    @Query("SELECT * FROM tasks ORDER BY createdAt, sortOrder, id") suspend fun all(): List<TaskEntity>
+    // sortOrder FIRST: this is the sibling order the user arranged, and it is what every
+    // consumer must see. Ordering by createdAt first made creation order win, so a branch
+    // reordered by hand came back out of this query in the order it happened to be typed.
+    @Query("SELECT * FROM tasks ORDER BY sortOrder, createdAt, id") suspend fun all(): List<TaskEntity>
     @Query("SELECT * FROM tasks WHERE id = :id") suspend fun byId(id: String): TaskEntity?
     @Query("SELECT * FROM tasks WHERE projectId = :projectId ORDER BY sortOrder, createdAt") suspend fun byProject(projectId: String): List<TaskEntity>
     @Query("SELECT * FROM tasks WHERE workStreamId = :workStreamId ORDER BY sortOrder, createdAt") suspend fun byWorkStream(workStreamId: String): List<TaskEntity>
@@ -81,6 +84,8 @@ interface CycleDao {
     @Query("SELECT * FROM cycles WHERE workStreamId = :ws ORDER BY seq") suspend fun byWorkStream(ws: String): List<CycleEntity>
     @Query("SELECT * FROM cycles WHERE workStreamId = :ws AND endedAt IS NULL ORDER BY seq DESC LIMIT 1") suspend fun current(ws: String): CycleEntity?
     @Query("SELECT COALESCE(MAX(seq), 0) FROM cycles") suspend fun maxSeq(): Long
+    /** Pulse reads every cycle: external processing is a property of the whole history. */
+    @Query("SELECT * FROM cycles ORDER BY seq") suspend fun all(): List<CycleEntity>
 }
 
 @Dao
@@ -90,6 +95,8 @@ interface FocusSessionDao {
     @Query("SELECT * FROM focus_sessions WHERE workStreamId = :ws ORDER BY seq") suspend fun byWorkStream(ws: String): List<FocusSessionEntity>
     @Query("SELECT * FROM focus_sessions WHERE workStreamId = :ws AND endedAt IS NULL ORDER BY seq DESC LIMIT 1") suspend fun open(ws: String): FocusSessionEntity?
     @Query("SELECT COALESCE(MAX(seq), 0) FROM focus_sessions") suspend fun maxSeq(): Long
+    /** Pulse reads every session; a period is clipped from them, never queried per stream. */
+    @Query("SELECT * FROM focus_sessions ORDER BY seq") suspend fun all(): List<FocusSessionEntity>
 }
 
 @Dao
@@ -105,6 +112,43 @@ interface EventDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(e: EventEntity)
     @Query("SELECT * FROM events WHERE workStreamId = :ws ORDER BY seq") suspend fun byWorkStream(ws: String): List<EventEntity>
     @Query("SELECT COALESCE(MAX(seq), 0) FROM events") suspend fun maxSeq(): Long
+    /** Project Activity: every stream of one project in ONE paginated read, newest first. */
+    @Query("SELECT * FROM events WHERE workStreamId IN (:ids) ORDER BY at DESC, seq DESC LIMIT :limit OFFSET :offset")
+    suspend fun byWorkStreams(ids: List<String>, limit: Int, offset: Int): List<EventEntity>
+}
+
+@Dao
+interface ProjectTagDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(tag: ProjectTagEntity)
+    @Query("SELECT * FROM project_tags ORDER BY nameKey, id") suspend fun all(): List<ProjectTagEntity>
+    @Query("SELECT * FROM project_tags WHERE id = :id") suspend fun byId(id: String): ProjectTagEntity?
+    @Query("SELECT * FROM project_tags WHERE projectId = :projectId ORDER BY nameKey")
+    suspend fun byProject(projectId: String): List<ProjectTagEntity>
+    @Query("DELETE FROM project_tags WHERE id = :id") suspend fun delete(id: String)
+}
+
+@Dao
+interface TagLinkDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(link: TagLinkEntity)
+    @Query("SELECT * FROM tag_links") suspend fun all(): List<TagLinkEntity>
+    @Query("SELECT * FROM tag_links WHERE targetType = :type AND targetId = :id")
+    suspend fun byTarget(type: String, id: String): List<TagLinkEntity>
+    @Query("DELETE FROM tag_links WHERE tagId = :tagId AND targetType = :type AND targetId = :id")
+    suspend fun delete(tagId: String, type: String, id: String)
+    /** Deleting a tag removes its links; it never removes what was tagged. */
+    @Query("DELETE FROM tag_links WHERE tagId = :tagId") suspend fun deleteByTag(tagId: String)
+    @Query("UPDATE OR REPLACE tag_links SET tagId = :into WHERE tagId = :from")
+    suspend fun reassign(from: String, into: String)
+}
+
+@Dao
+interface TaskStepDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(step: TaskStepEntity)
+    @Query("SELECT * FROM task_steps ORDER BY taskId, sortOrder, id") suspend fun all(): List<TaskStepEntity>
+    @Query("SELECT * FROM task_steps WHERE taskId = :taskId ORDER BY sortOrder, id")
+    suspend fun byTask(taskId: String): List<TaskStepEntity>
+    @Query("SELECT * FROM task_steps WHERE id = :id") suspend fun byId(id: String): TaskStepEntity?
+    @Query("DELETE FROM task_steps WHERE id = :id") suspend fun delete(id: String)
 }
 
 @Dao
@@ -118,6 +162,9 @@ interface NoteDocumentDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(n: NoteDocumentEntity)
     @Query("SELECT * FROM note_documents WHERE id = :id") suspend fun byId(id: String): NoteDocumentEntity?
     @Query("SELECT * FROM note_documents WHERE captureItemId = :captureItemId") suspend fun byCaptureId(captureItemId: String): NoteDocumentEntity?
+    /** Batched: Project Activity resolves every document of a project in one read. */
+    @Query("SELECT * FROM note_documents WHERE captureItemId IN (:captureItemIds)")
+    suspend fun byCaptureIds(captureItemIds: List<String>): List<NoteDocumentEntity>
     @Query("SELECT COUNT(*) FROM note_documents") suspend fun count(): Int
 }
 
@@ -126,6 +173,9 @@ interface PromptDocumentDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(p: PromptDocumentEntity)
     @Query("SELECT * FROM prompt_documents WHERE id = :id") suspend fun byId(id: String): PromptDocumentEntity?
     @Query("SELECT * FROM prompt_documents WHERE captureItemId = :captureItemId") suspend fun byCaptureId(captureItemId: String): PromptDocumentEntity?
+    /** Batched: Project Activity resolves every document of a project in one read. */
+    @Query("SELECT * FROM prompt_documents WHERE captureItemId IN (:captureItemIds)")
+    suspend fun byCaptureIds(captureItemIds: List<String>): List<PromptDocumentEntity>
     @Query("SELECT COUNT(*) FROM prompt_documents") suspend fun count(): Int
 }
 
@@ -134,6 +184,9 @@ interface AttachmentDocumentDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(a: AttachmentDocumentEntity)
     @Query("SELECT * FROM attachment_documents WHERE id = :id") suspend fun byId(id: String): AttachmentDocumentEntity?
     @Query("SELECT * FROM attachment_documents WHERE captureItemId = :captureItemId") suspend fun byCaptureId(captureItemId: String): AttachmentDocumentEntity?
+    /** Batched: Project Activity resolves every document of a project in one read. */
+    @Query("SELECT * FROM attachment_documents WHERE captureItemId IN (:captureItemIds)")
+    suspend fun byCaptureIds(captureItemIds: List<String>): List<AttachmentDocumentEntity>
     @Query("SELECT COUNT(*) FROM attachment_documents") suspend fun count(): Int
 }
 
@@ -142,7 +195,31 @@ interface VoiceDocumentDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(v: VoiceDocumentEntity)
     @Query("SELECT * FROM voice_documents WHERE id = :id") suspend fun byId(id: String): VoiceDocumentEntity?
     @Query("SELECT * FROM voice_documents WHERE captureItemId = :captureItemId") suspend fun byCaptureId(captureItemId: String): VoiceDocumentEntity?
+    /** Batched: Project Activity resolves every document of a project in one read. */
+    @Query("SELECT * FROM voice_documents WHERE captureItemId IN (:captureItemIds)")
+    suspend fun byCaptureIds(captureItemIds: List<String>): List<VoiceDocumentEntity>
     @Query("SELECT COUNT(*) FROM voice_documents") suspend fun count(): Int
+}
+
+/** The Notes page's own documents (v16). Shares no table with the capture note documents. */
+@Dao
+interface VirlinNoteDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(n: VirlinNoteEntity)
+    @Query("SELECT * FROM virlin_notes WHERE ownerKey = :ownerKey") suspend fun byOwner(ownerKey: String): VirlinNoteEntity?
+    @Query("SELECT * FROM virlin_notes") suspend fun all(): List<VirlinNoteEntity>
+    @Query("DELETE FROM virlin_notes WHERE ownerKey = :ownerKey") suspend fun deleteByOwner(ownerKey: String)
+    @Query("SELECT COUNT(*) FROM virlin_notes") suspend fun count(): Int
+}
+
+@Dao
+interface TaskPageBlockDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(block: TaskPageBlockEntity)
+    @Query("SELECT * FROM task_page_blocks ORDER BY taskId, sortOrder, createdAt, id")
+    suspend fun all(): List<TaskPageBlockEntity>
+    @Query("SELECT * FROM task_page_blocks WHERE taskId = :taskId ORDER BY sortOrder, createdAt, id")
+    suspend fun byTask(taskId: String): List<TaskPageBlockEntity>
+    @Query("SELECT * FROM task_page_blocks WHERE id = :id") suspend fun byId(id: String): TaskPageBlockEntity?
+    @Query("DELETE FROM task_page_blocks WHERE id = :id") suspend fun delete(id: String)
 }
 
 /**
@@ -164,9 +241,10 @@ interface VoiceDocumentDao {
         FocusSessionEntity::class, ContextSnapshotEntity::class, EventEntity::class, MetaEntity::class,
         CaptureEntity::class, NoteDocumentEntity::class, PromptDocumentEntity::class,
         AttachmentDocumentEntity::class, VoiceDocumentEntity::class, PriorityPreferenceEntity::class,
-        ExternalStageEntity::class
+        ExternalStageEntity::class, ProjectTagEntity::class, TagLinkEntity::class,
+        TaskStepEntity::class, VirlinNoteEntity::class, TaskPageBlockEntity::class
     ],
-    version = 12,
+    version = 17,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
@@ -186,6 +264,11 @@ abstract class VirlinDatabase : RoomDatabase() {
     abstract fun externalStages(): ExternalStageDao
     abstract fun attachmentDocuments(): AttachmentDocumentDao
     abstract fun voiceDocuments(): VoiceDocumentDao
+    abstract fun taskPageBlocks(): TaskPageBlockDao
+    abstract fun projectTags(): ProjectTagDao
+    abstract fun tagLinks(): TagLinkDao
+    abstract fun taskSteps(): TaskStepDao
+    abstract fun virlinNotes(): VirlinNoteDao
 
     companion object {
         const val NAME = "virlin.db"
@@ -336,7 +419,130 @@ abstract class VirlinDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+        /**
+         * v13: project tags, their links, and task steps. Additive only — no existing table is
+         * touched, so nothing that was already saved can be lost.
+         */
+        val MIGRATION_12_13: Migration = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `project_tags` (" +
+                        "`id` TEXT NOT NULL, `projectId` TEXT NOT NULL, `name` TEXT NOT NULL, " +
+                        "`nameKey` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_project_tags_projectId` ON `project_tags` (`projectId`)")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_project_tags_projectId_nameKey` " +
+                        "ON `project_tags` (`projectId`, `nameKey`)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `tag_links` (" +
+                        "`tagId` TEXT NOT NULL, `targetType` TEXT NOT NULL, `targetId` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, PRIMARY KEY(`tagId`, `targetType`, `targetId`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tag_links_tagId` ON `tag_links` (`tagId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tag_links_targetType_targetId` ON `tag_links` (`targetType`, `targetId`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `task_steps` (" +
+                        "`id` TEXT NOT NULL, `taskId` TEXT NOT NULL, `text` TEXT NOT NULL, " +
+                        "`done` INTEGER NOT NULL, `sortOrder` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_task_steps_taskId` ON `task_steps` (`taskId`)")
+            }
+        }
+
+        /**
+         * v14: a persisted sibling order for workstreams.
+         *
+         * Until now nothing stored one: the mind map drew workstreams alphabetically and the
+         * project list read them by creation time, so the two surfaces disagreed and neither
+         * order was the user's. The column is backfilled with the map's existing alphabetical
+         * sequence, so the surface this order was built for looks exactly as it did before the
+         * upgrade; the project list adopts that same sequence instead of creation order.
+         *
+         * Additive: one new NOT NULL column with a default, then a backfill. No row is deleted
+         * and no existing column is touched, so nothing already saved can be lost.
+         */
+        val MIGRATION_13_14: Migration = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `workstreams` ADD COLUMN `sortOrder` INTEGER NOT NULL DEFAULT 0")
+                // Rank within the project group by title, exactly as the map sorted them.
+                // Streams with no project form one group, which is why projectId is compared
+                // with an explicit NULL-safe test rather than `=`.
+                db.execSQL(
+                    "UPDATE `workstreams` SET `sortOrder` = (" +
+                        "SELECT COUNT(*) FROM `workstreams` AS w2 WHERE " +
+                        "((w2.`projectId` IS NULL AND `workstreams`.`projectId` IS NULL) " +
+                        "OR w2.`projectId` = `workstreams`.`projectId`) AND (" +
+                        "LOWER(w2.`title`) < LOWER(`workstreams`.`title`) OR (" +
+                        "LOWER(w2.`title`) = LOWER(`workstreams`.`title`) " +
+                        "AND w2.`id` < `workstreams`.`id`)))"
+                )
+            }
+        }
+
+        /**
+         * v15: a task's own rich Note document (`task_note_documents`).
+         *
+         * Purely additive - one new table, no existing table touched - so every capture note,
+         * task, step and plain `tasks.notes` string survives untouched. The legacy plain text is
+         * deliberately NOT cleared here: it is imported into the block document on first open and
+         * left in place, so the migration stays reversible by dropping this table alone.
+         */
+        val MIGRATION_14_15: Migration = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `task_note_documents` (" +
+                        "`taskId` TEXT NOT NULL, `id` TEXT NOT NULL, `title` TEXT, " +
+                        "`documentJson` TEXT NOT NULL, `importedLegacyNotes` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`taskId`))"
+                )
+            }
+        }
+
+        /**
+         * v16: the Notes page's own documents (`virlin_notes`), and removal of the unused
+         * `task_note_documents` table added in v15.
+         *
+         * `task_note_documents` was created in v15 but never wired to a mapper, repository or
+         * codec, so it is provably empty in every build that has existed; dropping it loses no
+         * user data. The Notes page is deliberately a self-contained feature, so it gets its own
+         * table keyed by an opaque `ownerKey` rather than reusing the capture note documents.
+         * Nothing else is touched: every project, task, step, capture and the legacy plain
+         * `tasks.notes` string survive unchanged.
+         */
+        val MIGRATION_15_16: Migration = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `virlin_notes` (" +
+                        "`ownerKey` TEXT NOT NULL, `title` TEXT, `documentJson` TEXT NOT NULL, " +
+                        "`revision` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`ownerKey`))"
+                )
+                db.execSQL("DROP TABLE IF EXISTS `task_note_documents`")
+            }
+        }
+
+        /** v17: ordered references for each task's mixed-content Page. */
+        val MIGRATION_16_17: Migration = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `task_page_blocks` (" +
+                        "`id` TEXT NOT NULL, `taskId` TEXT NOT NULL, `typeKey` TEXT NOT NULL, " +
+                        "`contentId` TEXT NOT NULL, `sortOrder` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`id`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_task_page_blocks_taskId` ON `task_page_blocks` (`taskId`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_task_page_blocks_taskId_typeKey_contentId` ON `task_page_blocks` (`taskId`, `typeKey`, `contentId`)")
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

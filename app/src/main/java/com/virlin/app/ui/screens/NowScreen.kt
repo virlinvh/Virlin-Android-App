@@ -212,69 +212,71 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // 3. NEEDS YOU SECTION
+        // 3. NEEDS YOU SECTION — `VirlinNeedsYouSection`, fed by the existing projections.
+        // Order, ranks, colours-by-rank, timers and actions all still come from the domain; this
+        // block only maps them onto the section's display model.
         if (needsYouStreams.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Needs You", fontSize = 15.sp, fontWeight = FontWeight.Black, color = Charcoal)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(20.dp)
-                            .background(Color(0xFFFEF3C7), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(needsYouStreams.size.toString(), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF92400E))
+            // ONE per-second time source for every card's live timer (lifecycle-aware, drift-free).
+            // Only the timer texts read it, so the rest of Now never recomposes on a tick.
+            val nowTick = rememberSecondTicker()
+            // Queue-position selector (Phase 04 policies): one sheet for the section.
+            var positionPicker by remember { mutableStateOf<String?>(null) }
+            // Which item's control sheet is open, and which tab it opened on. Transient UI state.
+            var control by remember { mutableStateOf<Pair<String, NeedsYouControlTab>?>(null) }
+            var sortOpen by remember { mutableStateOf(false) }
+
+            VirlinNeedsYouSection(
+                tasks = needsYouStreams.map { stream ->
+                    val project = com.virlin.app.domain.model.ProjectIdentity.resolve(stream.projectId, projects)
+                    val kind = attention[stream.id]
+                    val reason = when (kind) {
+                        AttentionKind.RETURN_DUE -> "Ready to continue"
+                        AttentionKind.RESULT_READY -> "Result ready"
+                        else -> "Check due"
                     }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Your attention required", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
-                    // Phase 06: view-only sort. Canonical priority, ranks and colours are untouched.
-                    var sortOpen by remember { mutableStateOf(false) }
+                    // Existing UI state decides what the one capsule shows: the live overdue time
+                    // while the item HAS a target to count from, the action word when it has none.
+                    val target = dueAt[stream.id] ?: waitingSince[stream.id]
+                    NeedsYouTaskUi(
+                        id = stream.id,
+                        title = stream.subtitle.ifBlank { stream.title },
+                        sourceAndContext = stream.title,
+                        statusLabel = reason,
+                        // `dueAt` is the temporal truth; the card renders `dueAt − now`, nothing else.
+                        checkDueAtEpochMillis = (target ?: nowTick.value).toEpochMilli(),
+                        showCheckLabel = target == null,
+                        checkLabel = when (kind) {
+                            AttentionKind.RETURN_DUE -> "RESUME  →"
+                            AttentionKind.RESULT_READY -> "FOCUS NOW  →"
+                            else -> "CHECK  →"
+                        },
+                        iconContent = {
+                            com.virlin.app.ui.components.ProjectIcon(
+                                projectId = project?.id ?: stream.id,
+                                name = project?.title ?: stream.title,
+                                iconPath = project?.iconPath,
+                                iconId = project?.iconId,
+                                size = 26.dp,
+                                decorative = true
+                            )
+                        }
+                    )
+                },
+                nowEpochMillis = nowTick.value.toEpochMilli(),
+                // Unchanged behaviour: the action opens the unified sheet on its tab.
+                onCheck = { id -> control = id to NeedsYouControlTab.CHECK },
+                onRank = { id -> control = id to NeedsYouControlTab.PRIORITY },
+                onFilterClick = { sortOpen = true },
+                // The app's real sort control, with its own dropdown anchor.
+                filterContent = {
                     NeedsYouSortControl(
                         mode = needsYouSort, expanded = sortOpen,
                         onExpandedChange = { sortOpen = it },
                         onSelect = nowViewModel::setNeedsYouSort
                     )
                 }
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            // ONE per-second time source for every card's live timer (lifecycle-aware, drift-free).
-            // Only the timer texts read it, so the rest of Now never recomposes on a tick.
-            val nowTick = rememberSecondTicker()
-            // Queue-position selector (Phase 2): one sheet for the section, opened from a card's badge.
-            var positionPicker by remember { mutableStateOf<String?>(null) }
-            // Which item's control sheet is open, and which tab it opened on. Transient UI state.
-            var control by remember { mutableStateOf<Pair<String, NeedsYouControlTab>?>(null) }
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                needsYouStreams.forEachIndexed { index, stream ->
-                    // Keyed by id so a card keeps its own animation state when it moves in the queue.
-                    key(stream.id) {
-                        NeedsYouCard(
-                            stream = stream, index = index,
-                            kind = attention[stream.id],
-                            waitingSince = waitingSince[stream.id],
-                            dueAt = dueAt[stream.id],
-                            now = nowTick,
-                            // Identity is resolved through the project (Project.iconPath), never stored on the stream.
-                            project = com.virlin.app.domain.model.ProjectIdentity.resolve(stream.projectId, projects),
-                            // Phase 2: BOTH halves of the pill open the one control sheet; they
-                            // differ only in the tab it opens on. Nothing is decided on the card.
-                            onFocus = { id -> control = id to NeedsYouControlTab.CHECK },
-                            onCheck = { id -> control = id to NeedsYouControlTab.CHECK },
-                            onDefer = { id -> nowViewModel.deferReturn(id, 5) },
-                            // Effective rank = position in the domain queue (never the display index).
-                            position = needsYouQueue.indexOf(stream.id).let { if (it < 0) null else it + 1 },
-                            total = needsYouStreams.size,
-                            onChangePosition = { id -> control = id to NeedsYouControlTab.PRIORITY }
-                        )
-                    }
-                }
-            }
+            )
+
             // The unified control sheet (Phase 2): one surface for position and check decisions.
             // It owns no domain logic — every row below calls an existing intent.
             control?.let { (id, initialTab) ->
@@ -330,58 +332,34 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // 4. WORKING FOR YOU SECTION
+        // 4. WORKING FOR YOU SECTION — `VirlinWorkingForYouSection`, fed by the same projection.
+        // The wave spans the CURRENT CHECK WINDOW, not the run: its start is the moment this check
+        // was scheduled (`updatedAt` for a PROCESSING stream — `startExternalWork`,
+        // `startNextExternalStage` and `continueProcessing` all stamp it), falling back to the run
+        // start. Scheduling a new check therefore moves the start and the wave begins again.
         if (externalWork.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Working For You", fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = Charcoal)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(20.dp)
-                            .background(Color(0xFFEDE9FE), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(externalWork.size.toString(), fontSize = 11.sp, fontWeight = FontWeight.Black, color = Color(0xFF5B21B6))
+            VirlinWorkingForYouSection(
+                tasks = externalWork.map { item ->
+                    val due = item.checkAt
+                    val windowStart = due?.let { deadline ->
+                        val started = item.stream.processingStartedAt ?: item.stream.updatedAt
+                        maxOf(started, item.stream.updatedAt).coerceAtMost(deadline)
                     }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    val infiniteTransition = rememberInfiniteTransition(label = "")
-                    val alpha by infiniteTransition.animateFloat(
-                        initialValue = 0.55f, targetValue = 0.55f,
-                        animationSpec = infiniteRepeatable(
-                            animation = keyframes {
-                                durationMillis = 2800
-                                0.55f at 0
-                                1.0f at 1400
-                                0.55f at 2800
-                            },
-                            repeatMode = RepeatMode.Restart
-                        ), label = ""
+                    WorkingTaskUi(
+                        id = item.id,
+                        title = item.actorName,
+                        detail = listOfNotNull(
+                            item.workItemTitle ?: item.stream.title,
+                            item.stageLabel() ?: item.instruction
+                        ).joinToString(" · "),
+                        checkStartedAtEpochMillis = windowStart?.toEpochMilli(),
+                        nextCheckAtEpochMillis = due?.toEpochMilli()
                     )
-                    Box(modifier = Modifier.size(6.dp).background(Color(0xFF10B981).copy(alpha = alpha), CircleShape))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Autonomous background", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF047857))
-                }
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(WorkingContainerBg, RoundedCornerShape(16.dp))
-                    .border(1.dp, WorkingContainerBorder, RoundedCornerShape(16.dp))
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                externalWork.forEachIndexed { index, item ->
-                    ExternalWorkRow(item, externalNow, index, onOpen = { openExternal = it })
-                }
-            }
+                },
+                // The same one-per-section ticker the countdown already used.
+                nowEpochMillis = externalNow.toEpochMilli(),
+                onTaskClick = { openExternal = it }
+            )
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -393,11 +371,37 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("When you're free", fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = Charcoal)
-                Text("Next recommended", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF047857))
+                // Same tokens as before; the widths are simply bounded so the two labels
+                // cannot overlap each other at large font scales.
+                Text("When you're free", fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = Charcoal,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                Spacer(modifier = Modifier.width(8.dp))
+                // The same muted grey the Needs You and Working For You labels use.
+                Text("Ready to focus", fontSize = 11.sp, color = Color(0xFF657077),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(modifier = Modifier.height(10.dp))
-            ReadyRecommendationCard(readyStreams.first(), onFocus = nowViewModel::focus)
+            // Same list, same order, same filter: only the cards' appearance changed. Each card
+            // carries the stream's own id, title, subtitle, its recorded estimate (or no pill at
+            // all) and the project icon resolved the way every other Now card resolves it.
+            VirlinWhenFreeSection(
+                items = readyStreams.map { stream ->
+                    val project = com.virlin.app.domain.model.ProjectIdentity
+                        .resolve(stream.projectId, projects)
+                    WhenFreeCardUi(
+                        id = stream.id,
+                        title = stream.title,
+                        detail = stream.subtitle,
+                        durationLabel = stream.expectedDurationSec?.let { "~${it / 60} min" },
+                        projectIcon = project?.let {
+                            { com.virlin.app.ui.components.ProjectIcon(
+                                project = it, size = 30.dp, decorative = true) }
+                        }
+                    )
+                },
+                onFocus = nowViewModel::focus,
+                onOpen = { navController.navigate(com.virlin.app.ui.hierarchy.workStreamDetail(it)) }
+            )
         }
 
         Spacer(modifier = Modifier.height(88.dp))   // clearance for the floating Orb; the bar itself is handled by Scaffold insets
@@ -413,211 +417,59 @@ fun FocusHeroCard(
     onHandOff: (String) -> Unit = {},
     onComplete: (String) -> Unit = {}
 ) {
-    // Finalized labels. LEAVE = human attention exit (READY or timed return); the right-hand
-    // action is HAND OFF only when the domain says the stream is EXTERNAL, else COMPLETE.
+    // The card is `VirlinCurrentFocusCard`; this function stays the one place that maps domain
+    // state onto it. LEAVE = human attention exit; the right-hand action is HAND OFF only when
+    // the domain says the stream is EXTERNAL, else COMPLETE.
     val external = hierarchy?.isExternal == true
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(FocusHeroGreen, RoundedCornerShape(30.dp))
-            .border(1.dp, Color.White.copy(alpha=0.7f), RoundedCornerShape(30.dp))
-            .padding(20.dp)
-    ) {
-        Column {
-            // Badges + cumulative invested (live = prior closed sessions + current session).
-            // Split-flap stays current-session only; this metric never feeds the flap.
-            val totalInvestedSec = FocusInvestment.liveTotalSeconds(
-                stream.priorFocusInvestedSec.toLong(),
-                stream.focusInvestedSec
+    // Cumulative invested (prior closed sessions + the current one). The split-flap stays
+    // current-session only; this metric never feeds the flap.
+    val totalInvestedSec = FocusInvestment.liveTotalSeconds(
+        stream.priorFocusInvestedSec.toLong(),
+        stream.focusInvestedSec
+    )
+    val showInvested = !external && hierarchy?.activeTaskId != null
+
+    VirlinCurrentFocusCard(
+        projectName = hierarchy?.projectTitle.orEmpty(),
+        headline = hierarchy?.workStreamTitle ?: stream.title,
+        taskName = hierarchy?.activeTaskTitle.orEmpty(),
+        elapsedTime = "",                                   // the real timer comes through the slot
+        investedTime = if (showInvested) FocusInvestment.formatInvested(totalInvestedSec) else "",
+        nextAction = (hierarchy?.nextHumanAction ?: stream.nextAction).orEmpty(),
+        nextEstimate = "~2 min est.",
+        onLeave = { onLeave(stream.id) },
+        onComplete = { if (external) onHandOff(stream.id) else onComplete(stream.id) },
+        primaryLabel = if (external) "HAND OFF" else "COMPLETE",
+        onContextClick = { navController.navigate(com.virlin.app.ui.hierarchy.workStreamDetail(stream.id)) },
+        timerContent = {
+            // THE existing animated split-flap, unchanged: same FocusSession, same per-digit
+            // animation, and the same tap into the fullscreen landscape Focus Clock.
+            val timerInteractionSource = remember { MutableInteractionSource() }
+            val timerPressed by timerInteractionSource.collectIsPressedAsState()
+            val timerPressScale by animateFloatAsState(
+                targetValue = if (timerPressed) 0.98f else 1f,
+                animationSpec = tween(120),
+                label = "focusTimerPress"
             )
-            val showInvested = !external && hierarchy?.activeTaskId != null
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                Row(
-                    modifier = Modifier.background(Color.Black.copy(alpha=0.15f), RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val infiniteTransition = rememberInfiniteTransition(label = "")
-                    val alpha by infiniteTransition.animateFloat(initialValue = 0.4f, targetValue = 1f, animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse), label="")
-                    Box(modifier = Modifier.size(6.dp).background(Color.White.copy(alpha=alpha), CircleShape))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("CURRENT FOCUS", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.5.sp, color = Color.White)
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Row(
-                        modifier = Modifier.background(Color.White.copy(alpha=0.4f), RoundedCornerShape(50)).border(1.dp, Color.White.copy(alpha=0.4f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
+            Box(
+                modifier = Modifier
+                    .scale(timerPressScale)
+                    .clip(RoundedCornerShape(22.dp))
+                    .clickable(
+                        interactionSource = timerInteractionSource,
+                        indication = null,
+                        onClickLabel = "Open fullscreen focus clock"
                     ) {
-                        val infiniteTransition = rememberInfiniteTransition(label = "")
-                        val alpha by infiniteTransition.animateFloat(initialValue = 0.4f, targetValue = 0.9f, animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse), label="")
-                        val scale by infiniteTransition.animateFloat(initialValue = 1.0f, targetValue = 1.15f, animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse), label="")
-                        Box(modifier = Modifier.size(8.dp), contentAlignment = Alignment.Center) {
-                            Box(modifier = Modifier.size(8.dp).scale(scale).background(Charcoal.copy(alpha=alpha), CircleShape))
-                            Box(modifier = Modifier.size(8.dp).background(Charcoal, CircleShape))
-                        }
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("FOCUS ACTIVE", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.sp, color = Charcoal)
-                    }
-                    if (showInvested) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            FocusInvestment.formatInvested(totalInvestedSec),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Charcoal.copy(alpha = 0.75f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.testTag(FocusInvestedTag)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Project (optional) / WorkStream / deepest active Task — from the domain projection.
-            // Rows collapse when absent; no placeholders. Tapping opens the WorkStream Detail.
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag(FocusContextTag)
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null,
-                        onClickLabel = "Open WorkStream") {
-                        navController.navigate(com.virlin.app.ui.hierarchy.workStreamDetail(stream.id))
+                        navController.navigate(FocusClockRoute) { launchSingleTop = true }
                     }
             ) {
-                hierarchy?.projectTitle?.let {
-                    Text(it, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.3.sp, color = Charcoal.copy(alpha = 0.7f),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag(FocusProjectTag))
-                    Spacer(modifier = Modifier.height(2.dp))
-                }
-                Text(hierarchy?.workStreamTitle ?: stream.title, fontSize = 31.sp, fontWeight = FontWeight.Black, color = Charcoal, lineHeight = 32.sp)
-                hierarchy?.activeTaskTitle?.let {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(it, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Charcoal.copy(alpha = 0.8f),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag(FocusTaskTag))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Timer Centered
-            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                // Tapping the timer opens the fullscreen landscape Focus Clock.
-                // Same FocusSession, different presentation — no timer state is created here.
-                val timerInteractionSource = remember { MutableInteractionSource() }
-                val timerPressed by timerInteractionSource.collectIsPressedAsState()
-                val timerPressScale by animateFloatAsState(
-                    targetValue = if (timerPressed) 0.98f else 1f,
-                    animationSpec = tween(120),
-                    label = "focusTimerPress"
-                )
-                Box(
-                    modifier = Modifier
-                        .scale(timerPressScale)
-                        .clip(RoundedCornerShape(22.dp))
-                        .clickable(
-                            interactionSource = timerInteractionSource,
-                            indication = null,
-                            onClickLabel = "Open fullscreen focus clock"
-                        ) {
-                            navController.navigate(FocusClockRoute) { launchSingleTop = true }
-                        }
-                ) {
-                    // Key by WorkStream id so flap state never leaks across focus identity.
-                    key(stream.id) {
-                        SplitFlapTimer(stream.focusInvestedSec)
-                    }
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.size(6.dp).background(Color(0xFF047857).copy(alpha=0.6f), CircleShape))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("CURRENT SESSION", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp, color = Charcoal.copy(alpha=0.85f))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Box(modifier = Modifier.size(6.dp).background(Color(0xFF047857).copy(alpha=0.6f), CircleShape))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Next Card — WorkStream.nextHumanAction only (never nextTaskCandidate); omitted when absent.
-            val nextAction = hierarchy?.nextHumanAction ?: stream.nextAction
-            if (nextAction != null) Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.White.copy(alpha=0.45f), RoundedCornerShape(16.dp))
-                    .border(1.dp, Color.White.copy(alpha=0.6f), RoundedCornerShape(16.dp))
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("NEXT", fontSize = 10.sp, fontWeight = FontWeight.Black, color = Color.White, modifier = Modifier.background(Charcoal, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 2.dp))
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(nextAction, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Charcoal)
-                }
-                Text("~2 min est.", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Charcoal.copy(alpha=0.8f))
-            }
-
-            if (nextAction != null) Spacer(modifier = Modifier.height(16.dp))
-
-            // Buttons
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                var btn1Pressed by remember { mutableStateOf(false) }
-                val scale1 by animateFloatAsState(if(btn1Pressed) 0.97f else 1f, tween(150), label="")
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .scale(scale1)
-                        .background(Color.White.copy(alpha=0.7f), RoundedCornerShape(16.dp))
-                        .border(1.dp, Color.White.copy(alpha=0.75f), RoundedCornerShape(16.dp))
-                        .pointerInput(stream.id, external) {
-                            detectTapGestures(
-                                onPress = {
-                                    btn1Pressed = true
-                                    tryAwaitRelease()
-                                    btn1Pressed = false
-                                },
-                                onTap = { onLeave(stream.id) }
-                            )
-                        }
-                        .padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Text("LEAVE", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Charcoal, modifier = Modifier.testTag(FocusLeaveTag))
-                }
-
-                var btn2Pressed by remember { mutableStateOf(false) }
-                val scale2 by animateFloatAsState(if(btn2Pressed) 0.97f else 1f, tween(150), label="")
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .scale(scale2)
-                        .background(Charcoal, RoundedCornerShape(16.dp))
-                        .pointerInput(stream.id, external) {
-                            detectTapGestures(
-                                onPress = {
-                                    btn2Pressed = true
-                                    tryAwaitRelease()
-                                    btn2Pressed = false
-                                },
-                                onTap = { if (external) onHandOff(stream.id) else onComplete(stream.id) }
-                            )
-                        }
-                        .padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Text(if (external) "HAND OFF" else "COMPLETE", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Color.White,
-                        modifier = Modifier.testTag(if (external) FocusHandOffTag else FocusCompleteTag))
+                // Key by WorkStream id so flap state never leaks across focus identity.
+                key(stream.id) {
+                    SplitFlapTimer(stream.focusInvestedSec)
                 }
             }
         }
-    }
+    )
 }
 
 

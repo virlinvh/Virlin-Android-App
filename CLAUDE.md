@@ -1,5 +1,12 @@
 # Virlin — Claude Code Project Instructions
 
+## Read this first
+
+Before any audit or implementation, read `docs/PROJECT_DOCUMENTATION_INDEX.md` and follow its
+required current-state documents, especially `docs/AGENT_COORDINATION.md`. The live source and
+current Git diff remain final truth. `docs/DEVELOPMENT_STATUS.md` is a historical pass log, not the
+sole current architecture/status authority.
+
 ## Product
 
 Virlin is a native Android **human-attention orchestration system** for people managing many simultaneous work streams.
@@ -305,12 +312,13 @@ WorkStream".
 
 **Persistence is Room (Pass 5):** `VirlinGraph.init(context)` opens `virlin.db`; state
 survives process death and due returns/checks are reconciled on reopen. UI never touches DAOs.
-Schema is **v12** (v2 added `captures`; v10 `workstreams.attentionRank` for Needs You priority ranking; v11 `priority_preferences` for durable priority policies; v12 `workstreams.externalActorId` + `external_stages` for Working For You external runs —
+Schema is **v17** (v2 added `captures`; v10 `workstreams.attentionRank` for Needs You priority ranking; v11 `priority_preferences` for durable priority policies; v12 `workstreams.externalActorId` + `external_stages` for Working For You external runs; v16 `virlin_notes` for the self-contained Notes page, which also dropped the unused v15 `task_note_documents`; v17 adds ordered `task_page_blocks` references —
 every step an explicit migration proven by `VirlinMigrationTest`); every schema change ships a real migration — never a destructive fallback.
 Details in the `virlin-data-domain` skill.
 
-**The domain layer exists (`com.virlin.app.domain`).** All WorkStream state changes go
-through the unified `VirlinActions` facade (`VirlinGraph.actions`), which validates
+**The domain layer exists (`com.virlin.app.domain`).** State changes go through the unified
+`VirlinActions` facade (`VirlinGraph.actions`) or an explicitly documented cohesive domain-action
+surface such as `TaskPageActions`; UI never touches Room/DAOs. These actions validate
 transitions against `WorkStreamTransitions`, enforces the single-Focus invariant, snapshots
 context and records events. `MockData` is display-only. See the `virlin-data-domain` skill.
 
@@ -394,6 +402,13 @@ Preserve existing approved design tokens/components whenever possible.
 ---
 
 ## Development Rules
+
+### Parallel-agent handoff
+
+Codex records its workspace edits in `CODEX_CHANGES.md`. Before changing files that may
+overlap with Codex work, read that log and inspect `git status`. Claude should record its
+own edits in a separate `CLAUDE_CHANGES.md` file so parallel agents do not contend over a
+single append-only log.
 
 ### Rule 1 — Scope
 

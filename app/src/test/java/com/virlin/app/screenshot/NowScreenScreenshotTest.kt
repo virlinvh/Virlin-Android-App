@@ -4,8 +4,12 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.navigation.compose.rememberNavController
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.ui.screens.NowScreen
 import com.virlin.app.ui.theme.VirlinTheme
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,6 +45,17 @@ class NowScreenScreenshotTest {
 
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Before
+    fun prepareDomain() = runBlocking {
+        VirlinGraph.resetForTests()
+        VirlinGraph.ensureReady()
+    }
+
+    @After
+    fun resetDomain() {
+        VirlinGraph.resetForTests()
+    }
 
     @Test
     fun nowScreen_matchesApprovedBaseline() {

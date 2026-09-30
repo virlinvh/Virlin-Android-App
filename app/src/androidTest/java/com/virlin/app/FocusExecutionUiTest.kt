@@ -4,6 +4,7 @@ import android.os.SystemClock
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -15,12 +16,9 @@ import com.virlin.app.domain.action.CreateTask
 import com.virlin.app.domain.model.FocusInvestment
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStreamState
-import com.virlin.app.ui.hierarchy.FocusWorkItemTag
 import com.virlin.app.ui.hierarchy.SwitchFocusCancelTag
 import com.virlin.app.ui.hierarchy.SwitchFocusConfirmTag
 import com.virlin.app.ui.hierarchy.SwitchFocusTag
-import com.virlin.app.ui.hierarchy.TaskDetailTag
-import com.virlin.app.ui.hierarchy.taskDetail
 import com.virlin.app.ui.screens.DoneForNowTag
 import com.virlin.app.ui.screens.FocusContextTag
 import com.virlin.app.ui.screens.FocusNextTag
@@ -62,14 +60,21 @@ class FocusExecutionUiTest {
     private fun actions() = VirlinGraph.actions
     private fun repo() = VirlinGraph.repository
     private fun focusedStream() = repo().streams.value.firstOrNull { it.state == WorkStreamState.FOCUS }
-    /** Streams → Projects → project → the READY stream → the task row → Task Detail. */
-    private fun openTaskDetail(taskId: String) {
+    /** Streams → Projects → project → the READY stream → the task's green hierarchy level. */
+    private fun openTaskLevel(taskId: String) {
         composeRule.onNodeWithTag(bottomNavItemTag(RootDestination.STREAMS)).performClick(); pump(900)
         composeRule.onNodeWithTag("streams_filter_projects").performClick(); pump(400)
         touch("project_row_p5", 1200)
         touch("stream_row_$WORK_STREAM", 1200)
         touch(com.virlin.app.ui.hierarchy.taskRowTag(taskId), 1200)
-        tag(TaskDetailTag).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Actions for ${repo().tasks.value.first { it.id == taskId }.title}")
+            .assertIsDisplayed()
+    }
+
+    private fun focusFromTaskMenu(taskId: String) {
+        val title = repo().tasks.value.first { it.id == taskId }.title
+        composeRule.onNodeWithContentDescription("Actions for $title").performClick(); pump(300)
+        composeRule.onNodeWithText("Focus", useUnmergedTree = true).performClick(); pump(900)
     }
 
     /** A fresh leaf under the demo's external stream, so the seeded Focus (s1) is the "current" work. */
@@ -91,8 +96,8 @@ class FocusExecutionUiTest {
         pump(600)
 
         // FLOW I: requesting focus elsewhere asks first and writes nothing on CANCEL.
-        openTaskDetail(leaf.id)
-        touch(FocusWorkItemTag, 900)
+        openTaskLevel(leaf.id)
+        focusFromTaskMenu(leaf.id)
         composeRule.waitUntil(5_000) { composeRule.onAllNodesWithTag(SwitchFocusTag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         touch(SwitchFocusCancelTag, 900)
         assert(focusedStream()?.id == before.id) { "cancel must not switch focus" }
@@ -100,7 +105,7 @@ class FocusExecutionUiTest {
 
         // FLOW J: confirming switches — the old work stays open and keeps its investment.
         val oldInvestment = invested(before.id, beforeTask!!)
-        touch(FocusWorkItemTag, 900)
+        focusFromTaskMenu(leaf.id)
         composeRule.waitUntil(5_000) { composeRule.onAllNodesWithTag(SwitchFocusTag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         touch(SwitchFocusConfirmTag, 1500)
         composeRule.waitUntil(5_000) { focusedStream()?.id == WORK_STREAM }
