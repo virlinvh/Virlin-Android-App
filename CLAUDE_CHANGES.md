@@ -503,3 +503,41 @@ the 17 goldens, because the user's phrase "exclude these" is not the explicit ap
 `CLAUDE.md` requires before overwriting committed baselines — and recording them later is a
 separate, reviewable commit, whereas an unapproved overwrite of the frozen Now baseline is not
 cheaply undone.
+
+---
+
+## 2026-09-30 — Integration checkpoint commit `38ee49e`
+
+**Requested by:** User. **Status:** Complete. Local commit only — **no push, no PR, no merge into
+`main`, no rebase/reset/clean/stash, no golden change.** `CODEX_CHANGES.md` untouched.
+
+Created branch `integration` from `feature/now-day-summary` @ `1e6d821` and committed the verified
+baseline as `38ee49e` — **205 files, +37,016 / -2,148** (148 added, 56 modified, 1 deleted).
+
+**History preserved:** all 26 commits that were unmerged into `main` remain ancestors of the
+checkpoint; `feature/now-day-summary` still points at `1e6d821`; `main` still equals `origin/main`
+at `e65c6e0`. Nothing was squashed, rebased or duplicated.
+
+**Verification immediately before committing:** `:app:testDebugUnitTest` +
+`:app:compileDebugAndroidTestKotlin` — BUILD SUCCESSFUL, **1053 tests, 0 failures**;
+`:app:verifyRoborazziDebug` — **exactly 17** visual differences, the documented approval gate.
+Goldens unchanged before and after (24 tracked = 24 on disk; `agent_capture_live_launcher.png`
+still absent).
+
+**Safety checks:** `git add -A` dry-run proved no ignored path could enter the index, and the
+committed file list contains no ignored artifact and no screenshot. Only one file exceeds 1 MB —
+`res/drawable-nodpi/virlin_app_pages.png`, verified as a real 1254x1254 PNG referenced by
+`VirlinAppsScreen.kt`. No credential values anywhere. The deletion of
+`ui/screens/PulseScreen.kt` was confirmed superseded by `ui/pulse/` with no dangling references.
+
+**Two findings reported rather than silently handled:**
+
+1. A **stale `.git/index.lock`** blocked staging — 0 bytes, dated 2026-09-29 23:59 (about 24 hours
+   old), with no `git.exe` process running and `.git/index` intact at 358 tracked files. Diagnosed
+   as a crashed earlier process, not a live agent, and removed. No other Git state was touched.
+2. `docs/CLAUDE_FINAL_DOCUMENTATION_AUDIT.md:4` contains the absolute workspace path
+   `C:\Users\tre21\...` in its provenance header. Harmless documentation, not a build path or
+   secret, so it was committed as-is; it can be genericized later if preferred.
+
+`core.autocrlf=true` normalized line endings, which is why 61 modified files produced 56 content
+diffs — the other five differed only in line endings.
