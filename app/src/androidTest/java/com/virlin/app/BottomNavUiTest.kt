@@ -5,6 +5,9 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToLog
+
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasTestTag
@@ -78,21 +81,42 @@ class BottomNavUiTest {
         tag(FocusContextTag).assertIsDisplayed()
         tap(RootDestination.STREAMS); tag(StreamsListTag).assertIsDisplayed(); tag(bottomNavItemTag(RootDestination.STREAMS)).assertIsSelected()
         tap(RootDestination.PULSE); tag(bottomNavItemTag(RootDestination.PULSE)).assertIsSelected()
-        tap(RootDestination.INBOX); tag(InboxScreenTag).assertIsDisplayed(); tag(bottomNavItemTag(RootDestination.INBOX)).assertIsSelected()
+        openInbox(); tag(InboxScreenTag).assertIsDisplayed(); tag(bottomNavItemTag(RootDestination.INBOX)).assertIsSelected()
         tap(RootDestination.NOW); tag(FocusContextTag).assertIsDisplayed(); tag(bottomNavItemTag(RootDestination.NOW)).assertIsSelected()
         // repeated taps never stack: one Back from a root tab leaves the app's root graph rather than unwinding tab copies
         repeat(3) { tap(RootDestination.STREAMS) }; repeat(2) { tap(RootDestination.INBOX) }
         tap(RootDestination.NOW)
         // WorkStream detail → Back → Streams (nested route pops to its tab)
         tap(RootDestination.STREAMS)
-        val ws = repo().streams.value.first()
+        // The tab lists projects; a WorkStream lives one level in, so the nested route under
+        // test is Projects -> Project -> WorkStream, and Back must still land on the tab.
+        val ws = repo().streams.value.first { it.projectId != null }
+        tag("project_row_${ws.projectId}").performScrollTo(); pump(300)
+        tag("project_row_${ws.projectId}").performTouchInput { click(centerLeft) }; pump(700)
         tag("stream_row_${ws.id}").performScrollTo(); pump(300); tag("stream_row_${ws.id}").performTouchInput { click(centerLeft) }; pump(700)
         tag(WorkStreamDetailTag).assertIsDisplayed()
-        Espresso.pressBack(); pump(700)
+        Espresso.pressBack(); pump(700); Espresso.pressBack(); pump(700)
         tag(StreamsListTag).assertIsDisplayed(); tag(bottomNavItemTag(RootDestination.STREAMS)).assertIsSelected()
         // the Orb floats above the bar; both stay displayed and the Inbox item remains tappable
         tag(VirlinOrbTestTag).assertIsDisplayed(); tag(bottomNavItemTag(RootDestination.INBOX)).assertIsDisplayed()
-        tap(RootDestination.INBOX); tag(InboxScreenTag).assertIsDisplayed()
+        openInbox(); tag(InboxScreenTag).assertIsDisplayed()
+    }
+
+    /**
+     * The fourth tab is the Apps gallery now and the capture Inbox is its first app. The tab
+     * restores its own state, so a later visit can land straight back on the Inbox — that is
+     * the intended behaviour, and this helper accepts either.
+     */
+    private fun openInbox() {
+        tap(RootDestination.INBOX); pump(2500)
+        val gallery = runCatching {
+            composeRule.onNodeWithTag(com.virlin.app.ui.apps.AppsScreenTag).fetchSemanticsNode()
+        }.isSuccess
+        // The tile merges its descendants, so it is a node of the MERGED tree.
+        if (gallery) {
+            composeRule.onNodeWithTag(com.virlin.app.ui.apps.appTileTag("inbox")).performClick()
+            pump(1200)
+        }
     }
 
     @Test fun inbox_badge_is_live_and_inbox_tab_is_the_real_capture_inbox() {
@@ -115,7 +139,7 @@ class BottomNavUiTest {
         runBlocking { VirlinGraph.actions.createCapture(CreateCapture(CaptureType.NOTE, "Badge check two", context = CaptureContext.None)) }; pump(400)
         badge(2)
         // Inbox tab shows the same capture rows; archive from the detail → badge decrements; restore → increments
-        tap(RootDestination.INBOX); tag(InboxScreenTag).assertIsDisplayed()
+        openInbox(); tag(InboxScreenTag).assertIsDisplayed()
         val item = repo().captures.value.first { it.content == "Badge check two" }
         touch(captureRowTag(item.id))
         tag(CaptureDetailTag).assertIsDisplayed()

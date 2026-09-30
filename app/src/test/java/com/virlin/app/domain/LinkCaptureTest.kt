@@ -8,10 +8,15 @@ import com.virlin.app.domain.action.CreateCapture
 import com.virlin.app.domain.action.DefaultVirlinActions
 import com.virlin.app.domain.action.DomainError
 import com.virlin.app.domain.capture.LinkUrl
+import com.virlin.app.domain.capture.LinkDocument
+import com.virlin.app.domain.capture.LinkDocumentCodec
+import com.virlin.app.domain.capture.LinkPresentation
+import com.virlin.app.domain.capture.LinkProvider
 import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
 import com.virlin.app.ui.link.LinkEditorViewModel
 import com.virlin.app.ui.link.LinkIntents
+import com.virlin.app.ui.link.youtubePlayerHtml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -118,7 +123,6 @@ class LinkCaptureTest {
         val actions = DefaultVirlinActions(repo, clock, ids)
         val vm = LinkEditorViewModel(null, actions, repo, ids, clock)
         vm.onUrlInputChange("https://developer.android.com/")
-        assertFalse(vm.state.value.editingUrl)
         assertEquals("https://developer.android.com/", vm.state.value.canonicalUrl)
         assertTrue(vm.state.value.showCard)
         vm.onTitleChange("Android docs")
@@ -131,19 +135,14 @@ class LinkCaptureTest {
         val vm = LinkEditorViewModel(null, actions, repo, ids, clock)
         vm.onUrlInputChange("https://example.com/")
         vm.onTitleChange("Ex")
-        val first = vm.prepareExit()
-        assertTrue(first.navigate)
-        assertTrue(first.showInboxFeedback)
+        vm.save(); advanceUntilIdle()
         assertTrue(vm.state.value.committedToInbox)
         val id = vm.state.value.captureId!!
         assertEquals(1, repo.captures.value.count { it.type == CaptureType.LINK })
 
-        vm.onNoteChange("updated note")
-        val second = vm.prepareExit()
-        assertTrue(second.navigate)
-        assertFalse(second.showInboxFeedback)
+        vm.edit(); vm.onNoteChange("updated note"); vm.save(); advanceUntilIdle()
         assertEquals(1, repo.captures.value.count { it.id == id })
-        assertEquals("updated note", repo.getCapture(id)!!.content)
+        assertEquals("updated note", LinkDocumentCodec.decode(repo.getCapture(id)!!.content).note)
     }
 
     @Test fun viewModel_emptyDraftDiscard() = runTest {
@@ -176,11 +175,58 @@ class LinkCaptureTest {
         assertEquals("the repo", vm.state.value.note)
         assertTrue(vm.state.value.committedToInbox)
 
-        vm.onUrlInputChange("https://github.com/virlin/app/pull/1")
-        vm.prepareExit()
+        vm.edit(); vm.onUrlInputChange("https://github.com/virlin/app/pull/1"); vm.save(); advanceUntilIdle()
         val updated = repo.getCapture(created.id)!!
         assertEquals("https://github.com/virlin/app/pull/1", updated.sourceUrl)
         assertEquals(1, repo.captures.value.size)
+    }
+
+    @Test fun linkDocument_roundTripsAndLegacyNoteStillLoads() {
+        val doc = LinkDocument("reference", showPreview = false, playbackEnabled = true, startSeconds = 135, endSeconds = 510)
+        assertEquals(doc, LinkDocumentCodec.decode(LinkDocumentCodec.encode(doc)))
+        assertEquals(LinkDocument(note = "legacy note"), LinkDocumentCodec.decode("legacy note"))
+    }
+
+    @Test fun youtubePreviewAndStartTimeAreDeterministic() {
+        val url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        val preview = LinkPresentation.preview(url)
+        assertEquals(LinkProvider.YOUTUBE, preview.provider)
+        assertEquals("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", preview.thumbnailUrl)
+        val playable = LinkPresentation.playableUrl(url, LinkDocument(playbackEnabled = true, startSeconds = 135, endSeconds = 510))
+        assertTrue(playable.contains("t=135s"))
+        assertFalse(playable.contains("510")) // external YouTube end behavior is intentionally not promised
+    }
+
+    @Test fun youtubeIds_coverWatchShortAndEmbed_withoutAcceptingLookalikeHosts() {
+        assertEquals("dQw4w9WgXcQ", LinkPresentation.youtubeVideoId("https://youtu.be/dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", LinkPresentation.youtubeVideoId("https://youtube.com/shorts/dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", LinkPresentation.youtubeVideoId("https://www.youtube.com/embed/dQw4w9WgXcQ"))
+        assertNull(LinkPresentation.youtubeVideoId("https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ"))
+    }
+
+    @Test fun embeddedPlayer_cuesExactSavedSegment_andDoesNotAutoplay() {
+        val html = youtubePlayerHtml("dQw4w9WgXcQ", 135, 510)
+        assertTrue(html.contains("cueVideoById"))
+        assertTrue(html.contains("startSeconds:135"))
+        assertTrue(html.contains("endSeconds:510"))
+        assertFalse(html.contains("playVideo()"))
+        assertFalse(html.contains("addJavascriptInterface"))
+    }
+
+    @Test fun embeddedPlayer_omitsInvalidEndBoundary() {
+        val html = youtubePlayerHtml("dQw4w9WgXcQ", 510, 135)
+        assertTrue(html.contains("startSeconds:510"))
+        assertFalse(html.contains("endSeconds:"))
+    }
+
+    @Test fun timeParsingRejectsMalformedAndEndBeforeStart() {
+        assertEquals(135, LinkPresentation.parseTime("02:15"))
+        assertNull(LinkPresentation.parseTime("2:75"))
+        val state = com.virlin.app.ui.link.LinkUiState(
+            canonicalUrl = "https://youtu.be/dQw4w9WgXcQ", playbackEnabled = true,
+            startInput = "08:30", endInput = "02:15"
+        )
+        assertFalse(state.isTimeValid)
     }
 
     @Test fun intents_actionViewNoPackage() {

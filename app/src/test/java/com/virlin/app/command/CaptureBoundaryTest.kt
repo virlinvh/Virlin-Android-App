@@ -131,8 +131,12 @@ class CaptureBoundaryTest {
         vm.setType(CaptureType.LINK); vm.save("https://developer.android.com/topic/libraries/architecture/room?x=1&y=2"); advanceUntilIdle()
         captures().first { it.type == CaptureType.LINK }.let { assertEquals("https://developer.android.com/topic/libraries/architecture/room?x=1&y=2", it.sourceUrl) }
         val n = captures().size
-        vm.save("developer.android.com"); advanceUntilIdle(); vm.save("ftp://x.y/z"); advanceUntilIdle()
-        assertEquals(n, captures().size)                                                                 // invalid links rejected
+        vm.save("developer.android.com"); advanceUntilIdle()
+        assertEquals(n + 1, captures().size)
+        captures().first { it.sourceUrl == "https://developer.android.com" }.let { assertEquals("", it.content) }
+        val afterDomain = captures().size
+        vm.save("ftp://x.y/z"); advanceUntilIdle()
+        assertEquals(afterDomain, captures().size)                                                       // non-web schemes rejected
         vm.setType(CaptureType.NOTE); vm.save("See https://example.com later"); advanceUntilIdle()
         captures().first { it.content == "See https://example.com later" }.let { assertEquals(CaptureType.NOTE, it.type); assertNull(it.sourceUrl) }    // NOTE stays NOTE even with a URL inside
         assertEquals(FOCUS, s("s1").state); assertEquals(TaskStatus.TODO, repo.getTask("t2")!!.status)

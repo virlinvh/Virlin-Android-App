@@ -1,0 +1,14 @@
+---
+description: Virlin Cursor startup — preserve dirty tree, skill map, Graphify-first, surgical deltas
+alwaysApply: true
+---
+
+# Virlin (Cursor)
+
+Mature Android project. Orchestration: `CURSOR.md` + `.cursor/SESSION_START.md`.
+
+Before coding: `git status` → status docs → `.cursor/SKILL_MAP.md` → open original `.claude/skills/.../SKILL.md` → Graphify (`query`/`explain`/`path`/`affected`) → 2–6 source files → frozen contracts → requested delta only → focused verify → report → STOP.
+
+**Do not** modify `CLAUDE.md`, `.claude/**`, `GLM.md`, `.glm/**`. Do not copy skills. Do not reset/stash/clean the dirty tree (Orb ride-the-sheet, Control scroll regions, GLM layer — see `.cursor/context/CURRENT_WORKING_STATE.md`).
+
+Source/diff beats stale prose (`.cursor/context/SOURCE_PRIORITY.md`). No runtime LLM/Cursor API in the app. No dependency upgrades unless asked. Pins: `.cursor/rules/ANDROID.md` (not `libs.versions.toml`).

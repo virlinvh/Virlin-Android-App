@@ -1,0 +1,10 @@
+---
+description: Virlin frozen contracts — hierarchy, LEAVE vs HAND OFF, Agent V1, Orb/Control layout
+alwaysApply: false
+---
+
+# Frozen contracts (pointer)
+
+Do not casually change hierarchy, DONE≠CANCELLED, Active Path, LEAVE≠HAND OFF, Room/actions boundary, deterministic Agent V1, Capture raw boundary, root nav, Orb root ownership / ride-the-sheet / no invisible hit-steal, or Control three-region layout.
+
+Full list: `.cursor/context/FROZEN_CONTRACTS.md`. Source + current diff win if prose conflicts.

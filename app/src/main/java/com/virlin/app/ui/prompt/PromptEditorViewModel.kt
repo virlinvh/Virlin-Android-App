@@ -11,9 +11,11 @@ import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.NoteBlock
 import com.virlin.app.domain.model.NoteBlockType
 import com.virlin.app.domain.model.PromptDocument
+import com.virlin.app.domain.model.PromptContentMode
 import com.virlin.app.domain.note.NoteClipboardImporter
 import com.virlin.app.domain.note.NoteEnterSemantics
 import com.virlin.app.domain.prompt.PromptDocumentCodec
+import com.virlin.app.domain.prompt.PromptContentParser
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.domain.time.VirlinClock
 import kotlinx.coroutines.Job
@@ -33,6 +35,11 @@ data class PromptUiState(
     val description: String,
     val tags: List<String>,
     val blocks: List<NoteBlock>,
+    val sourceText: String = "",
+    val mode: PromptContentMode = PromptContentMode.PROMPT,
+    val language: String? = null,
+    val responseText: String = "",
+    val responseEditorOpen: Boolean = false,
     val focusedBlockId: String?,
     val saveStatus: PromptSaveStatus = PromptSaveStatus.Idle,
     val toast: String? = null,
@@ -56,7 +63,8 @@ class PromptEditorViewModel(
     private val actions: VirlinActions = VirlinGraph.actions,
     private val repository: WorkStreamRepository = VirlinGraph.repository,
     private val ids: IdProvider = VirlinGraph.ids,
-    private val clock: VirlinClock = VirlinGraph.clock
+    private val clock: VirlinClock = VirlinGraph.clock,
+    initialContext: CaptureContext = CaptureContext.None
 ) : ViewModel() {
 
     private var saveJob: Job? = null
@@ -73,6 +81,7 @@ class PromptEditorViewModel(
             tags = emptyList(),
             blocks = listOf(NoteBlock(firstBlockId, NoteBlockType.TEXT)),
             focusedBlockId = firstBlockId,
+            context = initialContext,
             committedToInbox = initialCaptureId != null,
             loading = initialCaptureId != null
         )
@@ -95,6 +104,10 @@ class PromptEditorViewModel(
                                 description = doc.description.orEmpty(),
                                 tags = doc.tags,
                                 blocks = doc.blocks.ifEmpty { listOf(NoteBlock(ids.newId("blk"), NoteBlockType.TEXT)) },
+                                sourceText = doc.sourceText.ifEmpty { PromptDocumentCodec.plainText(doc) },
+                                mode = doc.mode,
+                                language = doc.language,
+                                responseText = doc.responseText.orEmpty(),
                                 focusedBlockId = doc.blocks.firstOrNull()?.id ?: it.focusedBlockId,
                                 committedToInbox = true,
                                 persisted = hasDoc,
@@ -114,6 +127,44 @@ class PromptEditorViewModel(
 
     fun onTitleChange(t: String) { _state.update { it.copy(title = t) }; scheduleAutosave() }
     fun onDescriptionChange(t: String) { _state.update { it.copy(description = t) }; scheduleAutosave() }
+
+    fun onSourceTextChange(text: String) {
+        _state.update { st ->
+            val first = st.blocks.firstOrNull()?.copy(type = NoteBlockType.TEXT, plainText = text)
+                ?: NoteBlock(ids.newId("blk"), NoteBlockType.TEXT, plainText = text)
+            st.copy(sourceText = text, blocks = listOf(first))
+        }
+        scheduleAutosave()
+    }
+
+    fun setMode(mode: PromptContentMode) {
+        _state.update { st ->
+            st.copy(
+                mode = mode,
+                language = if (mode == PromptContentMode.CODE) {
+                    st.language ?: PromptContentParser.detectLanguage(st.sourceText)
+                } else st.language
+            )
+        }
+        scheduleAutosave()
+    }
+
+    fun setLanguage(language: String) {
+        _state.update { it.copy(language = language, mode = PromptContentMode.CODE) }
+        scheduleAutosave()
+    }
+
+    fun openResponseEditor(open: Boolean = true) = _state.update { it.copy(responseEditorOpen = open) }
+
+    fun onResponseTextChange(text: String) {
+        _state.update { it.copy(responseText = text, responseEditorOpen = true) }
+        scheduleAutosave()
+    }
+
+    fun removeResponse() {
+        _state.update { it.copy(responseText = "", responseEditorOpen = false) }
+        scheduleAutosave()
+    }
     fun onTagDraftChange(t: String) = _state.update { it.copy(tagDraft = t) }
 
     fun addTagFromDraft() {
@@ -132,6 +183,7 @@ class PromptEditorViewModel(
 
     fun onBlockTextChange(blockId: String, text: String) {
         updateBlock(blockId) { it.copy(plainText = text) }
+        _state.update { st -> st.copy(sourceText = PromptDocumentCodec.plainText(currentDocument())) }
         scheduleAutosave()
     }
 
@@ -202,7 +254,13 @@ class PromptEditorViewModel(
             } else {
                 list.addAll(idx + 1, imported)
             }
-            s.copy(blocks = list, focusedBlockId = imported.last().id, cursorAtEndBlockId = imported.last().id)
+            val exact = if (s.sourceText.isEmpty()) plain else s.sourceText + "\n" + plain
+            s.copy(
+                blocks = list,
+                sourceText = exact,
+                focusedBlockId = imported.last().id,
+                cursorAtEndBlockId = imported.last().id
+            )
         }
         scheduleAutosave()
     }
@@ -226,7 +284,12 @@ class PromptEditorViewModel(
 
     fun copyPromptPlainText(): String {
         _state.update { it.copy(toast = "Copied") }
-        return PromptDocumentCodec.plainText(currentDocument())
+        return _state.value.sourceText
+    }
+
+    fun copyResponseText(): String {
+        _state.update { it.copy(toast = "Response copied") }
+        return _state.value.responseText
     }
 
     fun currentDocument(): PromptDocument {
@@ -238,6 +301,10 @@ class PromptEditorViewModel(
             description = st.description.ifBlank { null },
             tags = st.tags,
             blocks = st.blocks,
+            sourceText = st.sourceText,
+            mode = st.mode,
+            language = st.language,
+            responseText = st.responseText.takeIf { it.isNotEmpty() },
             createdAt = clock.now(),
             updatedAt = clock.now()
         )
@@ -292,10 +359,17 @@ class PromptEditorViewModel(
                 blocks = doc.blocks,
                 context = st.context,
                 captureId = st.captureId ?: draftCaptureId,
-                promptId = st.promptId
+                promptId = st.promptId,
+                sourceText = doc.sourceText,
+                mode = doc.mode,
+                language = doc.language,
+                responseText = doc.responseText
             )
         } else {
-            actions.savePrompt(st.captureId!!, doc.title, doc.description, doc.tags, doc.blocks)
+            actions.savePrompt(
+                st.captureId!!, doc.title, doc.description, doc.tags, doc.blocks,
+                doc.sourceText, doc.mode, doc.language, doc.responseText
+            )
         }
         return when (result) {
             is ActionResult.Success -> {
@@ -325,7 +399,10 @@ class PromptEditorViewModel(
         if (!st.committedToInbox) return
         val doc = currentDocument()
         if (!doc.hasMeaningfulContent()) return
-        when (actions.savePrompt(capId, doc.title, doc.description, doc.tags, doc.blocks)) {
+        when (actions.savePrompt(
+            capId, doc.title, doc.description, doc.tags, doc.blocks,
+            doc.sourceText, doc.mode, doc.language, doc.responseText
+        )) {
             is ActionResult.Success -> _state.update { it.copy(persisted = true, saveStatus = PromptSaveStatus.Saved) }
             else -> _state.update { it.copy(saveStatus = PromptSaveStatus.Error) }
         }
@@ -338,7 +415,7 @@ class PromptEditorViewModel(
             delay(450)
             val st = _state.value
             if (!st.committedToInbox) {
-                _state.update { it.copy(saveStatus = PromptSaveStatus.Saved) }
+                _state.update { it.copy(saveStatus = PromptSaveStatus.Idle) }
                 return@launch
             }
             persistCommitted()
@@ -365,10 +442,10 @@ class PromptEditorViewModel(
     }
 
     companion object {
-        fun factory(captureId: String?): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
+        fun factory(captureId: String?, context: CaptureContext = CaptureContext.None): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                PromptEditorViewModel(captureId) as T
+                PromptEditorViewModel(captureId, initialContext = context) as T
         }
     }
 }

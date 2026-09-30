@@ -77,8 +77,10 @@ fun NowChooserDialog(chooser: Chooser, vm: AttentionIntents) {
                     Secondary("BLOCKED", "chooser_blocked") { vm.block(id) }
                 }
                 is Chooser.StillRunning -> {
+                    // CHECK AGAIN: the approved quick durations (Phase 05) + CUSTOM. Sets a new
+                    // `dueAt = now + N`; priority rank and any priority preference are untouched.
                     Title("Check again:")
-                    Presets(listOf(1, 2, 5, 10), tagPrefix = "still") { ensurePermission(); vm.stillRunning(id, it) }
+                    Presets(com.virlin.app.domain.attention.AttentionTiming.checkAgainPresets.map { it.toInt() }, tagPrefix = "still") { ensurePermission(); vm.stillRunning(id, it) }
                     Secondary("CUSTOM", "chooser_custom") { vm.openCustom(id, TimedIntent.STILL_RUNNING) }
                 }
                 is Chooser.ResultReady -> {
@@ -154,4 +156,50 @@ private fun Secondary(text: String, tag: String, onClick: () -> Unit) {
             .clickable(role = Role.Button, onClick = onClick).padding(vertical = 12.dp),
         textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     Spacer(Modifier.height(8.dp))
+}
+
+const val CompletedFocusTag = "completed_focus"
+const val FocusNextTag = "focus_next"
+const val DoneForNowTag = "done_for_now"
+
+/**
+ * PHASE 09 — the moment after finishing the focused work: what was completed, what comes next, and
+ * two equal-weight choices. Nothing starts on its own.
+ */
+@Composable
+fun CompletedFocusDialog(completedTitle: String, nextTitle: String?, onFocusNext: () -> Unit, onDone: () -> Unit) {
+    Dialog(onDismissRequest = onDone) {
+        Column(
+            Modifier.fillMaxWidth().background(Pearl, RoundedCornerShape(24.dp)).padding(20.dp).testTag(CompletedFocusTag)
+        ) {
+            Text("COMPLETED", fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp, color = CharcoalMuted)
+            Text(completedTitle, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Charcoal, maxLines = 2)
+            if (nextTitle != null) {
+                Spacer(Modifier.height(12.dp))
+                Text("NEXT", fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp, color = CharcoalMuted)
+                Text(nextTitle, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Charcoal, maxLines = 2)
+            } else {
+                Spacer(Modifier.height(10.dp))
+                Text("Nothing else is open here.", fontSize = 12.5.sp, color = CharcoalMuted)
+            }
+            Spacer(Modifier.height(18.dp))
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "DONE FOR NOW", fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 0.4.sp, color = Charcoal,
+                    modifier = Modifier.background(Color.White, RoundedCornerShape(50))
+                        .testTag(DoneForNowTag).clickable(role = Role.Button, onClick = onDone)
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                )
+                if (nextTitle != null) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "FOCUS NEXT", fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 0.4.sp, color = Color.White,
+                        modifier = Modifier.background(Charcoal, RoundedCornerShape(50))
+                            .testTag(FocusNextTag).clickable(role = Role.Button, onClick = onFocusNext)
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                    )
+                }
+            }
+        }
+    }
 }

@@ -198,7 +198,7 @@ class AgentCaptureViewModel(
     private fun message(r: ActionResult<*>): String = when (r) {
         is ActionResult.Rejected -> when (r.reason) {
             DomainError.EmptyCapture -> "Nothing to save yet"
-            DomainError.InvalidLink -> "Enter a full link starting with http:// or https://"
+            DomainError.InvalidLink -> "Enter a valid web link"
             is DomainError.CaptureNotFound -> "That capture no longer exists"
             DomainError.CaptureAlreadyOrganized -> "Already turned into a task"
             is DomainError.TaskNotFound -> "That task no longer exists — choose again"

@@ -38,8 +38,11 @@ class AttentionExitUiTest {
     @get:Rule
     val permissions: androidx.test.rule.GrantPermissionRule = androidx.test.rule.GrantPermissionRule.grant(android.Manifest.permission.POST_NOTIFICATIONS)
 
-    @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    /** Deterministic start state whatever ran before (shared process + shared `virlin.db`). */
+    @get:Rule
+    val rules: org.junit.rules.RuleChain = org.junit.rules.RuleChain.outerRule(DemoStateRule()).around(composeRule)
 
     @Before fun setUp() { composeRule.mainClock.autoAdvance = false }
 

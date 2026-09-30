@@ -56,8 +56,13 @@ Instrumented tests: `gradlew.bat connectedDebugAndroidTest` with a Pixel 8 / API
 
 ## Project documentation
 
+- `docs/PROJECT_DOCUMENTATION_INDEX.md` — current authoritative documentation map; read first.
+- `docs/ARCHITECTURE.md` — live architecture and invariants.
+- `docs/DATA_AND_STORAGE.md` — Room, repositories, managed files and migration governance.
+- `docs/NAVIGATION_AND_FEATURES.md` — canonical routes, compatibility boundaries and feature state.
+- `docs/AGENT_COORDINATION.md` — required workflow for parallel coding agents.
 - `CLAUDE.md` — product rules, frozen UI, architecture and development rules.
-- `docs/DEVELOPMENT_STATUS.md` — pass-by-pass development status (current state of every feature).
+- `docs/DEVELOPMENT_STATUS.md` — detailed historical pass-by-pass status.
 - `docs/DEVELOPMENT_TOOLCHAIN.md` — tooling, testing and golden-screenshot rules.
 - `.claude/skills/` — project skills used during development.
 

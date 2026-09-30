@@ -1,0 +1,14 @@
+---
+description: Virlin Graphify-first discovery — use before broad codebase search
+alwaysApply: false
+---
+
+# Graphify first
+
+Prefer existing graph at `graphify-out/graph.json`.
+
+Read-only: `graphify query` · `explain` · `path` · `affected`.
+
+After structural code changes: `graphify update .` only. Never full `extract` / `watch` / `cluster-only` / `label` for surgical edits.
+
+Detail: `.cursor/workflows/GRAPHIFY_FIRST.md` and `.cursor/rules/GRAPHIFY.md`.

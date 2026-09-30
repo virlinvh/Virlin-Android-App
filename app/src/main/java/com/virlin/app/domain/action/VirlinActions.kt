@@ -8,6 +8,8 @@ import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.CaptureType
+import com.virlin.app.domain.attention.PriorityPreference
+import com.virlin.app.domain.attention.PriorityScope
 import com.virlin.app.domain.model.WorkStream
 import java.time.Duration
 import java.time.Instant
@@ -30,6 +32,27 @@ interface VirlinActions {
      * in the same transaction.
      */
     suspend fun focusStream(streamId: String): ActionResult<FocusOutcome>
+
+    /**
+     * PHASE 09 — start human focus on an exact WORK ITEM.
+     *
+     * [workItemId] may be a leaf or a container: a container resolves to its first OPEN actionable
+     * leaf in the Phase 08 traversal order (nothing is completed or reopened while resolving).
+     * Rejected when the item (or the resolved leaf) is terminal, when a container has no open leaf,
+     * or when the item is not rooted in a WorkStream. Sets `activeTaskId` and focuses the owning
+     * stream in ONE transaction, so the single-human-Focus invariant still holds and any previously
+     * focused stream is displaced exactly as `focusStream` does.
+     */
+    suspend fun startFocus(workItemId: String): ActionResult<FocusTargetOutcome>
+
+    /**
+     * Resolve what [workItemId] would focus WITHOUT changing anything — used by the switch
+     * confirmation so the UI can name both sides before the user commits.
+     */
+    suspend fun resolveFocusTarget(workItemId: String): ActionResult<FocusTarget>
+
+    /** Focus the next open leaf after the current one ("FOCUS NEXT"); null result = nothing open. */
+    suspend fun focusNext(streamId: String): ActionResult<FocusTargetOutcome?>
 
     /**
      * The human is done for now and hands the work to an external tool/process.
@@ -99,6 +122,51 @@ interface VirlinActions {
      */
     suspend fun deferReturn(streamId: String, returnAt: Instant): ActionResult<WorkStream>
 
+    // ================================================================ External work (Phase 10)
+
+    /**
+     * Delegate work to an external actor: the stream becomes PROCESSING (Working For You) with a
+     * stable actor identity, the instruction it was given, the exact work item it concerns and a
+     * derived `checkAt`. Optional [StartExternalWork.stages] describe the external process; the
+     * first one starts immediately. Stages are tracking metadata, never hierarchy Tasks.
+     */
+    suspend fun startExternalWork(request: StartExternalWork): ActionResult<WorkStream>
+
+    /** Change when to look again without changing anything else (same run, same stage). */
+    suspend fun scheduleExternalCheck(streamId: String, checkAt: Instant): ActionResult<WorkStream>
+
+    /**
+     * CHECK -> "the result is ready": the current stage is completed and the item STAYS human
+     * attention (Needs You) until the user focuses it or defers it. It never completes the
+     * hierarchy Task - external completion is not human completion.
+     */
+    suspend fun markExternalResultReady(streamId: String): ActionResult<WorkStream>
+
+    /** CHECK -> "still running": same run, same stage, new check time, back to Working For You. */
+    suspend fun markExternalStillRunning(streamId: String, checkAt: Instant): ActionResult<WorkStream>
+
+    /** CHECK -> "blocked / needs input": human attention, with the reason preserved. */
+    suspend fun markExternalBlocked(streamId: String, reason: String? = null): ActionResult<WorkStream>
+
+    /** "I will look at the ready result later" - attention deferred, never back to PROCESSING. */
+    suspend fun deferReadyResult(streamId: String, returnAt: Instant): ActionResult<WorkStream>
+
+    /**
+     * FOCUS NOW on an external result: focuses the exact work item when the run has one (so the
+     * Phase 09 switch rules apply unchanged), otherwise the stream itself. Creates no second Task.
+     */
+    suspend fun focusExternalResult(streamId: String): ActionResult<WorkStream>
+
+    /**
+     * START NEXT STAGE: complete the current stage, start the next one in explicit order and go
+     * back to PROCESSING with `checkAt = now + expected` (or [checkAt] when the user overrides).
+     * Rejected with [DomainError.NoNextStage] when the final stage is done.
+     */
+    suspend fun startNextExternalStage(streamId: String, checkAt: Instant? = null): ActionResult<WorkStream>
+
+    /** The stages of one external run, in explicit order. */
+    suspend fun externalStages(streamId: String): List<com.virlin.app.domain.model.ExternalStage>
+
     /** No active processing; resumable when useful. Clears obsolete timers. */
     suspend fun markReady(streamId: String): ActionResult<WorkStream>
 
@@ -120,6 +188,33 @@ interface VirlinActions {
     /** Additive note → NOTE_ADDED history entry. */
     suspend fun addNote(streamId: String, text: String): ActionResult<WorkStream>
 
+    /**
+     * Needs You priority: put [streamId] at 1-based [position] in the current Needs You order and
+     * shift the others automatically (one atomic reorder — the user never renumbers anything).
+     * Out-of-range positions clamp to first / last; the current position is a no-op. Rejected with
+     * [DomainError.NotInNeedsYou] unless the stream is in CHECK. Returns the new Needs You order.
+     * Rule + examples: `NeedsYouOrder`.
+     */
+    suspend fun reorderNeedsYou(streamId: String, position: Int): ActionResult<List<WorkStream>>
+
+    /**
+     * Phase 04 priority editor SAVE: move the item to [position] now AND record what should happen
+     * next time. The move itself is [reorderNeedsYou] — there is no second ordering path.
+     *
+     * `OneTime` clears any stored preference (the move stands, nothing is remembered); the other
+     * scopes store a [PriorityPreference] that re-applies when the item returns to Needs You.
+     */
+    suspend fun setNeedsYouPriority(streamId: String, position: Int, scope: PriorityScope): ActionResult<List<WorkStream>>
+
+    /** The stored durable preference for an item, if any (Phase 07: Room-backed). */
+    suspend fun priorityPreference(streamId: String): PriorityPreference?
+
+    /** Forget an item's saved priority policy ("Remove saved priority"). */
+    suspend fun clearPriorityPreference(streamId: String)
+
+    /** Delete every expired policy; safe to call at start-up. Returns how many were removed. */
+    suspend fun cleanupExpiredPriorityPreferences(): Int
+
     // ================================================================ Structure: Project
 
     suspend fun createProject(request: CreateProject): ActionResult<Project>
@@ -133,6 +228,12 @@ interface VirlinActions {
     suspend fun updateCapture(id: String, update: CaptureUpdate): ActionResult<CaptureItem>
     /** ATTACH: explicit context; the item stays a capture. */
     suspend fun attachCapture(id: String, context: CaptureContext): ActionResult<CaptureItem>
+    /** Re-file several captures atomically, all inside [withinProjectId]. */
+    suspend fun attachCaptures(
+        ids: Set<String>,
+        context: CaptureContext,
+        withinProjectId: String
+    ): ActionResult<List<CaptureItem>>
     suspend fun archiveCapture(id: String): ActionResult<CaptureItem>
     suspend fun restoreCapture(id: String): ActionResult<CaptureItem>
     /** CONVERT: real Task via the structure rules + capture ORGANIZED, atomically; once only. */
@@ -173,7 +274,11 @@ interface VirlinActions {
         blocks: List<com.virlin.app.domain.model.NoteBlock>,
         context: CaptureContext = CaptureContext.None,
         captureId: String? = null,
-        promptId: String? = null
+        promptId: String? = null,
+        sourceText: String = "",
+        mode: com.virlin.app.domain.model.PromptContentMode = com.virlin.app.domain.model.PromptContentMode.PROMPT,
+        language: String? = null,
+        responseText: String? = null
     ): ActionResult<com.virlin.app.domain.model.PromptDocument>
 
     suspend fun savePrompt(
@@ -181,7 +286,11 @@ interface VirlinActions {
         title: String?,
         description: String?,
         tags: List<String>,
-        blocks: List<com.virlin.app.domain.model.NoteBlock>
+        blocks: List<com.virlin.app.domain.model.NoteBlock>,
+        sourceText: String = "",
+        mode: com.virlin.app.domain.model.PromptContentMode = com.virlin.app.domain.model.PromptContentMode.PROMPT,
+        language: String? = null,
+        responseText: String? = null
     ): ActionResult<com.virlin.app.domain.model.PromptDocument>
 
     suspend fun getOrHydratePrompt(captureItemId: String): ActionResult<com.virlin.app.domain.model.PromptDocument>
@@ -283,6 +392,77 @@ interface VirlinActions {
      */
     suspend fun cancelTask(taskId: String): ActionResult<Task>
 
+    /**
+     * Move a top-level task between one of its project's WorkStreams and the project's
+     * standalone list. Same task, same id, same progress contribution — only its association
+     * changes, and its subtree follows it.
+     */
+    suspend fun placeTask(taskId: String, workStreamId: String?): ActionResult<Task>
+
+    /** Re-parent and re-position tasks inside one WorkStream, atomically. */
+    suspend fun moveTasks(
+        taskIds: List<String>,
+        newParentId: String?,
+        afterId: String?,
+        withinStreamId: String
+    ): ActionResult<List<Task>>
+
+    /**
+     * Move or copy a whole branch inside one project. The single structural command behind the
+     * mind map's Move / Copy / Paste; see `domain/structure/HierarchyPlacement.kt`.
+     */
+    suspend fun placeBranch(
+        projectId: String,
+        request: com.virlin.app.domain.structure.Placement
+    ): ActionResult<com.virlin.app.domain.structure.PlacementCommit>
+
+    /** The project's current hierarchy revision, to send back with a [placeBranch]. */
+    suspend fun hierarchyRevision(projectId: String): Long
+
+    /** A separate task beside the original, with its subtree copied under new ids. */
+    suspend fun duplicateTask(taskId: String): ActionResult<Task>
+
+    // ================================================================ Tags and task steps
+
+    /** Project-scoped label. An existing tag with the same folded name is returned, not doubled. */
+    suspend fun createTag(projectId: String, name: String): ActionResult<com.virlin.app.domain.model.ProjectTag>
+    /** Keeps the id, so every item already carrying the tag keeps carrying it. */
+    suspend fun renameTag(tagId: String, name: String): ActionResult<com.virlin.app.domain.model.ProjectTag>
+    /** Reassigns every link, then removes the old tag — one transaction. */
+    suspend fun mergeTags(fromTagId: String, intoTagId: String): ActionResult<com.virlin.app.domain.model.ProjectTag>
+    /** Removes the label only; what it labelled is untouched. */
+    suspend fun deleteTag(tagId: String): ActionResult<String>
+    /** Applies one set of this project's tags across captures and tasks atomically. */
+    suspend fun setTags(
+        projectId: String,
+        tagIds: Set<String>,
+        captureIds: Set<String>,
+        taskIds: Set<String>
+    ): ActionResult<Int>
+
+    suspend fun addStep(taskId: String, text: String): ActionResult<com.virlin.app.domain.model.TaskStep>
+    suspend fun setStepDone(stepId: String, done: Boolean): ActionResult<com.virlin.app.domain.model.TaskStep>
+    suspend fun editStep(stepId: String, text: String): ActionResult<com.virlin.app.domain.model.TaskStep>
+    suspend fun deleteStep(stepId: String): ActionResult<String>
+    suspend fun moveStep(stepId: String, newIndex: Int): ActionResult<List<com.virlin.app.domain.model.TaskStep>>
+    /** Reorder by a stable anchor: put the step in front of [beforeStepId], or last when null. */
+    suspend fun moveStepBefore(stepId: String, beforeStepId: String?): ActionResult<List<com.virlin.app.domain.model.TaskStep>>
+    /** Remove this task's completed steps in one transaction, returning what was removed. */
+    suspend fun clearCompletedSteps(taskId: String): ActionResult<com.virlin.app.domain.model.ClearedSteps>
+    /** Put a cleared set back exactly, or refuse if the list has changed since. */
+    suspend fun restoreSteps(cleared: com.virlin.app.domain.model.ClearedSteps): ActionResult<List<com.virlin.app.domain.model.TaskStep>>
+
+    // ---- The Notes page's own documents (self-contained; see NoteDocActions).
+    /** The Notes-page document filed under [ownerKey], or null when never written. */
+    suspend fun loadNoteDoc(ownerKey: String): com.virlin.app.domain.notedoc.VirlinNoteDoc?
+
+    /** Writes the whole Notes-page document. Idempotent: identical content is not re-written. */
+    suspend fun saveNoteDoc(
+        ownerKey: String,
+        title: String?,
+        blocks: List<com.virlin.app.domain.notedoc.NoteDocBlock>
+    ): ActionResult<com.virlin.app.domain.notedoc.VirlinNoteDoc>
+
     // ================================================================ Structure: Active task
 
     /** Point a WorkStream at the exact Task being worked on. Validated; null clears. */
@@ -340,7 +520,11 @@ data class ProjectUpdate(
     val priority: Field<Priority> = Field.Keep,
     val dueAt: Field<Instant> = Field.Keep,
     val estimatedEffort: Field<Duration> = Field.Keep,
-    val defaultExecutionMode: Field<EffectiveExecutionMode> = Field.Keep
+    val defaultExecutionMode: Field<EffectiveExecutionMode> = Field.Keep,
+    /** Custom icon reference (relative path in the managed store). `Clear` returns to the fallback avatar. */
+    val iconPath: Field<String> = Field.Keep,
+    /** Built-in icon id (`ProjectIconCatalog`). `Clear` → automatic icon. Unknown ids are rejected. */
+    val iconId: Field<String> = Field.Keep
 )
 
 data class CreateWorkStream(
@@ -382,6 +566,23 @@ data class TaskUpdate(
     /** TODO ↔ IN_PROGRESS only; use completeTask to close. */
     val inProgress: Field<Boolean> = Field.Keep,
     val executionPreference: Field<ExecutionPreference> = Field.Keep
+)
+
+/** What a focus request resolves to: the exact leaf, its stream and the currently focused work. */
+data class FocusTarget(
+    val workItem: Task,
+    val workStreamId: String,
+    /** The human work that would be displaced, if any (its stream + active item). */
+    val displacedStreamId: String? = null,
+    val displacedWorkItemId: String? = null
+) {
+    val isSwitch: Boolean get() = displacedStreamId != null
+}
+
+data class FocusTargetOutcome(
+    val target: FocusTarget,
+    val focused: WorkStream,
+    val displaced: WorkStream?
 )
 
 data class FocusOutcome(

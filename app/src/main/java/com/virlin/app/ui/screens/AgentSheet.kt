@@ -108,7 +108,9 @@ private data class EntryMetrics(
     val cardIcon: Dp,
     val cardIconGlyph: Dp,
     val composerBottom: Dp,
-    val composerLabelGap: Dp
+    val composerLabelGap: Dp,
+    /** Breathing space between the Capture card and the "Or just tell me…" composer. */
+    val afterCards: Dp
 ) {
     companion object {
         fun forContentHeight(height: Dp): EntryMetrics = when {
@@ -118,7 +120,7 @@ private data class EntryMetrics(
                 afterOrb = 12.dp, afterIdentity = 6.dp,
                 cardGap = 10.dp, cardPadV = 12.dp, cardPadH = 14.dp,
                 cardIcon = 44.dp, cardIconGlyph = 22.dp,
-                composerBottom = 20.dp, composerLabelGap = 10.dp
+                composerBottom = 20.dp, composerLabelGap = 10.dp, afterCards = 28.dp
             )
             height >= 320.dp -> EntryMetrics(
                 EntryDensity.Compact,
@@ -126,7 +128,7 @@ private data class EntryMetrics(
                 afterOrb = 8.dp, afterIdentity = 4.dp,
                 cardGap = 6.dp, cardPadV = 8.dp, cardPadH = 12.dp,
                 cardIcon = 40.dp, cardIconGlyph = 20.dp,
-                composerBottom = 12.dp, composerLabelGap = 6.dp
+                composerBottom = 12.dp, composerLabelGap = 6.dp, afterCards = 20.dp
             )
             else -> EntryMetrics(
                 EntryDensity.Tight,
@@ -134,7 +136,7 @@ private data class EntryMetrics(
                 afterOrb = 4.dp, afterIdentity = 2.dp,
                 cardGap = 4.dp, cardPadV = 6.dp, cardPadH = 10.dp,
                 cardIcon = 36.dp, cardIconGlyph = 18.dp,
-                composerBottom = 8.dp, composerLabelGap = 4.dp
+                composerBottom = 8.dp, composerLabelGap = 4.dp, afterCards = 12.dp
             )
         }
     }
@@ -217,15 +219,17 @@ fun AgentShell(
     }
 
     val mode = workspace.mode
-    val entry = !workspace.modeChosen
     val interactive = state.isAgentInteractive
     val selectedContext = controlContexts.firstOrNull { it.id == workspace.selectedControlContextId }
     val selectedDestination = destinations.firstOrNull { it.id == workspace.createDestinationId }
     val entryMetricsHolder = remember { mutableStateOf(EntryMetrics.forContentHeight(400.dp)) }
+    val entry = !workspace.modeChosen
 
     Column(
         modifier = modifier
-            .fillMaxSize()
+            // ENTRY is a compact, content-driven launcher: it wraps its height so the sheet
+            // surface itself ends just under the composer. Workspaces still fill their sheet.
+            .then(if (entry) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
             .testTag(AgentShellTestTag)
     ) {
         // =====================================================================
@@ -249,9 +253,12 @@ fun AgentShell(
         if (entryFixedLayout) {
             // ENTRY launcher: measure content height → density → fit Orb/identity/cards with
             // NO vertical scroll. Composer is a sibling below (region 3).
+            // Content-driven: `fill = false` lets the launcher take only the height its content
+            // needs (bounded by the available space), so no flexible gap can open up before the
+            // composer; the inner scroll engages ONLY when the content genuinely cannot fit.
             BoxWithConstraints(
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(1f, fill = false)
                     .fillMaxWidth()
                     .clipToBounds()
                     .padding(horizontal = 20.dp)
@@ -261,7 +268,7 @@ fun AgentShell(
                     entryMetricsHolder.value = metrics
                     onEntryOrbSlotSize(metrics.orbSlot)
                 }
-                Column(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                     Spacer(Modifier.height(metrics.topSpacer))
 
                     Box(modifier = Modifier.fillMaxWidth()) {
@@ -308,7 +315,9 @@ fun AgentShell(
                         metrics = metrics,
                         modifier = Modifier.testTag(AgentEntryCardsTestTag)
                     )
-                    Spacer(Modifier.weight(1f, fill = true))
+                    // Fixed breathing space only — NEVER a weighted spacer: the composer belongs
+                    // to the same interaction cluster as the three cards and follows them directly.
+                    Spacer(Modifier.height(metrics.afterCards))
                 }
             }
         } else {

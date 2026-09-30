@@ -84,6 +84,9 @@ class AgentCaptureUiTest {
     }
     private fun openInboxTab() {
         composeRule.onNodeWithTag(bottomNavItemTag(RootDestination.INBOX)).performClick(); pump(600)
+        // The tab opens the Apps gallery; the capture Inbox is the first app inside it.
+        pump(2000)
+        composeRule.onNodeWithTag(com.virlin.app.ui.apps.appTileTag("inbox")).performClick(); pump(1200)
         tag(InboxScreenTag).assertIsDisplayed()
     }
 

@@ -3,6 +3,7 @@ package com.virlin.app.domain.repository
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.ExternalStage
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
@@ -32,6 +33,22 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     private val _projects = MutableStateFlow<List<Project>>(emptyList())
     private val _tasks = MutableStateFlow<List<Task>>(emptyList())
     private val _captures = MutableStateFlow<List<CaptureItem>>(emptyList())
+    private val _stages = MutableStateFlow<List<ExternalStage>>(emptyList())
+
+    override val stages: StateFlow<List<ExternalStage>> = _stages.asStateFlow()
+    private val _tags = MutableStateFlow<List<com.virlin.app.domain.model.ProjectTag>>(emptyList())
+    override val tags: StateFlow<List<com.virlin.app.domain.model.ProjectTag>> = _tags.asStateFlow()
+    private val _tagLinks = MutableStateFlow<List<com.virlin.app.domain.model.TagLink>>(emptyList())
+    override val tagLinks: StateFlow<List<com.virlin.app.domain.model.TagLink>> = _tagLinks.asStateFlow()
+    private val _taskSteps = MutableStateFlow<List<com.virlin.app.domain.model.TaskStep>>(emptyList())
+    override val taskSteps: StateFlow<List<com.virlin.app.domain.model.TaskStep>> = _taskSteps.asStateFlow()
+    private val _taskPageBlocks = MutableStateFlow<List<com.virlin.app.domain.model.TaskPageBlock>>(emptyList())
+    override val taskPageBlocks: StateFlow<List<com.virlin.app.domain.model.TaskPageBlock>> = _taskPageBlocks.asStateFlow()
+    override suspend fun getTag(id: String) = inner?.getTag(id)
+    override suspend fun getTaskSteps(taskId: String) = inner?.getTaskSteps(taskId) ?: emptyList()
+    override suspend fun getTaskPageBlocks(taskId: String) = inner?.getTaskPageBlocks(taskId) ?: emptyList()
+    override suspend fun getNoteDoc(ownerKey: String) = inner?.getNoteDoc(ownerKey)
+    override suspend fun getStages(workStreamId: String) = inner?.getStages(workStreamId) ?: emptyList()
 
     override val streams: StateFlow<List<WorkStream>> = _streams.asStateFlow()
     override val projects: StateFlow<List<Project>> = _projects.asStateFlow()
@@ -52,11 +69,21 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
             _projects.value = ready.projects.value
             _tasks.value = ready.tasks.value
             _captures.value = ready.captures.value
+            _stages.value = ready.stages.value
+            _tags.value = ready.tags.value
+            _tagLinks.value = ready.tagLinks.value
+            _taskSteps.value = ready.taskSteps.value
+            _taskPageBlocks.value = ready.taskPageBlocks.value
             forwardJobs = listOf(
                 scope.launch { ready.streams.collect { _streams.value = it } },
                 scope.launch { ready.projects.collect { _projects.value = it } },
                 scope.launch { ready.tasks.collect { _tasks.value = it } },
                 scope.launch { ready.captures.collect { _captures.value = it } },
+                scope.launch { ready.stages.collect { _stages.value = it } },
+                scope.launch { ready.tags.collect { _tags.value = it } },
+                scope.launch { ready.tagLinks.collect { _tagLinks.value = it } },
+                scope.launch { ready.taskSteps.collect { _taskSteps.value = it } },
+                scope.launch { ready.taskPageBlocks.collect { _taskPageBlocks.value = it } },
             )
         }
     }
@@ -71,6 +98,8 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
             _projects.value = emptyList()
             _tasks.value = emptyList()
             _captures.value = emptyList()
+            _stages.value = emptyList()
+            _tags.value = emptyList(); _tagLinks.value = emptyList(); _taskSteps.value = emptyList(); _taskPageBlocks.value = emptyList()
         }
     }
 
@@ -85,6 +114,14 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     override suspend fun getAttachmentByCaptureId(captureItemId: String) = inner?.getAttachmentByCaptureId(captureItemId)
     override suspend fun getAttachmentDocument(id: String) = inner?.getAttachmentDocument(id)
     override suspend fun getVoiceByCaptureId(captureItemId: String) = inner?.getVoiceByCaptureId(captureItemId)
+    override suspend fun getNotesByCaptureIds(captureItemIds: List<String>) =
+        inner?.getNotesByCaptureIds(captureItemIds) ?: emptyMap()
+    override suspend fun getPromptsByCaptureIds(captureItemIds: List<String>) =
+        inner?.getPromptsByCaptureIds(captureItemIds) ?: emptyMap()
+    override suspend fun getAttachmentsByCaptureIds(captureItemIds: List<String>) =
+        inner?.getAttachmentsByCaptureIds(captureItemIds) ?: emptyMap()
+    override suspend fun getVoicesByCaptureIds(captureItemIds: List<String>) =
+        inner?.getVoicesByCaptureIds(captureItemIds) ?: emptyMap()
     override suspend fun getVoiceDocument(id: String) = inner?.getVoiceDocument(id)
 
     override suspend fun getStream(id: String) = inner?.getStream(id)
@@ -93,7 +130,11 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     override suspend fun getCurrentCycle(streamId: String) = inner?.getCurrentCycle(streamId)
     override suspend fun getLatestSnapshot(streamId: String) = inner?.getLatestSnapshot(streamId)
     override suspend fun getEvents(streamId: String) = inner?.getEvents(streamId) ?: emptyList()
+    override suspend fun getEventsForStreams(streamIds: List<String>, limit: Int, offset: Int) =
+        inner?.getEventsForStreams(streamIds, limit, offset) ?: emptyList()
     override suspend fun getFocusSessions(streamId: String) = inner?.getFocusSessions(streamId) ?: emptyList()
+    override suspend fun allFocusSessions() = inner?.allFocusSessions() ?: emptyList()
+    override suspend fun allCycles() = inner?.allCycles() ?: emptyList()
     override suspend fun getCycles(streamId: String) = inner?.getCycles(streamId) ?: emptyList()
 
     override suspend fun getProject(id: String) = inner?.getProject(id)

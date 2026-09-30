@@ -7,6 +7,10 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.virlin.app.data.db.CaptureEntity
+import com.virlin.app.data.db.ExternalStageEntity
+import com.virlin.app.data.db.ProjectTagEntity
+import com.virlin.app.data.db.TagLinkEntity
+import com.virlin.app.data.db.TaskStepEntity
 import com.virlin.app.data.db.VirlinDatabase
 import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.CaptureType
@@ -219,6 +223,65 @@ class VirlinMigrationTest {
         }
     }
 
+    @Test fun migrate8To9_addsIconId_preservesCustomIconPath() {
+        helper.createDatabase(dbName, 8).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt,iconPath) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL,'p1/icon-1.png')")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 9, true, VirlinDatabase.MIGRATION_8_9).close()
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                val p = db.projects().byId("p1")!!
+                assertEquals("p1/icon-1.png", p.iconPath)                       // O: custom icon survives
+                assertEquals(null, p.iconId)                                    // automatic until chosen
+                db.projects().upsert(p.copy(iconId = "rocket"))
+                assertEquals("rocket", db.projects().byId("p1")!!.iconId)       // C: reload reads it back
+            }
+        } finally { db.close() }
+    }
+
+    @Test fun migrate9To10_addsAttentionRank_preservesWorkStreams() {
+        helper.createDatabase(dbName, 9).apply {
+            execSQL("INSERT INTO workstreams (id,title,projectId,tool,executionPreference,state,priority,pinned,lastHumanAction,waitingFor,nextHumanAction,blockerReason,processingStartedAt,checkAt,snoozedUntil,snoozeReason,currentCycleId,cycleCount,activeTaskId,createdAt,updatedAt,completedAt) " +
+                "VALUES ('s3','Claude · Virlin',NULL,'Claude','EXTERNAL','CHECK','NORMAL',0,NULL,'route decision',NULL,NULL,$t0,${t0 + 600_000},NULL,NULL,NULL,1,NULL,$t0,$t0,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 10, true, VirlinDatabase.MIGRATION_9_10).close()
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                val s = db.workStreams().byId("s3")!!
+                assertEquals("CHECK", s.state); assertEquals(t0 + 600_000, s.checkAt!!.toEpochMilli())   // existing row intact
+                assertEquals(null, s.attentionRank)                                                       // H: unranked → waiting-time order
+                db.workStreams().upsert(s.copy(attentionRank = 1))
+                assertEquals(1, db.workStreams().byId("s3")!!.attentionRank)                              // reload reads it back
+            }
+        } finally { db.close() }
+    }
+
+    @Test fun migrate7To8_addsProjectIconPath_preservesProjects() {
+        helper.createDatabase(dbName, 7).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 8, true, VirlinDatabase.MIGRATION_7_8).close()
+
+        val db = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                val p = db.projects().byId("p1")!!
+                assertEquals("Virlin Android App", p.title)
+                assertEquals(null, p.iconPath)                                   // existing rows: no custom icon
+                db.projects().upsert(p.copy(iconPath = "p1/icon-1.png"))
+                assertEquals("p1/icon-1.png", db.projects().byId("p1")!!.iconPath)
+            }
+        } finally { db.close() }
+    }
+
     @Test fun migrate6To7_addsVoiceDocuments_preservesAttachments() {
         helper.createDatabase(dbName, 6).apply {
             execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',$t0,$t0,NULL)")
@@ -253,7 +316,223 @@ class VirlinMigrationTest {
         }
     }
 
-    @Test fun freshInstall_isV7_andNoMigrationNeeded() {
+    /**
+     * v11 -> v12 (Phase 10, external work). Purely additive: the actor column and the stage table
+     * appear, and every existing project / stream / task / check time / rank survives untouched.
+     */
+    @Test fun migrate11To12_addsExternalActorAndStages_preservesEverythingElse() {
+        helper.createDatabase(dbName, 11).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,iconPath,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',NULL,$t0,$t0,NULL)")
+            execSQL(
+                "INSERT INTO workstreams (id,title,projectId,tool,executionPreference,state,priority,pinned,lastHumanAction,waitingFor," +
+                    "nextHumanAction,blockerReason,processingStartedAt,checkAt,snoozedUntil,snoozeReason,currentCycleId,cycleCount," +
+                    "activeTaskId,createdAt,updatedAt,completedAt,attentionRank) VALUES (" +
+                    "'s3','Route structure','p1','Claude','EXTERNAL','CHECK','NORMAL',0,NULL,'Claude run',NULL,NULL,$t0," +
+                    (t0 + 600_000).toString() + ",NULL,NULL,NULL,0,'t1',$t0,$t0,NULL,2)"
+            )
+            execSQL("INSERT INTO priority_preferences (streamId,preferredPosition,scopeType,createdAt,expiresAt) VALUES ('s3',2,'ALWAYS',$t0,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 12, true, VirlinDatabase.MIGRATION_11_12).close()
+
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName).addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                val s = db.workStreams().byId("s3")!!
+                assertEquals("CHECK", s.state)
+                assertEquals(t0 + 600_000, s.checkAt!!.toEpochMilli())          // check time intact
+                assertEquals(2, s.attentionRank)                                 // canonical rank intact
+                assertEquals("Claude", s.tool)
+                assertEquals("t1", s.activeTaskId)
+                assertEquals(null, s.externalActorId)                            // existing rows: no stored actor id
+                assertEquals(1, db.priorityPreferences().all().size)             // Phase 07 policies intact
+                // The new table exists and is usable, and stages are ordered explicitly.
+                assertTrue(db.externalStages().byStream("s3").isEmpty())
+                db.externalStages().upsert(
+                    ExternalStageEntity("stg1", "s3", "Implement fix", 0, 8, "IN_PROGRESS", Instant.ofEpochMilli(t0), null)
+                )
+                db.workStreams().upsert(s.copy(externalActorId = "claude_code"))
+                assertEquals("claude_code", db.workStreams().byId("s3")!!.externalActorId)
+                assertEquals("Implement fix", db.externalStages().byStream("s3").single().title)
+            }
+        } finally { db.close(); ctx.deleteDatabase(dbName) }
+    }
+
+    @Test fun migrate12To13_addsTagsAndTaskSteps_preservesEverythingElse() {
+        helper.createDatabase(dbName, 12).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,iconPath,createdAt,updatedAt,completedAt) VALUES ('p1','Virlin Android App','d','ACTIVE','HIGH',NULL,144000000,'HUMAN',NULL,$t0,$t0,NULL)")
+            execSQL("INSERT INTO captures (id,type,content,title,sourceUrl,projectId,workStreamId,taskId,status,convertedTaskId,createdAt,updatedAt,archivedAt) VALUES ('c1','NOTE','body','Note',NULL,'p1',NULL,NULL,'INBOX',NULL,$t0,$t0,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 13, true, VirlinDatabase.MIGRATION_12_13).close()
+
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName).addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                // Nothing that was already saved is disturbed by an additive migration.
+                assertEquals("Note", db.captures().byId("c1")!!.title)
+                assertTrue(db.projectTags().all().isEmpty())
+
+                val now = Instant.ofEpochMilli(t0)
+                db.projectTags().upsert(ProjectTagEntity("tag1", "p1", "Release", "release", now, now))
+                db.tagLinks().upsert(TagLinkEntity("tag1", "CAPTURE", "c1", now))
+                db.taskSteps().upsert(TaskStepEntity("st1", "t1", "Freeze the branch", false, 0, now, now))
+
+                assertEquals("Release", db.projectTags().byProject("p1").single().name)
+                assertEquals("c1", db.tagLinks().byTarget("CAPTURE", "c1").single().targetId)
+                assertEquals("Freeze the branch", db.taskSteps().byTask("t1").single().text)
+
+                // Removing a tag removes its links and nothing else.
+                db.tagLinks().deleteByTag("tag1"); db.projectTags().delete("tag1")
+                assertTrue(db.tagLinks().all().isEmpty())
+                assertEquals("Note", db.captures().byId("c1")!!.title)
+            }
+        } finally { db.close(); ctx.deleteDatabase(dbName) }
+    }
+
+    /**
+     * v13 -> v14 (persisted workstream order).
+     *
+     * Additive: one NOT NULL column with a default, then a backfill. The backfill reproduces the
+     * order the mind map already drew - alphabetical by title within each project - so the map
+     * looks the same after the upgrade as it did before it, and the column can then be reordered.
+     * Streams in different projects are numbered independently, each group starting at zero.
+     */
+    @Test fun migrate13To14_addsWorkstreamOrder_backfillsTheOrderTheMapAlreadyShowed() {
+        fun stream(id: String, title: String, project: String?) =
+            "INSERT INTO workstreams (id,title,projectId,tool,executionPreference,state,priority,pinned," +
+                "lastHumanAction,waitingFor,nextHumanAction,blockerReason,processingStartedAt,checkAt," +
+                "snoozedUntil,snoozeReason,currentCycleId,cycleCount,activeTaskId,createdAt,updatedAt," +
+                "completedAt,attentionRank,externalActorId) VALUES ('$id','$title'," +
+                (project?.let { "'$it'" } ?: "NULL") +
+                ",NULL,'HUMAN','READY','NORMAL',0,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,0,NULL," +
+                "$t0,$t0,NULL,NULL,NULL)"
+
+        helper.createDatabase(dbName, 13).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,iconPath,createdAt,updatedAt,completedAt) VALUES ('p1','Main','d','ACTIVE','HIGH',NULL,NULL,'HUMAN',NULL,$t0,$t0,NULL)")
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,iconPath,createdAt,updatedAt,completedAt) VALUES ('p2','Other','d','ACTIVE','HIGH',NULL,NULL,'HUMAN',NULL,$t0,$t0,NULL)")
+            // Deliberately inserted out of alphabetical order, so a backfill that merely kept
+            // insertion order would be caught.
+            execSQL(stream("s3", "Zebra", "p1"))
+            execSQL(stream("s1", "alpha", "p1"))       // lower-case: the sort is case-insensitive
+            execSQL(stream("s2", "Mango", "p1"))
+            execSQL(stream("s9", "Solo", "p2"))
+            execSQL(stream("s8", "Loose", null))       // no project: its own group
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 14, true, VirlinDatabase.MIGRATION_13_14).close()
+
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName).addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                // Contiguous from zero, in the alphabetical sequence the map used to draw.
+                assertEquals(listOf("s1", "s2", "s3"), db.workStreams().byProject("p1").map { it.id })
+                assertEquals(listOf(0, 1, 2), db.workStreams().byProject("p1").map { it.sortOrder })
+                // Every other project numbers from zero independently.
+                assertEquals(0, db.workStreams().byId("s9")!!.sortOrder)
+                assertEquals(0, db.workStreams().byId("s8")!!.sortOrder)
+                // Nothing else about the rows was disturbed.
+                assertEquals("Zebra", db.workStreams().byId("s3")!!.title)
+                assertEquals("READY", db.workStreams().byId("s1")!!.state)
+
+                // The column is writable, and the DAO reads the new order back.
+                val mango = db.workStreams().byId("s2")!!
+                db.workStreams().upsert(mango.copy(sortOrder = 0))
+                db.workStreams().upsert(db.workStreams().byId("s1")!!.copy(sortOrder = 1))
+                assertEquals(listOf("s2", "s1", "s3"), db.workStreams().byProject("p1").map { it.id })
+            }
+        } finally { db.close(); ctx.deleteDatabase(dbName) }
+    }
+
+    /**
+     * v15 -> v16: the Notes page gets its own `virlin_notes` table and the unused v15
+     * `task_note_documents` table is dropped. Everything a user could have created must survive.
+     */
+    @Test fun migrate15To16_addsVirlinNotes_dropsUnusedTaskNoteDocuments_andKeepsUserData() {
+        val dbName = "virlin-migration-15-16.db"
+        val t0 = 1_700_000_000_000L
+        helper.createDatabase(dbName, 15).apply {
+            execSQL("INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort,defaultExecutionMode,iconPath,createdAt,updatedAt,completedAt) VALUES ('p1','Keep','d','ACTIVE','HIGH',NULL,NULL,'HUMAN',NULL,$t0,$t0,NULL)")
+            execSQL("INSERT INTO captures (id,type,content,title,sourceUrl,projectId,workStreamId,taskId,status,convertedTaskId,createdAt,updatedAt,archivedAt) VALUES ('c1','NOTE','keep me',NULL,NULL,NULL,NULL,NULL,'INBOX',NULL,$t0,$t0,NULL)")
+            // A row in the table being dropped. Production never wrote one, but if a build did,
+            // the migration must still succeed rather than fail the whole upgrade.
+            execSQL("INSERT INTO task_note_documents (taskId,id,title,documentJson,importedLegacyNotes,createdAt,updatedAt) VALUES ('t1','n1',NULL,'{}',0,$t0,$t0)")
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 16, true, VirlinDatabase.MIGRATION_15_16).close()
+
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName).addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                // The user's own data is untouched by the upgrade.
+                assertEquals("Keep", db.projects().byId("p1")!!.title)
+                assertEquals(1, db.captures().count())
+                assertEquals("keep me", db.captures().byId("c1")!!.content)
+
+                // The new table exists, is empty, and round-trips a document.
+                assertEquals(0, db.virlinNotes().count())
+                val doc = com.virlin.app.domain.notedoc.VirlinNoteDoc(
+                    ownerKey = "owner-1",
+                    title = "Title",
+                    blocks = listOf(
+                        com.virlin.app.domain.notedoc.NoteDocBlock(
+                            id = "b1",
+                            type = com.virlin.app.domain.notedoc.NoteDocBlockType.HEADING_1,
+                            text = "Heading",
+                            runs = listOf(
+                                com.virlin.app.domain.notedoc.NoteDocRun(
+                                    0, 7,
+                                    setOf(com.virlin.app.domain.notedoc.NoteDocMark.BOLD)
+                                )
+                            ),
+                        )
+                    ),
+                    createdAt = java.time.Instant.ofEpochMilli(t0),
+                    updatedAt = java.time.Instant.ofEpochMilli(t0),
+                    revision = 1,
+                )
+                with(com.virlin.app.data.db.VirlinMappers) { db.virlinNotes().upsert(doc.toEntity()) }
+                val back = with(com.virlin.app.data.db.VirlinMappers) {
+                    db.virlinNotes().byOwner("owner-1")!!.toDomain()
+                }
+                assertEquals(doc, back)
+
+                // One document per owner: a second save replaces rather than duplicates.
+                with(com.virlin.app.data.db.VirlinMappers) {
+                    db.virlinNotes().upsert(doc.copy(title = "Renamed", revision = 2).toEntity())
+                }
+                assertEquals(1, db.virlinNotes().count())
+                assertEquals("Renamed", db.virlinNotes().byOwner("owner-1")!!.title)
+            }
+            // The dropped table is really gone.
+            val c = db.openHelper.readableDatabase.query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='task_note_documents'"
+            )
+            c.use { assertEquals(0, it.count) }
+        } finally { db.close(); ctx.deleteDatabase(dbName) }
+    }
+
+    @Test fun migrate16To17_addsOrderedTaskPageBlocks_withoutChangingContent() {
+        val dbName = "virlin-migration-16-17.db"
+        helper.createDatabase(dbName, 16).close()
+        helper.runMigrationsAndValidate(dbName, 17, true, VirlinDatabase.MIGRATION_16_17).close()
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName).addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                assertEquals(0, db.taskPageBlocks().all().size)
+                val now = java.time.Instant.ofEpochMilli(1_700_000_000_000L)
+                db.taskPageBlocks().upsert(com.virlin.app.data.db.TaskPageBlockEntity("b1", "t1", "capture.link", "c1", 0, now, now))
+                assertEquals("capture.link", db.taskPageBlocks().byTask("t1").single().typeKey)
+            }
+        } finally { db.close(); ctx.deleteDatabase(dbName) }
+    }
+
+    @Test fun freshInstall_isV17_andNoMigrationNeeded() {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         ctx.deleteDatabase("virlin-fresh-test.db")
         val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, "virlin-fresh-test.db").addMigrations(*VirlinDatabase.MIGRATIONS).build()
@@ -264,8 +543,10 @@ class VirlinMigrationTest {
                 assertEquals(0, db.promptDocuments().count())
                 assertEquals(0, db.attachmentDocuments().count())
                 assertEquals(0, db.voiceDocuments().count())
+                assertEquals(0, db.virlinNotes().count())
+                assertEquals(0, db.taskPageBlocks().all().size)
             }
-            assertEquals(7, db.openHelper.readableDatabase.version)
+            assertEquals(17, db.openHelper.readableDatabase.version)
         } finally { db.close(); ctx.deleteDatabase("virlin-fresh-test.db") }
     }
 }

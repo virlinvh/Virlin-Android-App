@@ -1,0 +1,8 @@
+---
+description: Virlin skill routing — open original .claude skills, never duplicate
+alwaysApply: false
+---
+
+# Skills
+
+Map tasks via `.cursor/SKILL_MAP.md`. Read `.claude/skills/<name>/SKILL.md` only. Never copy or edit those skills for Cursor. Usually one skill; two only when domains truly overlap.

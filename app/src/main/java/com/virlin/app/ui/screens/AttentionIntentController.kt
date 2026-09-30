@@ -79,10 +79,17 @@ class AttentionIntentController(
     override fun resultReadyLater(streamId: String, minutes: Long) { dismissChooser(); run(streamId, { t -> "$t result ready · remind in ${minutes}m" }) { actions.resultReadyLater(streamId, at(minutes)) } }
     override fun deferReturn(streamId: String, minutes: Long) { dismissChooser(); run(streamId, { t -> "$t · back in ${minutes}m" }) { actions.deferReturn(streamId, at(minutes)) } }
     override fun block(streamId: String) { dismissChooser(); run(streamId, { t -> "$t blocked" }) { actions.blockStream(streamId) } }
+    /** "Not now": keep the item, stop asking — the existing READY transition, nothing new. */
+    fun markReady(streamId: String) { dismissChooser(); run(streamId, { t -> "$t is ready when you are" }) { actions.markReady(streamId) } }
     fun focus(streamId: String) = run(streamId, { t -> "Focused $t" }) { actions.focusStream(streamId) }
     fun checkDue(streamId: String) = run(streamId, { null }) { actions.checkDue(streamId) }
     fun continueProcessing(streamId: String, minutes: Long) = run(streamId, { t -> "$t · check in ${minutes}m" }) { actions.continueProcessing(streamId, at(minutes)) }
     fun completeStream(streamId: String) = run(streamId, { t -> "$t completed" }) { actions.completeStream(streamId) }
+    /** Needs You queue position (Phase 1 `reorderNeedsYou`): ordering only — never timers, urgency or `updatedAt`. */
+    fun reorderNeedsYou(streamId: String, position: Int) = run(streamId, { t -> "$t → #$position" }) { actions.reorderNeedsYou(streamId, position) }
+    /** Priority editor SAVE: the same Phase 03 move, plus the typed preference for later occurrences. */
+    fun setNeedsYouPriority(streamId: String, position: Int, scope: com.virlin.app.domain.attention.PriorityScope) =
+        run(streamId, { t -> "$t → #$position" }) { actions.setNeedsYouPriority(streamId, position, scope) }
 
     override fun customMinutes(streamId: String, intent: TimedIntent, minutes: Long): Boolean {
         if (minutes <= 0) return false
@@ -106,9 +113,34 @@ class AttentionIntentController(
             val active = stream?.activeTaskId
             if (active != null) {
                 val taskTitle = repository.getTask(active)?.title ?: "Task"
-                run(streamId, { "$taskTitle completed" }) { actions.completeTask(active) }
+                // Completion is AWAITED here: asking for the next candidate before the write lands
+                // would offer the item that was just completed, and FOCUS NEXT would be rejected.
+                val completed = actions.completeTask(active)
+                report(title(streamId), completed) { "$taskTitle completed" }
+                if (completed is ActionResult.Success) {
+                    // Phase 09: offer what is next — FOCUS NEXT requires intent, it never auto-starts.
+                    val next = (actions.nextTaskCandidate(streamId) as? ActionResult.Success)?.value
+                    _completedFocus.value = CompletedFocus(streamId, taskTitle, next?.id, next?.title)
+                }
             } else _pendingWorkStreamCompletion.value = streamId
         }
+    }
+
+    /** What was just completed while focusing, and the next candidate (if any). Transient UI state. */
+    data class CompletedFocus(val streamId: String, val completedTitle: String, val nextTaskId: String?, val nextTitle: String?)
+
+    private val _completedFocus = MutableStateFlow<CompletedFocus?>(null)
+    val completedFocus: StateFlow<CompletedFocus?> = _completedFocus.asStateFlow()
+
+    /** "DONE FOR NOW": dismiss the continuation; nothing is focused and nothing is scheduled. */
+    fun dismissCompletedFocus() { _completedFocus.value = null }
+
+    /** "FOCUS NEXT": explicitly start the offered next leaf. */
+    fun focusNextAfterCompletion() {
+        val done = _completedFocus.value ?: return
+        _completedFocus.value = null
+        val next = done.nextTaskId ?: return
+        run(done.streamId, { "Focused ${done.nextTitle}" }) { actions.startFocus(next) }
     }
     fun confirmCompleteWorkStream() {
         val id = _pendingWorkStreamCompletion.value ?: return

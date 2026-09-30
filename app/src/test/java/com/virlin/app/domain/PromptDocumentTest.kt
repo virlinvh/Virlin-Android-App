@@ -5,8 +5,11 @@ import com.virlin.app.domain.action.DefaultVirlinActions
 import com.virlin.app.domain.model.NoteBlock
 import com.virlin.app.domain.model.NoteBlockType
 import com.virlin.app.domain.model.PromptDocument
+import com.virlin.app.domain.model.PromptContentMode
 import com.virlin.app.domain.note.NoteClipboardImporter
 import com.virlin.app.domain.prompt.PromptDocumentCodec
+import com.virlin.app.domain.prompt.PromptContentParser
+import com.virlin.app.domain.prompt.ResponseSegment
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
 import com.virlin.app.ui.prompt.PromptEditorViewModel
 import kotlinx.coroutines.Dispatchers
@@ -101,5 +104,63 @@ class PromptDocumentTest {
             createdAt = clock.now(), updatedAt = clock.now()
         )
         assertFalse(doc.hasMeaningfulContent())
+    }
+
+    @Test fun versionedPayload_roundTripsExactSourceModeLanguageAndResponse() {
+        val source = "  Keep leading spaces\r\n\tand exact line endings  "
+        val response = "Explanation\n\n```kotlin\nval answer = 42\n```\n\nDone."
+        val original = PromptDocument(
+            id = "p", captureItemId = "c", title = "Exact",
+            blocks = listOf(NoteBlock("1", NoteBlockType.TEXT, plainText = source)),
+            sourceText = source, mode = PromptContentMode.CODE, language = "Kotlin",
+            responseText = response, createdAt = clock.now(), updatedAt = clock.now()
+        )
+        val payload = PromptDocumentCodec.encodeDocument(original)
+        val decoded = PromptDocumentCodec.decodeInto(
+            PromptDocumentCodec.Meta("p", "c", "Exact", null, "[]", clock.now(), clock.now()),
+            payload
+        )
+        assertEquals(source, decoded.sourceText)
+        assertEquals(PromptContentMode.CODE, decoded.mode)
+        assertEquals("Kotlin", decoded.language)
+        assertEquals(response, decoded.responseText)
+        assertEquals(source, PromptDocumentCodec.plainText(decoded))
+    }
+
+    @Test fun responseParser_separatesProseAndEveryFencedCodeBlock_withoutChangingSource() {
+        val raw = "Before\n```kotlin\nval x = 1\n```\nMiddle\n```sql\nSELECT 1;\n```\nAfter"
+        val segments = PromptContentParser.responseSegments(raw)
+        assertEquals(5, segments.size)
+        assertEquals("Before", (segments[0] as ResponseSegment.Prose).text)
+        assertEquals("Kotlin", (segments[1] as ResponseSegment.Code).language)
+        assertEquals("val x = 1", (segments[1] as ResponseSegment.Code).text)
+        assertEquals("SQL", (segments[3] as ResponseSegment.Code).language)
+    }
+
+    @Test fun languageDetection_isDeterministicAndConservative() {
+        assertEquals("Kotlin", PromptContentParser.detectLanguage("fun main() { val x = 1 }"))
+        assertEquals("Python", PromptContentParser.detectLanguage("def main():\n    print('ok')"))
+        assertEquals("SQL", PromptContentParser.detectLanguage("SELECT * FROM tasks"))
+        assertEquals("Plain text", PromptContentParser.detectLanguage("Please summarize this chapter."))
+    }
+
+    @Test fun viewModel_modeResponseAndExactCopy_survivePersistence() = runTest {
+        val repo = InMemoryWorkStreamRepository()
+        val actions = DefaultVirlinActions(repo, clock, ids)
+        val vm = PromptEditorViewModel(null, actions, repo, ids, clock)
+        val source = "  fun main() {\n    println(\"Hi\")\n  }  "
+        val response = "Use this:\n```kotlin\nprintln(\"Hi\")\n```"
+        vm.onSourceTextChange(source)
+        vm.setMode(PromptContentMode.CODE)
+        vm.setLanguage("Kotlin")
+        vm.onResponseTextChange(response)
+        vm.saveToInbox()
+        val captureId = vm.state.value.captureId!!
+        val loaded = actions.getPromptByCaptureId(captureId)!!
+        assertEquals(source, loaded.sourceText)
+        assertEquals(source, vm.copyPromptPlainText())
+        assertEquals(PromptContentMode.CODE, loaded.mode)
+        assertEquals("Kotlin", loaded.language)
+        assertEquals(response, loaded.responseText)
     }
 }

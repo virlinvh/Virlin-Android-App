@@ -6,6 +6,7 @@ import com.virlin.app.data.db.VirlinMappers.toEntity
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.ExternalStage
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
@@ -38,7 +39,12 @@ class RoomWorkStreamRepository private constructor(
     initialStreams: List<WorkStream>,
     initialProjects: List<Project>,
     initialTasks: List<Task>,
-    initialCaptures: List<CaptureItem>
+    initialCaptures: List<CaptureItem>,
+    initialStages: List<ExternalStage>,
+    initialTags: List<com.virlin.app.domain.model.ProjectTag>,
+    initialLinks: List<com.virlin.app.domain.model.TagLink>,
+    initialSteps: List<com.virlin.app.domain.model.TaskStep>,
+    initialPageBlocks: List<com.virlin.app.domain.model.TaskPageBlock>
 ) : WorkStreamRepository {
 
     private val lock = Mutex()
@@ -51,6 +57,22 @@ class RoomWorkStreamRepository private constructor(
     override val tasks: StateFlow<List<Task>> = _tasks.asStateFlow()
     private val _captures = MutableStateFlow(initialCaptures)
     override val captures: StateFlow<List<CaptureItem>> = _captures.asStateFlow()
+    private val _stages = MutableStateFlow(initialStages)
+    override val stages: StateFlow<List<ExternalStage>> = _stages.asStateFlow()
+    private val _tags = MutableStateFlow(initialTags)
+    override val tags: StateFlow<List<com.virlin.app.domain.model.ProjectTag>> = _tags.asStateFlow()
+    private val _tagLinks = MutableStateFlow(initialLinks)
+    override val tagLinks: StateFlow<List<com.virlin.app.domain.model.TagLink>> = _tagLinks.asStateFlow()
+    private val _taskSteps = MutableStateFlow(initialSteps)
+    override val taskSteps: StateFlow<List<com.virlin.app.domain.model.TaskStep>> = _taskSteps.asStateFlow()
+    private val _taskPageBlocks = MutableStateFlow(initialPageBlocks)
+    override val taskPageBlocks: StateFlow<List<com.virlin.app.domain.model.TaskPageBlock>> = _taskPageBlocks.asStateFlow()
+    override suspend fun getTag(id: String) = db.projectTags().byId(id)?.toDomain()
+    override suspend fun getTaskSteps(taskId: String) = db.taskSteps().byTask(taskId).map { it.toDomain() }
+    override suspend fun getTaskPageBlocks(taskId: String) = db.taskPageBlocks().byTask(taskId).map { it.toDomain() }
+
+    override suspend fun getNoteDoc(ownerKey: String) = db.virlinNotes().byOwner(ownerKey)?.toDomain()
+    override suspend fun getStages(workStreamId: String) = db.externalStages().byStream(workStreamId).map { it.toDomain() }
     override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()
     override suspend fun getNoteByCaptureId(captureItemId: String) =
         db.noteDocuments().byCaptureId(captureItemId)?.toDomain()
@@ -65,12 +87,30 @@ class RoomWorkStreamRepository private constructor(
         db.voiceDocuments().byCaptureId(captureItemId)?.toDomain()
     override suspend fun getVoiceDocument(id: String) = db.voiceDocuments().byId(id)?.toDomain()
 
+    override suspend fun getNotesByCaptureIds(captureItemIds: List<String>) =
+        if (captureItemIds.isEmpty()) emptyMap()
+        else db.noteDocuments().byCaptureIds(captureItemIds).associate { it.captureItemId to it.toDomain() }
+    override suspend fun getPromptsByCaptureIds(captureItemIds: List<String>) =
+        if (captureItemIds.isEmpty()) emptyMap()
+        else db.promptDocuments().byCaptureIds(captureItemIds).associate { it.captureItemId to it.toDomain() }
+    override suspend fun getAttachmentsByCaptureIds(captureItemIds: List<String>) =
+        if (captureItemIds.isEmpty()) emptyMap()
+        else db.attachmentDocuments().byCaptureIds(captureItemIds).associate { it.captureItemId to it.toDomain() }
+    override suspend fun getVoicesByCaptureIds(captureItemIds: List<String>) =
+        if (captureItemIds.isEmpty()) emptyMap()
+        else db.voiceDocuments().byCaptureIds(captureItemIds).associate { it.captureItemId to it.toDomain() }
+
     override suspend fun getStream(id: String) = db.workStreams().byId(id)?.toDomain()
     override suspend fun getActiveFocus() = db.workStreams().activeFocus()?.toDomain()
     override suspend fun getOpenFocusSession(streamId: String) = db.focusSessions().open(streamId)?.toDomain()
     override suspend fun getCurrentCycle(streamId: String) = db.cycles().current(streamId)?.toDomain()
     override suspend fun getLatestSnapshot(streamId: String) = db.snapshots().latest(streamId)?.toDomain()
     override suspend fun getEvents(streamId: String) = db.events().byWorkStream(streamId).map { it.toDomain() }
+    override suspend fun getEventsForStreams(streamIds: List<String>, limit: Int, offset: Int) =
+        if (streamIds.isEmpty()) emptyList()
+        else db.events().byWorkStreams(streamIds, limit, offset).map { it.toDomain() }
+    override suspend fun allFocusSessions() = db.focusSessions().all().map { it.toDomain() }
+    override suspend fun allCycles() = db.cycles().all().map { it.toDomain() }
     override suspend fun getFocusSessions(streamId: String) = db.focusSessions().byWorkStream(streamId).map { it.toDomain() }
     override suspend fun getCycles(streamId: String) = db.cycles().byWorkStream(streamId).map { it.toDomain() }
 
@@ -93,13 +133,61 @@ class RoomWorkStreamRepository private constructor(
         if (writer.touchedStreams) _streams.value = db.workStreams().all().map { it.toDomain() }
         if (writer.touchedProjects) _projects.value = db.projects().all().map { it.toDomain() }
         if (writer.touchedTasks) _tasks.value = db.tasks().all().map { it.toDomain() }
+        if (writer.touchedStages) _stages.value = db.externalStages().all().map { it.toDomain() }
         if (writer.touchedCaptures) _captures.value = db.captures().all().map { it.toDomain() }.newestFirst()
+        if (writer.touchedTags) _tags.value = db.projectTags().all().map { it.toDomain() }
+        if (writer.touchedLinks) _tagLinks.value = db.tagLinks().all().map { it.toDomain() }
+        if (writer.touchedSteps) _taskSteps.value = db.taskSteps().all().map { it.toDomain() }
+        if (writer.touchedPageBlocks) _taskPageBlocks.value = db.taskPageBlocks().all().map { it.toDomain() }
         result
     }
 
     /** Reads inside the transaction see the transaction's own writes — Room guarantees that. */
     private inner class Writer : WorkStreamWriter {
-        var touchedStreams = false; var touchedProjects = false; var touchedTasks = false; var touchedCaptures = false
+        var touchedStreams = false; var touchedProjects = false; var touchedTasks = false; var touchedCaptures = false; var touchedStages = false
+        var touchedTags = false; var touchedLinks = false; var touchedSteps = false; var touchedPageBlocks = false
+
+        override suspend fun allTags() = db.projectTags().all().map { it.toDomain() }
+        override suspend fun getTag(id: String) = db.projectTags().byId(id)?.toDomain()
+        override suspend fun saveTag(tag: com.virlin.app.domain.model.ProjectTag) {
+            db.projectTags().upsert(tag.toEntity()); touchedTags = true
+        }
+        override suspend fun deleteTag(id: String) {
+            // Deleting a tag removes its links; nothing it labelled is deleted with it.
+            db.tagLinks().deleteByTag(id); db.projectTags().delete(id)
+            touchedTags = true; touchedLinks = true
+        }
+        override suspend fun linksOf(
+            targetType: com.virlin.app.domain.model.TagTargetType, targetId: String
+        ) = db.tagLinks().byTarget(targetType.name, targetId).map { it.toDomain() }
+        override suspend fun allLinks() = db.tagLinks().all().map { it.toDomain() }
+        override suspend fun saveLink(link: com.virlin.app.domain.model.TagLink) {
+            db.tagLinks().upsert(link.toEntity()); touchedLinks = true
+        }
+        override suspend fun deleteLink(
+            tagId: String, targetType: com.virlin.app.domain.model.TagTargetType, targetId: String
+        ) { db.tagLinks().delete(tagId, targetType.name, targetId); touchedLinks = true }
+        override suspend fun reassignLinks(fromTagId: String, intoTagId: String) {
+            db.tagLinks().reassign(fromTagId, intoTagId); touchedLinks = true
+        }
+        override suspend fun stepsOf(taskId: String) = db.taskSteps().byTask(taskId).map { it.toDomain() }
+        override suspend fun saveStep(step: com.virlin.app.domain.model.TaskStep) {
+            db.taskSteps().upsert(step.toEntity()); touchedSteps = true
+        }
+        override suspend fun deleteStep(id: String) { db.taskSteps().delete(id); touchedSteps = true }
+        override suspend fun pageBlocksOf(taskId: String) = db.taskPageBlocks().byTask(taskId).map { it.toDomain() }
+        override suspend fun getPageBlock(id: String) = db.taskPageBlocks().byId(id)?.toDomain()
+        override suspend fun savePageBlock(block: com.virlin.app.domain.model.TaskPageBlock) {
+            db.taskPageBlocks().upsert(block.toEntity()); touchedPageBlocks = true
+        }
+        override suspend fun deletePageBlock(id: String) { db.taskPageBlocks().delete(id); touchedPageBlocks = true }
+
+        // Notes-page documents are read on open rather than observed, so no publish flag exists
+        // for them; the editor re-reads through the repository when it reopens.
+        override suspend fun noteDocOf(ownerKey: String) = db.virlinNotes().byOwner(ownerKey)?.toDomain()
+        override suspend fun saveNoteDoc(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc) {
+            db.virlinNotes().upsert(doc.toEntity())
+        }
 
         override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()
         override suspend fun saveCapture(capture: CaptureItem) { db.captures().upsert(capture.toEntity()); touchedCaptures = true }
@@ -145,6 +233,8 @@ class RoomWorkStreamRepository private constructor(
             val seq = db.focusSessions().byId(session.id)?.seq ?: (db.focusSessions().maxSeq() + 1)
             db.focusSessions().upsert(session.toEntity(seq))
         }
+        override suspend fun stagesOf(workStreamId: String) = db.externalStages().byStream(workStreamId).map { it.toDomain() }
+        override suspend fun saveStage(stage: ExternalStage) { db.externalStages().upsert(stage.toEntity()); touchedStages = true }
         override suspend fun saveSnapshot(snapshot: ContextSnapshot) { db.snapshots().insert(snapshot.toEntity(db.snapshots().maxSeq() + 1)) }
         override suspend fun appendEvent(event: WorkStreamEvent) { db.events().insert(event.toEntity(db.events().maxSeq() + 1)) }
     }
@@ -156,7 +246,14 @@ class RoomWorkStreamRepository private constructor(
             val projects = db.projects().all().map { it.toDomain() }
             val tasks = db.tasks().all().map { it.toDomain() }
             val captures = db.captures().all().map { it.toDomain() }.newestFirst()
-            return RoomWorkStreamRepository(db, streams, projects, tasks, captures)
+            val stages = db.externalStages().all().map { it.toDomain() }
+            val tags = db.projectTags().all().map { it.toDomain() }
+            val links = db.tagLinks().all().map { it.toDomain() }
+            val steps = db.taskSteps().all().map { it.toDomain() }
+            val pageBlocks = db.taskPageBlocks().all().map { it.toDomain() }
+            return RoomWorkStreamRepository(
+                db, streams, projects, tasks, captures, stages, tags, links, steps, pageBlocks
+            )
         }
     }
 }

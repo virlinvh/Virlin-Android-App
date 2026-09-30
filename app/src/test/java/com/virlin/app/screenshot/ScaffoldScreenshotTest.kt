@@ -3,8 +3,12 @@ package com.virlin.app.screenshot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.ui.navigation.VirlinApp
 import com.virlin.app.ui.theme.VirlinTheme
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -53,6 +57,17 @@ class ScaffoldScreenshotTest {
 
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Before
+    fun prepareDomain() = runBlocking {
+        VirlinGraph.resetForTests()
+        VirlinGraph.ensureReady()
+    }
+
+    @After
+    fun resetDomain() {
+        VirlinGraph.resetForTests()
+    }
 
     @Test
     fun appScaffold_matchesApprovedBaseline() {

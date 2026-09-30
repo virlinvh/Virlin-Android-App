@@ -5,6 +5,8 @@ import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.model.ContextSnapshot
 import com.virlin.app.domain.model.Cycle
+import com.virlin.app.domain.model.ExternalStage
+import com.virlin.app.domain.model.ExternalStageStatus
 import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.ExecutionPreference
@@ -19,6 +21,8 @@ import com.virlin.app.domain.model.PromptDocument
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskStatus
+import com.virlin.app.domain.attention.PriorityPreference
+import com.virlin.app.domain.attention.PriorityScope
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamEvent
 import com.virlin.app.domain.model.WorkStreamState
@@ -31,12 +35,12 @@ object VirlinMappers {
 
     fun Project.toEntity() = ProjectEntity(
         id, title, description, status.name, priority.name, dueAt, estimatedEffort,
-        defaultExecutionMode.name, createdAt, updatedAt, completedAt
+        defaultExecutionMode.name, createdAt, updatedAt, completedAt, iconPath, iconId
     )
     fun ProjectEntity.toDomain() = Project(
         id, title, description, ProjectStatus.valueOf(status), Priority.valueOf(priority),
         dueAt, estimatedEffort, EffectiveExecutionMode.valueOf(defaultExecutionMode),
-        createdAt, updatedAt, completedAt
+        createdAt, updatedAt, completedAt, iconPath, iconId
     )
 
     fun WorkStream.toEntity() = WorkStreamEntity(
@@ -45,7 +49,8 @@ object VirlinMappers {
         priority = priority.name, pinned = pinned, lastHumanAction = lastHumanAction, waitingFor = waitingFor,
         nextHumanAction = nextHumanAction, blockerReason = blockerReason, processingStartedAt = processingStartedAt,
         checkAt = checkAt, snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.name, currentCycleId = currentCycleId,
-        cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
+        cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt,
+        attentionRank = attentionRank, externalActorId = externalActorId, sortOrder = sortOrder
     )
     fun WorkStreamEntity.toDomain() = WorkStream(
         id = id, title = title, projectId = projectId, tool = tool,
@@ -55,7 +60,18 @@ object VirlinMappers {
         blockerReason = blockerReason, processingStartedAt = processingStartedAt, checkAt = checkAt,
         snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.let(SnoozeReason::valueOf),
         currentCycleId = currentCycleId, cycleCount = cycleCount, activeTaskId = activeTaskId,
-        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
+        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt, attentionRank = attentionRank,
+        externalActorId = externalActorId, sortOrder = sortOrder
+    )
+
+    fun ExternalStage.toEntity() = ExternalStageEntity(
+        id = id, workStreamId = workStreamId, title = title, order = order,
+        expectedMinutes = expectedMinutes, status = status.name, startedAt = startedAt, completedAt = completedAt
+    )
+    fun ExternalStageEntity.toDomain() = ExternalStage(
+        id = id, workStreamId = workStreamId, title = title, order = order,
+        expectedMinutes = expectedMinutes, status = ExternalStageStatus.valueOf(status),
+        startedAt = startedAt, completedAt = completedAt
     )
 
     fun Task.toEntity() = TaskEntity(
@@ -106,7 +122,7 @@ object VirlinMappers {
         title = title,
         description = description,
         tagsJson = com.virlin.app.domain.prompt.PromptDocumentCodec.encodeTags(tags),
-        documentJson = com.virlin.app.domain.prompt.PromptDocumentCodec.encodeBlocks(blocks),
+        documentJson = com.virlin.app.domain.prompt.PromptDocumentCodec.encodeDocument(this),
         createdAt = createdAt,
         updatedAt = updatedAt
     )
@@ -188,4 +204,73 @@ object VirlinMappers {
         id, workStreamId, EventType.valueOf(type), at, cycleId,
         fromState?.let(WorkStreamState::valueOf), toState?.let(WorkStreamState::valueOf), detail
     )
+
+    // ---------------------------------------------------------------- priority preferences (v11)
+
+    fun PriorityPreference.toEntity() = PriorityPreferenceEntity(
+        streamId = streamId, preferredPosition = preferredPosition,
+        scopeType = when (scope) {
+            PriorityScope.Always -> "ALWAYS"
+            PriorityScope.CurrentTerm -> "CURRENT_TERM"
+            is PriorityScope.Until -> "UNTIL"
+            PriorityScope.OneTime -> error("OneTime is transient and is never stored")
+        },
+        createdAt = createdAt,
+        expiresAt = (scope as? PriorityScope.Until)?.expiresAt
+    )
+
+    /** Unknown/corrupt scope values read as null so a bad row can never crash attention. */
+    fun PriorityPreferenceEntity.toDomain(): PriorityPreference? {
+        val scope = when (scopeType) {
+            "ALWAYS" -> PriorityScope.Always
+            "CURRENT_TERM" -> PriorityScope.CurrentTerm
+            "UNTIL" -> expiresAt?.let { PriorityScope.Until(it) }
+            else -> null
+        } ?: return null
+        return PriorityPreference(streamId, preferredPosition, scope, createdAt)
+    }
+
+    // ---- Tags and task steps (schema v13)
+    fun ProjectTagEntity.toDomain() =
+        com.virlin.app.domain.model.ProjectTag(id, projectId, name, createdAt, updatedAt)
+    fun com.virlin.app.domain.model.ProjectTag.toEntity() =
+        ProjectTagEntity(id, projectId, name.trim(), key, createdAt, updatedAt)
+
+    fun TagLinkEntity.toDomain() = com.virlin.app.domain.model.TagLink(
+        tagId, com.virlin.app.domain.model.TagTargetType.valueOf(targetType), targetId, createdAt
+    )
+    fun com.virlin.app.domain.model.TagLink.toEntity() =
+        TagLinkEntity(tagId, targetType.name, targetId, createdAt)
+
+    fun TaskStepEntity.toDomain() =
+        com.virlin.app.domain.model.TaskStep(id, taskId, text, done, order, createdAt, updatedAt)
+    fun com.virlin.app.domain.model.TaskStep.toEntity() =
+        TaskStepEntity(id, taskId, text, done, order, createdAt, updatedAt)
+
+    // The Notes page's own document. Blocks travel as VirlinNoteCodec JSON, which is this
+    // feature's own format and is never read by the capture note codec.
+    fun VirlinNoteEntity.toDomain() = com.virlin.app.domain.notedoc.VirlinNoteDoc(
+        ownerKey = ownerKey,
+        title = title,
+        blocks = com.virlin.app.domain.notedoc.VirlinNoteCodec.decode(documentJson),
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        revision = revision,
+    )
+    fun com.virlin.app.domain.notedoc.VirlinNoteDoc.toEntity() = VirlinNoteEntity(
+        ownerKey = ownerKey,
+        title = title,
+        documentJson = com.virlin.app.domain.notedoc.VirlinNoteCodec.encode(blocks),
+        revision = revision,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+    )
+
+    fun TaskPageBlockEntity.toDomain() = com.virlin.app.domain.model.TaskPageBlock(
+        id, taskId, typeKey, contentId, order, createdAt, updatedAt
+    )
+    fun com.virlin.app.domain.model.TaskPageBlock.toEntity() = TaskPageBlockEntity(
+        id, taskId, typeKey, contentId, order, createdAt, updatedAt
+    )
+
 }

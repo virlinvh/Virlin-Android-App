@@ -62,8 +62,14 @@ data class WorkStream(
     val id: String,
     val title: String,
     val projectId: String? = null,
-    /** External tool / working context, e.g. "Claude", "Codex". */
+    /** External tool / working context, e.g. "Claude", "Codex". Display name only. */
     val tool: String? = null,
+    /**
+     * Stable identity of the external actor doing the work (Phase 10), e.g. `claude_code`.
+     * Resolve for display with `ExternalActor.resolve(externalActorId, tool)`; [tool] stays the
+     * free-text fallback so older rows keep rendering.
+     */
+    val externalActorId: String? = null,
     /**
      * Stored execution preference (INHERIT / HUMAN / EXTERNAL). Resolve with
      * [ExecutionModeResolver] — never treat this alone as current Hand Off eligibility when
@@ -73,6 +79,20 @@ data class WorkStream(
     val state: WorkStreamState,
     val priority: Priority = Priority.NORMAL,
     val pinned: Boolean = false,
+    /**
+     * Explicit Needs You position chosen by the user (1 = handle first). Meaningful ONLY while
+     * the stream is in CHECK; every transition out of CHECK clears it, so a stream that returns
+     * later enters Needs You unranked (longest-waiting order). Unrelated to [priority]
+     * (importance) and to waiting time (urgency). Ordering rules: `NeedsYouOrder`.
+     */
+    val attentionRank: Int? = null,
+    /**
+     * Sibling position under the owning Project (0-based, contiguous). This is the user's own
+     * arrangement of their workstreams and is the ONLY order any surface may show them in.
+     * Unrelated to [priority], to [attentionRank] (a Needs You queue position) and to
+     * [createdAt]. Streams with no project share one group.
+     */
+    val sortOrder: Int = 0,
 
     // ---- External working memory (also captured in ContextSnapshot on every exit)
     val lastHumanAction: String? = null,

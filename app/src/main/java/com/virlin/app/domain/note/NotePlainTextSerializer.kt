@@ -10,6 +10,11 @@ import com.virlin.app.domain.model.NoteDocument
  */
 object NotePlainTextSerializer {
 
+    /** Plain block projection used when legacy prompt payloads are upgraded. */
+    fun serializeBlocks(blocks: List<NoteBlock>): String = buildString {
+        appendBlocks(blocks, numberedCounters = mutableMapOf())
+    }.trimEnd()
+
     fun serialize(doc: NoteDocument, includeTitle: Boolean = true): String = buildString {
         if (includeTitle) {
             val t = doc.title?.trim().orEmpty()

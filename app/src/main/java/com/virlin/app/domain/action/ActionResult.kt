@@ -36,6 +36,8 @@ sealed interface DomainError {
     data object NotAReturn : DomainError
     data object NotBlocked : DomainError
     data object EmptyNote : DomainError
+    /** Needs You reorder asked for a stream that is not in CHECK. */
+    data object NotInNeedsYou : DomainError
 
     // ---- Structure
     data object EmptyTitle : DomainError
@@ -47,9 +49,23 @@ sealed interface DomainError {
     data object CyclicParent : DomainError
     /** Child would point at a different Project / WorkStream than its parent. */
     data object OwnershipMismatch : DomainError
+
+    /**
+     * A structural placement was refused. [reason] is the validator's own sentence, already
+     * written for a person, because only the validator knows which of a dozen rules applied.
+     */
+    data class PlacementRejected(val reason: String) : DomainError
+    /** A project may not hold two tags whose names differ only by case or spacing. */
+    data class DuplicateTagName(val name: String) : DomainError
     /** Task does not belong to that WorkStream. */
     data object TaskNotInWorkStream : DomainError
     data object InvalidEffort : DomainError
+
+    // ---- External work (Phase 10)
+    /** START NEXT STAGE was asked for but the run has no stage left to start. */
+    data object NoNextStage : DomainError
+    /** The action needs an external run (a stream with an actor / PROCESSING context). */
+    data object NotExternalWork : DomainError
 
     // ---- Execution responsibility
     /** Hand Off / external-processing verbs require effective EXTERNAL. */
