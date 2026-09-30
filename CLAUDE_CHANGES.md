@@ -541,3 +541,63 @@ committed file list contains no ignored artifact and no screenshot. Only one fil
 
 `core.autocrlf=true` normalized line endings, which is why 61 modified files produced 56 content
 diffs — the other five differed only in line endings.
+
+---
+
+## 2026-10-01 — Publication complete: integration merged into `main` as `454d2ae`
+
+**Requested by:** User. **Status:** Complete. No force-push, rebase, squash, reset, clean or
+stash; `38ee49e` was not amended; no golden was recorded, replaced or approved; no app data was
+cleared; `CODEX_CHANGES.md` untouched.
+
+### Outcome
+
+`integration` (`3a72161`) is merged into `main` as **`454d2ae` — "Merge pull request #10 from
+virlinvh/integration"**. The PR was created and merged on GitHub by the user while this workflow
+was running; Claude did not create or merge it, because `gh` has no authenticated host and no
+`GH_TOKEN`/`GITHUB_TOKEN` is set.
+
+**Merge integrity verified independently.** The merge commit has two parents, `e65c6e0` and
+`3a72161`, so it is a true merge commit rather than a squash. All 26 previously unmerged feature
+commits survive — `1e6d821` is an ancestor of `main` — and 29 commits in total were added. Local
+`main` was brought up to date with a fast-forward pull only.
+
+### Verification performed by Claude
+
+Before the merge, on `integration`:
+
+- `:app:testDebugUnitTest` + `:app:compileDebugAndroidTestKotlin` + `:app:assembleDebug` —
+  **BUILD SUCCESSFUL, 1053 tests, 0 failures**; APK 20.8 MB.
+- Independent review of the full PR diff (`main..integration`): 278 files, +54,403 / -2,382;
+  194 `.kt`, 64 `.md`, 10 `.json`, 4 `.png`, 4 `.mdc`, 1 `.xml`, 1 `.gitignore`. **No ignored or
+  generated path, no golden screenshot, no secret, no conflict.** The only binaries are the four
+  verified `drawable-nodpi` app icons.
+
+After the merge, on `main` at `454d2ae`:
+
+- **1053 tests, 0 failures**; Android-test Kotlin compilation successful.
+- Schema still **v17** with 17 exported schemas; 24 golden images tracked and on disk;
+  `agent_capture_live_launcher.png` still absent.
+- `git diff 3a72161 454d2ae` is empty, so the APK built from the integration tip is byte-equivalent
+  to merged `main` — the installed build already is the merged application.
+
+### Emulator verification
+
+Installed with `adb install -r` (no uninstall, no data clear) after snapshotting `virlin.db`,
+`-wal` and `-shm`. The app launched cleanly: fresh pid after `force-stop`,
+`topResumedActivity=com.virlin.app/.MainActivity`, **zero FATAL/ANR lines** and no Room errors.
+Database comparison before and after the install: schema v17 unchanged, 21 tables, **no row-count
+difference — all user data preserved**.
+
+**Visual capture limitation, reported rather than hidden:** the emulator framebuffer froze and
+returned an identical torn frame on repeated `screencap` calls (the renderer hang seen earlier in
+this project). Maestro is not installed, and `uiautomator dump` returns an empty hierarchy for this
+Compose UI, so the Now-surface assertions in `maestro/now/verify-now.yaml` could **not** be
+confirmed visually. Launch health is evidenced by process state and logcat only. A visual pass
+needs an emulator cold boot.
+
+### Still open
+
+The 17 Roborazzi differences remain the untouched user-approval gate described in
+`docs/GOLDEN_BASELINE_REVIEW.md`, and the PDF/Audio product decision in
+`docs/CLAUDE_FINAL_DOCUMENTATION_AUDIT.md` §6 is still required before parallel lanes begin.
