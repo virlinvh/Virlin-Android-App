@@ -515,6 +515,16 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 // Audio v1: a NEW recording owned by an explicit task. Only the task id travels;
                 // CaptureActions derives project and WorkStream from that task, so ownership has
                 // exactly one source of truth.
+                // Task-scoped universal file space. One imported file = one capture = one Page block.
+                composable(
+                    route = com.virlin.app.ui.attachment.AttachmentWorkspaceTaskRoute,
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.attachment.AttachmentWorkspaceScreen(
+                        navController,
+                        taskId = entry.arguments?.getString("taskId").orEmpty()
+                    )
+                }
                 composable(
                     route = com.virlin.app.ui.voice.VoiceEditorTaskRoute,
                     arguments = listOf(navArgument("taskId") { type = NavType.StringType })

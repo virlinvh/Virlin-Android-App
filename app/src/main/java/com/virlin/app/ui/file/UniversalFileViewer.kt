@@ -66,6 +66,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.virlin.app.domain.attachment.CsvTableReader
 import com.virlin.app.domain.attachment.OoxmlReaders
 import com.virlin.app.domain.attachment.TextFileReader
+import com.virlin.app.domain.attachment.MarkdownPreviewParser
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import com.virlin.app.domain.model.AttachmentKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -76,6 +83,8 @@ import java.io.FileInputStream
 
 const val UniversalFileViewerTag = "universal_file_viewer"
 const val UnsupportedViewerTag = "unsupported_file_viewer"
+const val MarkdownViewerTag = "markdown_file_viewer"
+const val MarkdownSourceToggleTag = "markdown_source_toggle"
 
 /** One resolver → kind-specific embedded viewer. Capture UI never branches on formats. */
 @Composable
@@ -98,26 +107,191 @@ fun UniversalFileViewer(
             AttachmentKind.DOCX -> DocxViewer(file)
             AttachmentKind.XLSX -> XlsxViewer(file)
             AttachmentKind.PPTX -> PptxViewer(file)
-            AttachmentKind.UNSUPPORTED -> UnsupportedViewer(displayName, mimeType)
+            AttachmentKind.MARKDOWN -> MarkdownViewer(file, displayName, mimeType)
+            AttachmentKind.ARCHIVE -> StoredSafelyViewer(displayName, mimeType, archive = true)
+            AttachmentKind.UNSUPPORTED -> StoredSafelyViewer(displayName, mimeType, archive = false)
         }
     }
 }
 
 @Composable
-private fun UnsupportedViewer(displayName: String, mimeType: String) {
+private fun MarkdownViewer(file: File, displayName: String, mimeType: String) {
+    var source by remember(file.absolutePath) { mutableStateOf<TextFileReader.Result?>(null) }
+    var showSource by remember(file.absolutePath) { mutableStateOf(false) }
+    LaunchedEffect(file.absolutePath) {
+        source = withContext(Dispatchers.IO) {
+            runCatching {
+                FileInputStream(file).use { TextFileReader.read(it, displayName, mimeType) }
+            }.getOrNull()
+        }
+    }
+    val result = source
+    if (result == null) {
+        Text("Reading document...", modifier = Modifier.padding(16.dp))
+        return
+    }
+    // Parsed once per load; the stored bytes are never rewritten by the preview.
+    val blocks = remember(result.text) { MarkdownPreviewParser.parse(result.text) }
+
+    Column(Modifier.fillMaxSize().testTag(MarkdownViewerTag)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ModeChip("Preview", !showSource) { showSource = false }
+            ModeChip("Source", showSource, tag = MarkdownSourceToggleTag) { showSource = true }
+        }
+        if (showSource) {
+            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                item {
+                    Text(
+                        result.text,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 19.sp,
+                        color = Color(0xFF162016)
+                    )
+                }
+                if (result.truncated) item { TruncationNote() }
+            }
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(blocks) { MarkdownBlock(it) }
+                if (result.truncated) item { TruncationNote() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TruncationNote() {
+    Text(
+        "Preview truncated for memory safety. The stored file is complete and unchanged.",
+        fontSize = 11.sp,
+        color = Color(0xFFB45309),
+        modifier = Modifier.padding(vertical = 10.dp)
+    )
+}
+
+@Composable
+private fun ModeChip(label: String, selected: Boolean, tag: String? = null, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        Modifier
+            .clip(shape)
+            .background(if (selected) Color(0xFFE2F5EA) else Color.White)
+            .border(1.dp, if (selected) Color(0xFFB7DFC9) else Color(0xFFE3E9E5), shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+            .then(if (tag != null) Modifier.testTag(tag) else Modifier)
+    ) {
+        Text(
+            label,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) Color(0xFF087848) else Color(0xFF5C665C)
+        )
+    }
+}
+
+/** Renders one parsed block. There is no HTML path, so nothing here can execute content. */
+@Composable
+private fun MarkdownBlock(block: MarkdownPreviewParser.Block) {
+    when (block) {
+        is MarkdownPreviewParser.Block.Heading -> Text(
+            inlineAnnotated(block.text),
+            fontSize = when (block.level) { 1 -> 22.sp; 2 -> 18.sp; else -> 16.sp },
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF162016),
+            modifier = Modifier.padding(top = 6.dp)
+        )
+        is MarkdownPreviewParser.Block.Paragraph ->
+            Text(inlineAnnotated(block.text), fontSize = 14.sp, lineHeight = 21.sp, color = Color(0xFF162016))
+        is MarkdownPreviewParser.Block.Bullet -> Row(Modifier.padding(start = (block.indent * 14).dp)) {
+            Text("\u2022  ", fontSize = 14.sp, color = Color(0xFF5C665C))
+            Text(inlineAnnotated(block.text), fontSize = 14.sp, lineHeight = 21.sp, color = Color(0xFF162016))
+        }
+        is MarkdownPreviewParser.Block.Ordered -> Row(Modifier.padding(start = (block.indent * 14).dp)) {
+            Text(block.number.toString() + ".  ", fontSize = 14.sp, color = Color(0xFF5C665C))
+            Text(inlineAnnotated(block.text), fontSize = 14.sp, lineHeight = 21.sp, color = Color(0xFF162016))
+        }
+        is MarkdownPreviewParser.Block.Task -> Row(
+            Modifier.padding(start = (block.indent * 14).dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                if (block.checked) "\u2611  " else "\u2610  ",
+                fontSize = 15.sp,
+                color = if (block.checked) Color(0xFF087848) else Color(0xFF8A918A)
+            )
+            Text(inlineAnnotated(block.text), fontSize = 14.sp, lineHeight = 21.sp, color = Color(0xFF162016))
+        }
+        is MarkdownPreviewParser.Block.Quote -> Row {
+            Box(Modifier.width(3.dp).height(20.dp).background(Color(0xFFB7DFC9)))
+            Spacer(Modifier.width(10.dp))
+            Text(inlineAnnotated(block.text), fontSize = 14.sp, color = Color(0xFF5C665C))
+        }
+        is MarkdownPreviewParser.Block.Code -> Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF1B2420)).padding(12.dp)
+        ) {
+            block.language?.let {
+                Text(it, fontSize = 10.sp, color = Color(0xFF8A918A), modifier = Modifier.padding(bottom = 4.dp))
+            }
+            block.lines.forEach {
+                Text(it, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Color(0xFFE6F2EA), lineHeight = 18.sp)
+            }
+        }
+        MarkdownPreviewParser.Block.Divider ->
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFE3E9E5)))
+    }
+}
+
+/** Applies bold/italic/inline-code spans. Unmatched markers stay literal. */
+@Composable
+private fun inlineAnnotated(source: String) = remember(source) {
+    val parsed = MarkdownPreviewParser.inline(source)
+    buildAnnotatedString {
+        append(parsed.text)
+        parsed.spans.forEach { span ->
+            val style = when (span.style) {
+                MarkdownPreviewParser.Style.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
+                MarkdownPreviewParser.Style.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
+                MarkdownPreviewParser.Style.CODE ->
+                    SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0xFFF0F3F1))
+            }
+            addStyle(style, span.start, span.end)
+        }
+    }
+}
+
+@Composable
+private fun StoredSafelyViewer(displayName: String, mimeType: String, archive: Boolean) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp).testTag(UnsupportedViewerTag),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("Unsupported Viewer", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF162016))
+        Text("File stored safely", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = Color(0xFF162016))
         Spacer(Modifier.height(8.dp))
         Text(
-            "Virlin cannot render this format in-app yet.\n$displayName\n$mimeType",
+            if (archive) {
+                "Archives are kept exactly as imported. Virlin does not open or extract them. " +
+                    "Share it, save a copy, or open it with a compatible app."
+            } else {
+                "This format has no in-app visual preview. " +
+                    "Keep it here, share it, save a copy, or open it with a compatible app."
+            },
             fontSize = 13.sp,
             color = Color(0xFF5C665C),
-            lineHeight = 18.sp
+            lineHeight = 19.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
+        Spacer(Modifier.height(14.dp))
+        Text("$displayName  ·  $mimeType", fontSize = 11.sp, color = Color(0xFF8A918A))
     }
 }
 

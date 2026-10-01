@@ -673,3 +673,83 @@ Docs: `AUDIO_FEATURE.md` and `AUDIO_FEATURE_AUDIT.md` (new); `FEATURE_REGISTRY.m
 3. **Missing or corrupt media is already safe** — the player is built with
    `runCatching { ... }.getOrNull()`, so a bad file yields a null player rather than a crash.
 4. Recording across process death is untested, and the emulator microphone is synthetic.
+
+---
+
+## 2026-10-01 — Attachment workspace (task-scoped universal file space)
+
+**Requested by:** User, with binding decisions: reuse the existing resolver, imported audio is an
+Attachment rather than a Voice capture, PDF keeps its canonical workspace, reuse the existing office
+renderers.
+**Branch:** `feature/attachment-workspace`, based on Codex's integration commit `e28b521`.
+**Status:** Implemented and verified by build and tests. **Emulator walkthrough is BLOCKED by the
+environment, not by this code — evidence below.** `CODEX_CHANGES.md` untouched.
+
+### Audit outcome — most of the request already existed
+
+`UniversalFileViewer` (587 lines) already renders all ten kinds, **including DOCX, XLSX and PPTX**
+through `OoxmlReaders`, each bounded and disclosing truncation. A centralized
+`AttachmentKindResolver` already existed. Building the specified `AttachmentPreviewCapability` would
+have created a second resolver, which the brief itself forbids, so the existing one was extended.
+
+**Room was not changed and stays at v17.** `attachment_documents.kind` is a String column decoded
+with `runCatching { valueOf }.getOrDefault(UNSUPPORTED)`, so adding enum values is purely additive,
+leaves existing rows untouched, and lets an older build read a newer row safely.
+
+### What was built
+
+- `AttachmentKind` gained `MARKDOWN` and `ARCHIVE`; `AttachmentKindResolver` gained their
+  extensions/MIMEs, labels, and a `previewOf(kind)` accessor returning `IN_APP`, `PDF_WORKSPACE` or
+  `DETAILS_ONLY`. One resolver, not two.
+- `domain/attachment/MarkdownPreviewParser` — a conservative parser with **no HTML block type at
+  all**, so raw HTML stays literal text and nothing can reach a JavaScript-capable WebView.
+- `ui/attachment/` — route contract, ViewModel and screen: library with per-row View/Play/Details,
+  multi-select import via `OpenMultipleDocuments`, progress, per-file failure reporting, rename
+  preserving the extension, Share and Open-with through `FileProvider`, confirmed removal, and a
+  missing-file state.
+- `UniversalFileViewer` gained a Markdown viewer with a Preview/Source toggle and a "File stored
+  safely" details view for archives and unknown binaries, replacing the blunter
+  "cannot render this format" screen.
+- Wiring: `attachment_workspace/new/task/{taskId}` registered, `MapAddKind.ATTACHMENT` enabled and
+  routed. **PDF and Audio wiring preserved byte-for-byte; the Task Page `openBlock` seam was not
+  touched.**
+
+### Imported Audio is not a Voice capture
+
+Imported audio stays `CaptureType.FILE` + `AttachmentDocument(kind = AUDIO)` in
+`filesDir/attachments/`, appears as a `capture.file` block, and opens the read-only `AudioViewer`.
+Voice recording stays `CaptureType.VOICE` + `VoiceDocument` in `filesDir/voices/` as a
+`capture.voice` block opening the Voice workspace. An imported MP3 has no `VoiceDocument`, so
+routing it into the recorder would open an empty editor over the user's file.
+
+### One pre-existing test updated, deliberately
+
+`AttachmentCaptureTest.kindResolver_mapsCommonTypes` asserted `a.zip` resolves to `UNSUPPORTED`.
+Archives are now their own kind, so that line was updated to `ARCHIVE` **and an assertion added that
+`ARCHIVE` still resolves to `DETAILS_ONLY`** — user-facing behaviour is unchanged (stored, described,
+never previewed or extracted); the kind is simply labelled honestly. This was not a weakened
+assertion.
+
+### Verification
+
+- `AttachmentWorkspaceTest`: **22 tests, 0 failures**.
+- `:app:testDebugUnitTest`: **1091 tests, 0 failures** (1065 before this lane + 22 new + 4 from the
+  rebased integration base).
+- `:app:compileDebugKotlin`, `:app:compileDebugAndroidTestKotlin`, `:app:assembleDebug`: passed.
+- `:app:verifyRoborazziDebug`: **17 failures — exactly the documented baseline, no new or changed
+  visual difference.** No golden recorded, replaced or deleted.
+
+### Emulator verification BLOCKED — and it is not this code
+
+The app installs and launches (process alive, `MainActivity` top-resumed, **zero exceptions in
+logcat**) but renders a black window while the launcher renders normally.
+
+**Decisive test:** the base integration APK built from `e28b521` — the exact build that rendered the
+PDF workspace correctly earlier the same session — was installed and produced an **identical 15,845
+byte black frame**. The regression is therefore in the emulator's surface for this app, not in the
+Attachment changes. A clean shutdown and restart left the emulator stuck `offline` with a 7.5 GB
+resident QEMU process, so the walkthrough could not be completed.
+
+**Outstanding:** the import walkthrough (Markdown, TXT, DOCX, image, audio, video, PDF, ZIP), Page
+block reopening and restart persistence remain unverified on device. They should be run once the
+emulator is healthy, before this branch is merged.

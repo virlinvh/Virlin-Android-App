@@ -7,7 +7,12 @@ import java.time.Instant
  * Original bytes live under managed storage ([relativePath]); this row is metadata only.
  */
 enum class AttachmentKind {
-    PDF, IMAGE, VIDEO, AUDIO, TEXT, CSV, DOCX, XLSX, PPTX, UNSUPPORTED
+    PDF, IMAGE, VIDEO, AUDIO, TEXT, CSV, DOCX, XLSX, PPTX,
+    /** Markdown, rendered in-app with a Source mode. Bytes are never rewritten. */
+    MARKDOWN,
+    /** ZIP/RAR/7Z/TAR/GZ. Stored and described only - never extracted or executed. */
+    ARCHIVE,
+    UNSUPPORTED
 }
 
 data class AttachmentDocument(

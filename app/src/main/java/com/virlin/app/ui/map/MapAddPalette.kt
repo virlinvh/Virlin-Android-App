@@ -80,7 +80,8 @@ enum class MapAddKind(val label: String) {
 val MapAddKind.isSupported: Boolean
     get() = this == MapAddKind.TODO || this == MapAddKind.TASK ||
         this == MapAddKind.LINK || this == MapAddKind.NOTE ||
-        this == MapAddKind.AUDIO || this == MapAddKind.PDF
+        this == MapAddKind.AUDIO || this == MapAddKind.PDF ||
+        this == MapAddKind.ATTACHMENT
 
 private val rows = listOf(
     MapAddKind.TODO to MapAddKind.NOTE,

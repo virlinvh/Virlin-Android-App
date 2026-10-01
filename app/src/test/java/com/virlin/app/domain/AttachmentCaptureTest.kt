@@ -33,7 +33,14 @@ class AttachmentCaptureTest {
         assertEquals(AttachmentKind.XLSX, AttachmentKindResolver.resolve(null, "sheet.xlsx"))
         assertEquals(AttachmentKind.PPTX, AttachmentKindResolver.resolve(null, "deck.pptx"))
         assertEquals(AttachmentKind.TEXT, AttachmentKindResolver.resolve("application/json", "x.json"))
-        assertEquals(AttachmentKind.UNSUPPORTED, AttachmentKindResolver.resolve("application/zip", "a.zip"))
+        // Archives became their own kind with the Attachment workspace. User-facing behaviour is
+        // unchanged - ARCHIVE still resolves to DETAILS_ONLY, so it is stored and described but
+        // never previewed or extracted - it is simply labelled honestly now.
+        assertEquals(AttachmentKind.ARCHIVE, AttachmentKindResolver.resolve("application/zip", "a.zip"))
+        assertEquals(
+            AttachmentKindResolver.Preview.DETAILS_ONLY,
+            AttachmentKindResolver.previewOf(AttachmentKind.ARCHIVE),
+        )
     }
 
     @Test

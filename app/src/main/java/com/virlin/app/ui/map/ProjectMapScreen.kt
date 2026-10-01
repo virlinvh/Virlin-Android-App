@@ -510,6 +510,12 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
                 addChoice = null
                 navController.navigate(com.virlin.app.ui.pdf.pdfWorkspaceForTask(topic.id))
             }
+            // Attachment is the task's universal file space. Each imported file becomes its own
+            // CaptureItem(FILE) + AttachmentDocument, so no new container entity is introduced.
+            MapAddKind.ATTACHMENT -> {
+                addChoice = null
+                navController.navigate(com.virlin.app.ui.attachment.attachmentWorkspaceForTask(topic.id))
+            }
             // The palette does not let the remaining kinds be chosen; belt-and-braces case.
             else -> {
                 addChoice = null
