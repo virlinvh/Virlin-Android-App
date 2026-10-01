@@ -354,3 +354,17 @@ screen. No content was entered during verification.
 - Verification: `compileDebugKotlin`, focused PDF tests, all 1,057 JVM tests,
   `compileDebugAndroidTestKotlin`, and `assembleDebug` passed. `verifyRoborazziDebug` reported exactly
   the already documented 17 visual differences; no golden was changed.
+
+# 2026-10-01 - PDF and Audio integration wiring
+
+- Combined the independently verified Audio and PDF feature commits on
+  `codex/pdf-audio-integration`; the feature branches remain available as isolated provenance.
+- Registered task-scoped new-PDF and existing-capture PDF workspace destinations in the shared
+  navigation graph.
+- Enabled PDF in the mind-map Add palette and routed it to the selected task's PDF workspace.
+- Made Task Page attachment rows retain their attachment kind, label PDF captures as **PDF**, and
+  open PDF captures in the dedicated workspace while preserving the generic viewer for other files.
+- Installed the integration APK over the existing emulator app without clearing data and visually
+  verified task -> Add -> PDF -> full-page PDF workspace.
+- Combined verification passed: `testDebugUnitTest`, `compileDebugAndroidTestKotlin`, and
+  `assembleDebug`. No Room schema change and no golden update.

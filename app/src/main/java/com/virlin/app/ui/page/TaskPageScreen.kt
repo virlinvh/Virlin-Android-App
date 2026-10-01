@@ -32,7 +32,13 @@ import kotlinx.coroutines.launch
 const val TaskPageRoute = "task_page/{taskId}"
 fun taskPage(taskId: String) = "task_page/$taskId"
 
-data class TaskPageRow(val block: TaskPageBlock, val label: String, val title: String, val preview: String)
+data class TaskPageRow(
+    val block: TaskPageBlock,
+    val label: String,
+    val title: String,
+    val preview: String,
+    val attachmentKind: AttachmentKind? = null,
+)
 data class TaskPageState(
     val task: Task? = null,
     val rows: List<TaskPageRow> = emptyList(),
@@ -89,7 +95,10 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
                         CaptureType.LINK -> LinkDocumentCodec.decode(capture.content).note.ifBlank { capture.sourceUrl.orEmpty() }
                         else -> capture?.content.orEmpty()
                     }.lineSequence().firstOrNull().orEmpty().ifBlank { "Content unavailable" }
-                    TaskPageRow(block, label, title, preview)
+                    val attachmentKind = if (capture?.type == CaptureType.FILE) {
+                        repository.getAttachmentByCaptureId(capture.id)?.kind
+                    } else null
+                    TaskPageRow(block, if (attachmentKind == AttachmentKind.PDF) "PDF" else label, title, preview, attachmentKind)
                 }
             }
         }
@@ -178,7 +187,10 @@ private fun openBlock(nav: NavController, row: TaskPageRow, onUnsupported: (Stri
         TaskPageTypeKeys.capture(CaptureType.PROMPT) -> nav.navigate(com.virlin.app.ui.prompt.promptEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.LINK) -> nav.navigate(com.virlin.app.ui.link.linkEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.VOICE) -> nav.navigate(com.virlin.app.ui.voice.voiceEditorRoute(row.block.contentId))
-        TaskPageTypeKeys.capture(CaptureType.FILE) -> nav.navigate(com.virlin.app.ui.file.fileViewerRoute(row.block.contentId))
+        TaskPageTypeKeys.capture(CaptureType.FILE) -> nav.navigate(
+            if (row.attachmentKind == AttachmentKind.PDF) com.virlin.app.ui.pdf.pdfWorkspaceForCapture(row.block.contentId)
+            else com.virlin.app.ui.file.fileViewerRoute(row.block.contentId)
+        )
         else -> onUnsupported("This build cannot open a ${row.label} block yet.")
     }
 }

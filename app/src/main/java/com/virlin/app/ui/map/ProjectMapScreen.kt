@@ -506,6 +506,10 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
                 addChoice = null
                 navController.navigate(com.virlin.app.ui.voice.voiceEditorForTask(topic.id))
             }
+            MapAddKind.PDF -> {
+                addChoice = null
+                navController.navigate(com.virlin.app.ui.pdf.pdfWorkspaceForTask(topic.id))
+            }
             // The palette does not let the remaining kinds be chosen; belt-and-braces case.
             else -> {
                 addChoice = null

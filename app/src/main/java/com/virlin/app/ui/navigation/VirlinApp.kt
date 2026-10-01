@@ -481,6 +481,27 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     FileViewerScreen(navController, captureId = entry.arguments?.getString("captureId"))
                 }
 
+                composable(
+                    route = "pdf_workspace/new/task/{taskId}",
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.pdf.PdfWorkspaceScreen(
+                        navController = navController,
+                        captureId = null,
+                        taskId = entry.arguments?.getString("taskId")
+                    )
+                }
+                composable(
+                    route = "pdf_workspace/capture/{captureId}",
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.pdf.PdfWorkspaceScreen(
+                        navController = navController,
+                        captureId = entry.arguments?.getString("captureId"),
+                        taskId = null
+                    )
+                }
+
                 // Full-screen Capture Voice editor (single screen; not a bottom-nav destination).
                 composable("voice_editor") {
                     VoiceEditorScreen(navController, captureId = null)
