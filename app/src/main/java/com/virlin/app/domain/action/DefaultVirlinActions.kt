@@ -195,6 +195,7 @@ class DefaultVirlinActions(
     override suspend fun addSubtask(parentTaskId: String, title: String, estimatedEffort: Duration?) = structure.addSubtask(parentTaskId, title, estimatedEffort)
     override suspend fun updateTask(taskId: String, update: TaskUpdate) = structure.updateTask(taskId, update)
     override suspend fun completeTask(taskId: String) = structure.completeTask(taskId)
+    override suspend fun restoreTask(taskId: String) = structure.restoreTask(taskId)
     override suspend fun cancelTask(taskId: String) = structure.cancelTask(taskId)
     override suspend fun placeTask(taskId: String, workStreamId: String?) = structure.placeTask(taskId, workStreamId)
     override suspend fun moveTasks(

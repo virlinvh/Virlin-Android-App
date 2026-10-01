@@ -386,6 +386,8 @@ interface VirlinActions {
      * derived by [com.virlin.app.domain.progress.ProgressCalculator].
      */
     suspend fun completeTask(taskId: String): ActionResult<Task>
+    /** Reopen a mistakenly completed task as TODO. Cancelled work is deliberately not restored here. */
+    suspend fun restoreTask(taskId: String): ActionResult<Task>
     /**
      * Abandon a task: terminal but NOT completed. Removed from active planned scope (excluded
      * from progress numerator and denominator). Clears an active task; never auto-advances.

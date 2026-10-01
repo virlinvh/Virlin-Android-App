@@ -269,30 +269,18 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
         )
     }
     if (settingsOpen) {
-        // Project settings keeps the EXISTING execution-default control; the main page no longer
-        // carries a Human/External selector.
-        AlertDialog(
-            onDismissRequest = { settingsOpen = false },
-            title = { Text("Project settings") },
-            text = {
-                Column {
-                    SectionLabel("DEFAULT EXECUTION")
-                    Spacer(Modifier.height(6.dp))
-                    ExecutionChoiceRow(
-                        selectedKey = project.defaultExecutionMode.name,
-                        options = listOf(
-                            Triple("Human", EffectiveExecutionMode.HUMAN.name) { vm.setProjectExecutionDefault(project.id, EffectiveExecutionMode.HUMAN) },
-                            Triple("External", EffectiveExecutionMode.EXTERNAL.name) { vm.setProjectExecutionDefault(project.id, EffectiveExecutionMode.EXTERNAL) }
-                        )
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "WorkStreams and tasks inherit this unless they set their own.",
-                        fontSize = 12.sp, color = VirlinColors.TextSecondary
-                    )
-                }
-            },
-            confirmButton = { TextButton(onClick = { settingsOpen = false }) { Text("DONE") } }
+        val settingsTasks = s.tasks.filter { task ->
+            task.projectId == project.id || task.workStreamId?.let { id -> streams.any { it.id == id } } == true
+        }
+        ProjectSettingsDialog(
+            project = project,
+            projectTasks = settingsTasks,
+            onDismiss = { settingsOpen = false },
+            onRename = { vm.renameProject(project.id, it) },
+            onEditIcon = { settingsOpen = false; editingIcon = true },
+            onExecutionDefault = { vm.setProjectExecutionDefault(project.id, it) },
+            onRestoreTask = vm::restoreTask,
+            onCompleteProject = { settingsOpen = false; confirmComplete = true },
         )
     }
     if (confirmComplete) {

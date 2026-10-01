@@ -177,6 +177,19 @@ internal class StructureActions(
         ActionResult.Success(updated)
     }
 
+    suspend fun restoreTask(id: String): ActionResult<Task> = tx {
+        val task = getTask(id) ?: return@tx ActionResult.Rejected(DomainError.TaskNotFound(id))
+        if (task.status != TaskStatus.DONE) return@tx ActionResult.Rejected(DomainError.TaskAlreadyClosed)
+        val now = clock.now()
+        val restored = task.copy(status = TaskStatus.TODO, completedAt = null, updatedAt = now)
+        saveTask(restored)
+        task.workStreamId?.let {
+            streamEvent(it, EventType.TASK_UPDATED, now,
+                TaskEventDetail.encode(task.id, task.title, task.status, restored.status))
+        }
+        ActionResult.Success(restored)
+    }
+
     // ------------------------------------------------------------------ Execution preference
 
     suspend fun setProjectExecutionDefault(id: String, mode: EffectiveExecutionMode): ActionResult<Project> = tx {

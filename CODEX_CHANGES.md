@@ -392,3 +392,29 @@ screen. No content was entered during verification.
 - Verification passed: all 1,098 JVM tests, Android-test compilation, APK assembly and both
   on-device renderer tests. The APK installed over existing emulator data and launched cleanly.
   Roborazzi remained at the 17 documented pre-existing differences; no golden was changed.
+## 2026-10-01 - Remove dormant Sticker and Illustration palette placeholders
+
+- Removed the Sticker and Illustration entries, icons, and disabled row from the mind-map Add
+  palette. Neither feature had a route, model, storage, or saved user data, so no migration or
+  compatibility reader was required.
+- Removed the now-obsolete disabled-option footer because every remaining palette choice has a
+  real destination.
+- Added a contract test that fixes the palette to the eight current product features and verifies
+  every visible choice is supported.
+- Updated the feature registry and navigation contract to record that these concepts are outside
+  the current product scope. A future implementation must be specified as a new feature rather
+  than reviving the removed placeholders implicitly.
+- Kept To-do, Note, Prompt, Link, PDF, Attachment, Image, and Audio behavior unchanged.
+
+## 2026-10-01 - Project Settings foundation and completed-task recovery
+
+- Replaced the single-control Project settings alert with a centered, animated category-first
+  modal with fixed header/footer and a scrollable settings viewport.
+- Connected Project name, the canonical icon editor, Default execution, confirmed multi-task
+  restoration, and the existing confirmed Project completion flow.
+- Added `VirlinActions.restoreTask`: DONE to TODO only, clearing `completedAt` while preserving
+  ownership and content; CANCELLED tasks are refused. Added domain coverage.
+- Removed duplicate Edit project and Manage workstreams overflow entries; `+ New` remains the sole
+  WorkStream creation control.
+- Made no schema change because the parallel Mind-map Node Preview lane owns migration 17 to 18;
+  future policy fields are honestly marked Planned and documented for the next reserved migration.

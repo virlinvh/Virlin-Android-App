@@ -414,6 +414,24 @@ class StructureActionsTest {
         assertEquals(DomainError.TaskAlreadyClosed, a.setActiveTask("agent", "presets").rej())
     }
 
+    @Test fun completedTask_canBeDeliberatelyRestoredToTodo_butCancelledCannot() = runTest {
+        task("Accidental completion", id = "restore-me")
+        val completed = a.completeTask("restore-me").getOrNull()!!
+        assertEquals(TaskStatus.DONE, completed.status)
+        assertNotNull(completed.completedAt)
+
+        clock.advance(Duration.ofMinutes(1))
+        val restored = a.restoreTask("restore-me").getOrNull()!!
+        assertEquals(TaskStatus.TODO, restored.status)
+        assertNull(restored.completedAt)
+        assertEquals(clock.now(), restored.updatedAt)
+
+        task("Cancelled", id = "cancelled")
+        a.cancelTask("cancelled")
+        assertEquals(DomainError.TaskAlreadyClosed, a.restoreTask("cancelled").rej())
+        assertTrue(a.restoreTask("missing").rej() is DomainError.TaskNotFound)
+    }
+
     @Test fun cancelled_excludedFromCountDenominator() = runTest {
         // A DONE, B DONE, C CANCELLED, D TODO → 2/3
         task("A", id = "A"); task("B", id = "B"); task("C", id = "C"); task("D", id = "D")

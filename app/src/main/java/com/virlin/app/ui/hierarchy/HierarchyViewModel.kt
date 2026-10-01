@@ -545,6 +545,12 @@ class HierarchyViewModel(
     // ------------------------------------------------------------------ intents → VirlinActions
 
     fun completeTask(id: String) = dispatch("completeTask") { actions.completeTask(id) }
+    fun restoreTask(id: String) = dispatch("restoreTask") { actions.restoreTask(id) }
+
+    fun renameProject(projectId: String, title: String) = dispatch("renameProject") {
+        actions.updateProject(projectId, com.virlin.app.domain.action.ProjectUpdate(
+            title = com.virlin.app.domain.action.Field.Set(title)))
+    }
 
     /**
      * PHASE 10 — delegate this work item to an external actor. The same WorkStream becomes the

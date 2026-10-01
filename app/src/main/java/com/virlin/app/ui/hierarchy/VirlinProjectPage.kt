@@ -186,14 +186,8 @@ fun VirlinProjectPage(ui: ProjectPageUi, actions: ProjectPageActions, modifier: 
                         } },
                         onClick = { menuOpen = false; actions.onProjectSettings() }
                     )
-                    DropdownMenuItem(text = { Text("Edit project") }, onClick = {
-                        menuOpen = false; actions.onEditProject()
-                    })
                     DropdownMenuItem(text = { Text("Search this project") }, onClick = {
                         menuOpen = false; actions.onSearch()
-                    })
-                    DropdownMenuItem(text = { Text("Manage workstreams") }, onClick = {
-                        menuOpen = false; actions.onManageWorkstreams()
                     })
                     HorizontalDivider()
                     DropdownMenuItem(text = { Text(ui.archiveLabel) }, onClick = {

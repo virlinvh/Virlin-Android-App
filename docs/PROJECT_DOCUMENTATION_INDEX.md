@@ -40,6 +40,7 @@ shared extension foundation needed by future Plus-menu features.
 ## Foundational feature contracts
 
 - `TASK_PAGE_FOUNDATION.md`
+- `PROJECT_SETTINGS_FOUNDATION.md`
 - `TASK_HIERARCHY_CLEANUP.md`
 - `NOTE_SYSTEM_CLEANUP.md`
 - `PDF_FEATURE_FOUNDATION.md`

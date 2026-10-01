@@ -111,12 +111,6 @@ fun VirlinProjectExperience(
                     DropdownMenuItem(text = { Text("Project settings") }, onClick = {
                         menuOpen = false; actions.project.onProjectSettings()
                     })
-                    DropdownMenuItem(text = { Text("Edit project") }, onClick = {
-                        menuOpen = false; actions.project.onEditProject()
-                    })
-                    DropdownMenuItem(text = { Text("Manage workstreams") }, onClick = {
-                        menuOpen = false; actions.project.onManageWorkstreams()
-                    })
                     HorizontalDivider()
                     DropdownMenuItem(text = { Text(project.archiveLabel) }, onClick = {
                         menuOpen = false; actions.project.onArchiveProject()
