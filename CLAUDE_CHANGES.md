@@ -795,3 +795,34 @@ Installed with `adb install -r`; app data was never cleared. **Zero crashes thro
 
 This supersedes the "emulator verification BLOCKED" note in the previous entry. The Attachment lane
 is now verified end to end on device as well as by the 1091-test suite.
+## 2026-10-01 — Image workspace emulator audit and crash fix
+
+Branch `feature/image-emulator-fix`, from `codex/image-workspace` @ `b96f998`, in an isolated worktree.
+
+**Files touched**
+- `app/src/main/java/com/virlin/app/ui/image/ImageWorkspaceScreen.kt` — removed two
+  `DisposableEffect { onDispose { bitmap.recycle() } }` blocks (`EditPreview`, `ManagedBitmap`).
+- `app/src/test/java/com/virlin/app/image/ImageBitmapLifecycleTest.kt` — new source-level guard.
+- `docs/IMAGE_EMULATOR_AUDIT.md` — new.
+
+**Requested outcome**
+Audit-first reproduction of "tapping a file in the picker returns to the launcher", then a minimal
+safe fix only if reproducible.
+
+**Behaviour impact**
+The reported symptom was a real crash, but not in the picker or the import pipeline — the import
+had already succeeded and the record was persisted. The app died in a Compose draw frame with
+"Canvas: trying to use a recycled bitmap", because `asImageBitmap()` wraps a Bitmap without
+copying and a RenderNode display list can replay after `onDispose`. Removing the recycles fixes
+it; `minSdk 26` makes them unnecessary anyway. `ImageRenderEngine`'s recycles were examined and
+left alone — those are internal intermediates never handed to Compose.
+
+**Verification actually performed**
+Reproduced twice with logcat captured before the triggering tap. Post-fix on the emulator: same
+PID before and after (9145), `MainActivity` still resumed, 0 crashes. Unit tests, android-test
+compilation and `assembleDebug` pass; Roborazzi reports exactly the 17 known pre-existing diffs
+and no golden was recorded; Room stays at v17. The new guard was proven to fail when the recycle
+is reintroduced and pass when it is not.
+
+**Not verified** — a substantial part of the acceptance checklist, listed explicitly in section 8
+of `docs/IMAGE_EMULATOR_AUDIT.md`. This feature is NOT fully acceptance-tested.

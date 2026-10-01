@@ -351,7 +351,10 @@ private fun EditPreview(state: ImageWorkspaceState, modifier: Modifier) {
             item?.let { runCatching { ImageRenderEngine.render(File(it.absolutePath), crop = state.edit.crop, transform = state.edit.transform, adjustments = state.edit.adjustments, strokes = state.edit.strokes, maxEdge = ImageRenderEngine.PREVIEW_EDGE) }.getOrNull() }
         }
     }
-    DisposableEffect(bitmap) { onDispose { bitmap?.takeIf { !it.isRecycled }?.recycle() } }
+    // NOTE: the decoded bitmap is handed to Compose with asImageBitmap(), which wraps it without
+    // copying. Recycling it here crashed the app with "Canvas: trying to use a recycled bitmap",
+    // because a RenderNode display list can be replayed after onDispose runs. Since minSdk is 26,
+    // bitmap memory lives on the Java heap and is reclaimed by GC, so no explicit recycle is needed.
     Box(modifier.background(Color(0xFFF0F2EF)), Alignment.Center) {
         bitmap?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
             ?: CircularProgressIndicator(color = ImageGreen)
@@ -362,7 +365,7 @@ private fun EditPreview(state: ImageWorkspaceState, modifier: Modifier) {
 private fun ManagedBitmap(path: String, maxEdge: Int, content: @Composable (Bitmap?) -> Unit) {
     var bitmap by remember(path) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(path) { bitmap = withContext(Dispatchers.IO) { runCatching { ImageRenderEngine.decode(File(path), maxEdge) }.getOrNull() } }
-    DisposableEffect(bitmap) { onDispose { bitmap?.takeIf { !it.isRecycled }?.recycle() } }
+    // Same reason as EditPreview: never recycle a bitmap that Compose may still draw.
     content(bitmap)
 }
 
