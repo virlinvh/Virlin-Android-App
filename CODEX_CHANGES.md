@@ -340,3 +340,17 @@ screen. No content was entered during verification.
   README.
 - Parallel feature work remains intentionally blocked until the live dirty state is reviewed,
   verified and checkpointed into an integration branch.
+# 2026-10-01 - Isolated PDF workspace foundation
+
+- Created `codex/pdf-workspace` in a separate worktree while Claude owns Audio changes.
+- Specialized the existing managed Attachment contract; no new entity, table or migration.
+- Added strict PDF import, dashboard, mobile viewer/page overlay, page organization, normalized crop,
+  rasterized PDF extraction and PNG conversion with task-context Page registration.
+- Kept Annotation and OCR honest capability gates pending a durable sidecar contract and approved
+  bundled offline OCR dependency.
+- Added `PDF_WORKSPACE_FEATURE.md` and a shared-file wiring request; no active Audio/shared root was
+  edited.
+- Verification and final commit details will be appended after the complete test pass.
+- Verification: `compileDebugKotlin`, focused PDF tests, all 1,057 JVM tests,
+  `compileDebugAndroidTestKotlin`, and `assembleDebug` passed. `verifyRoborazziDebug` reported exactly
+  the already documented 17 visual differences; no golden was changed.

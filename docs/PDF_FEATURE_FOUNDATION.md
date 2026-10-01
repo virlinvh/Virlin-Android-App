@@ -15,6 +15,13 @@ root:
 This is currently a disabled **Not yet** placeholder. Clicking behavior, storage, import, editing,
 Page integration and map rendering were intentionally not introduced in this change.
 
+## Isolated implementation update
+
+The implementation contract and isolated module now live in `PDF_WORKSPACE_FEATURE.md` on the PDF
+feature branch. It specializes `CaptureType.FILE + AttachmentKind.PDF`, keeps Room at v17 and leaves
+the shared palette/navigation/Page wiring disabled until integration. The capability gates for
+durable annotation and offline OCR are explicit; they must not be bypassed with UI-only success.
+
 ## Persistence boundary
 
 `MapAddKind` is a UI intent enum and is not persisted. Renaming the enum therefore requires no
