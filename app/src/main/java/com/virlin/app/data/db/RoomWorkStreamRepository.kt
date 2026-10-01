@@ -72,6 +72,19 @@ class RoomWorkStreamRepository private constructor(
     override suspend fun getTaskPageBlocks(taskId: String) = db.taskPageBlocks().byTask(taskId).map { it.toDomain() }
 
     override suspend fun getNoteDoc(ownerKey: String) = db.virlinNotes().byOwner(ownerKey)?.toDomain()
+
+    override suspend fun getMapNodePreview(ownerId: String) =
+        db.mapNodePreviews().byOwner(ownerId)?.let {
+            com.virlin.app.domain.mappreview.MapPreviewCodec.decode(it.ownerKey, it.documentJson)
+                .copy(createdAt = it.createdAt, updatedAt = it.updatedAt)
+        }
+
+    override suspend fun allMapNodePreviews() =
+        db.mapNodePreviews().all().associate { row ->
+            row.ownerKey to com.virlin.app.domain.mappreview.MapPreviewCodec
+                .decode(row.ownerKey, row.documentJson)
+                .copy(createdAt = row.createdAt, updatedAt = row.updatedAt)
+        }
     override suspend fun getStages(workStreamId: String) = db.externalStages().byStream(workStreamId).map { it.toDomain() }
     override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()
     override suspend fun getNoteByCaptureId(captureItemId: String) =
@@ -139,6 +152,9 @@ class RoomWorkStreamRepository private constructor(
         if (writer.touchedLinks) _tagLinks.value = db.tagLinks().all().map { it.toDomain() }
         if (writer.touchedSteps) _taskSteps.value = db.taskSteps().all().map { it.toDomain() }
         if (writer.touchedPageBlocks) _taskPageBlocks.value = db.taskPageBlocks().all().map { it.toDomain() }
+        // Previews are read when the map opens rather than observed per node, so there is no
+        // StateFlow to republish; the flag exists so a future observer has one place to hook.
+        if (writer.touchedMapPreviews) Unit
         result
     }
 
@@ -146,6 +162,7 @@ class RoomWorkStreamRepository private constructor(
     private inner class Writer : WorkStreamWriter {
         var touchedStreams = false; var touchedProjects = false; var touchedTasks = false; var touchedCaptures = false; var touchedStages = false
         var touchedTags = false; var touchedLinks = false; var touchedSteps = false; var touchedPageBlocks = false
+        var touchedMapPreviews = false
 
         override suspend fun allTags() = db.projectTags().all().map { it.toDomain() }
         override suspend fun getTag(id: String) = db.projectTags().byId(id)?.toDomain()
@@ -187,6 +204,31 @@ class RoomWorkStreamRepository private constructor(
         override suspend fun noteDocOf(ownerKey: String) = db.virlinNotes().byOwner(ownerKey)?.toDomain()
         override suspend fun saveNoteDoc(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc) {
             db.virlinNotes().upsert(doc.toEntity())
+        }
+
+        override suspend fun mapNodePreviewOf(ownerId: String) =
+            db.mapNodePreviews().byOwner(ownerId)?.let {
+                com.virlin.app.domain.mappreview.MapPreviewCodec.decode(it.ownerKey, it.documentJson)
+                    .copy(createdAt = it.createdAt, updatedAt = it.updatedAt)
+            }
+
+        override suspend fun saveMapNodePreview(preview: com.virlin.app.domain.mappreview.MapNodePreview) {
+            val existing = db.mapNodePreviews().byOwner(preview.ownerId)
+            val now = preview.updatedAt ?: java.time.Instant.now()
+            db.mapNodePreviews().upsert(
+                MapNodePreviewEntity(
+                    ownerKey = preview.ownerId,
+                    documentJson = com.virlin.app.domain.mappreview.MapPreviewCodec.encode(preview),
+                    revision = (existing?.revision ?: 0) + 1,
+                    createdAt = existing?.createdAt ?: preview.createdAt ?: now,
+                    updatedAt = now,
+                )
+            )
+            touchedMapPreviews = true
+        }
+
+        override suspend fun deleteMapNodePreview(ownerId: String) {
+            db.mapNodePreviews().deleteByOwner(ownerId); touchedMapPreviews = true
         }
 
         override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()

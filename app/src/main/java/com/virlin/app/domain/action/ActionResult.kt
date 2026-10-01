@@ -61,6 +61,12 @@ sealed interface DomainError {
     data object TaskNotInWorkStream : DomainError
     data object InvalidEffort : DomainError
 
+    /**
+     * A mind-map node preview was rejected: blank owner id, more than the seven permitted images,
+     * duplicate image ids, or an image with no managed path.
+     */
+    data object InvalidPreview : DomainError
+
     // ---- External work (Phase 10)
     /** START NEXT STAGE was asked for but the run has no stage left to start. */
     data object NoNextStage : DomainError

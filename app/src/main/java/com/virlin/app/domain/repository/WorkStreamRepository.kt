@@ -86,6 +86,15 @@ interface WorkStreamRepository : CaptureRepository {
      */
     suspend fun getNoteDoc(ownerKey: String): VirlinNoteDoc?
 
+    /**
+     * One mind-map node's optional compact preview, keyed by the node's own stable entity id.
+     * Presentation data owned by the node: never a Capture, never a Task Page block.
+     */
+    suspend fun getMapNodePreview(ownerId: String): com.virlin.app.domain.mappreview.MapNodePreview?
+
+    /** Every stored preview, used to render a map without one query per node. */
+    suspend fun allMapNodePreviews(): Map<String, com.virlin.app.domain.mappreview.MapNodePreview>
+
     /** Atomic unit of work. Either every write in [block] is published, or none is. */
     suspend fun <T> transaction(block: suspend WorkStreamWriter.() -> T): T
 }
@@ -142,4 +151,7 @@ interface WorkStreamWriter : CaptureWriter {
      */
     suspend fun noteDocOf(ownerKey: String): VirlinNoteDoc?
     suspend fun saveNoteDoc(doc: VirlinNoteDoc)
+    suspend fun mapNodePreviewOf(ownerId: String): com.virlin.app.domain.mappreview.MapNodePreview?
+    suspend fun saveMapNodePreview(preview: com.virlin.app.domain.mappreview.MapNodePreview)
+    suspend fun deleteMapNodePreview(ownerId: String)
 }

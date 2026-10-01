@@ -48,6 +48,8 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     override suspend fun getTaskSteps(taskId: String) = inner?.getTaskSteps(taskId) ?: emptyList()
     override suspend fun getTaskPageBlocks(taskId: String) = inner?.getTaskPageBlocks(taskId) ?: emptyList()
     override suspend fun getNoteDoc(ownerKey: String) = inner?.getNoteDoc(ownerKey)
+    override suspend fun getMapNodePreview(ownerId: String) = inner?.getMapNodePreview(ownerId)
+    override suspend fun allMapNodePreviews() = inner?.allMapNodePreviews().orEmpty()
     override suspend fun getStages(workStreamId: String) = inner?.getStages(workStreamId) ?: emptyList()
 
     override val streams: StateFlow<List<WorkStream>> = _streams.asStateFlow()

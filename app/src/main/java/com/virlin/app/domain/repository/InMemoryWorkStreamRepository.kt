@@ -81,6 +81,7 @@ class InMemoryWorkStreamRepository(
     private val links = LinkedHashSet<com.virlin.app.domain.model.TagLink>()
     private val stepsById = LinkedHashMap<String, com.virlin.app.domain.model.TaskStep>()
     private val noteDocsByOwner = LinkedHashMap<String, com.virlin.app.domain.notedoc.VirlinNoteDoc>()
+    private val mapPreviewsByOwner = LinkedHashMap<String, com.virlin.app.domain.mappreview.MapNodePreview>()
     private val pageBlocksById = LinkedHashMap<String, com.virlin.app.domain.model.TaskPageBlock>()
     private val _tags = MutableStateFlow<List<com.virlin.app.domain.model.ProjectTag>>(emptyList())
     override val tags: StateFlow<List<com.virlin.app.domain.model.ProjectTag>> = _tags.asStateFlow()
@@ -97,6 +98,8 @@ class InMemoryWorkStreamRepository(
         pageBlocksById.values.filter { it.taskId == taskId }.sortedBy { it.order }
     }
     override suspend fun getNoteDoc(ownerKey: String) = lock.withLock { noteDocsByOwner[ownerKey] }
+    override suspend fun getMapNodePreview(ownerId: String) = lock.withLock { mapPreviewsByOwner[ownerId] }
+    override suspend fun allMapNodePreviews() = lock.withLock { mapPreviewsByOwner.toMap() }
     override suspend fun getNotesByCaptureIds(captureItemIds: List<String>) =
         lock.withLock { captureItemIds.mapNotNull { id -> noteByCapture[id]?.let { id to it } }.toMap() }
     override suspend fun getPromptsByCaptureIds(captureItemIds: List<String>) =
@@ -165,6 +168,8 @@ class InMemoryWorkStreamRepository(
         staged.stagedSteps.forEach { (id, st) -> stepsById[id] = st }
         staged.removedSteps.forEach { stepsById.remove(it) }
         staged.stagedNoteDocs.forEach { (key, doc) -> noteDocsByOwner[key] = doc }
+        staged.removedMapPreviews.forEach { mapPreviewsByOwner.remove(it) }
+        staged.stagedMapPreviews.forEach { (key, preview) -> mapPreviewsByOwner[key] = preview }
         staged.removedPageBlocks.forEach { pageBlocksById.remove(it) }
         staged.stagedPageBlocks.forEach { (id, block) -> pageBlocksById[id] = block }
         if (staged.removedPageBlocks.isNotEmpty() || staged.stagedPageBlocks.isNotEmpty()) {
@@ -224,6 +229,8 @@ class InMemoryWorkStreamRepository(
         val stagedSteps = LinkedHashMap<String, com.virlin.app.domain.model.TaskStep>()
         val removedSteps = LinkedHashSet<String>()
         val stagedNoteDocs = LinkedHashMap<String, com.virlin.app.domain.notedoc.VirlinNoteDoc>()
+        val stagedMapPreviews = LinkedHashMap<String, com.virlin.app.domain.mappreview.MapNodePreview>()
+        val removedMapPreviews = LinkedHashSet<String>()
         val stagedPageBlocks = LinkedHashMap<String, com.virlin.app.domain.model.TaskPageBlock>()
         val removedPageBlocks = LinkedHashSet<String>()
 
@@ -256,6 +263,15 @@ class InMemoryWorkStreamRepository(
         override suspend fun noteDocOf(ownerKey: String) =
             stagedNoteDocs[ownerKey] ?: noteDocsByOwner[ownerKey]
         override suspend fun saveNoteDoc(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc) { stagedNoteDocs[doc.ownerKey] = doc }
+        override suspend fun mapNodePreviewOf(ownerId: String) =
+            if (ownerId in removedMapPreviews) null
+            else stagedMapPreviews[ownerId] ?: mapPreviewsByOwner[ownerId]
+        override suspend fun saveMapNodePreview(preview: com.virlin.app.domain.mappreview.MapNodePreview) {
+            stagedMapPreviews[preview.ownerId] = preview; removedMapPreviews.remove(preview.ownerId)
+        }
+        override suspend fun deleteMapNodePreview(ownerId: String) {
+            removedMapPreviews += ownerId; stagedMapPreviews.remove(ownerId)
+        }
         override suspend fun pageBlocksOf(taskId: String) =
             (pageBlocksById + stagedPageBlocks).values.filter { it.taskId == taskId && it.id !in removedPageBlocks }.sortedBy { it.order }
         override suspend fun getPageBlock(id: String) =

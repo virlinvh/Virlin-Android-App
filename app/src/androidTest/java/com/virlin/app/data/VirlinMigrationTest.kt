@@ -532,7 +532,7 @@ class VirlinMigrationTest {
         } finally { db.close(); ctx.deleteDatabase(dbName) }
     }
 
-    @Test fun freshInstall_isV17_andNoMigrationNeeded() {
+    @Test fun freshInstall_isV18_andNoMigrationNeeded() {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         ctx.deleteDatabase("virlin-fresh-test.db")
         val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, "virlin-fresh-test.db").addMigrations(*VirlinDatabase.MIGRATIONS).build()
@@ -545,8 +545,83 @@ class VirlinMigrationTest {
                 assertEquals(0, db.voiceDocuments().count())
                 assertEquals(0, db.virlinNotes().count())
                 assertEquals(0, db.taskPageBlocks().all().size)
+                assertEquals(0, db.mapNodePreviews().count())
             }
-            assertEquals(17, db.openHelper.readableDatabase.version)
+            assertEquals(18, db.openHelper.readableDatabase.version)
         } finally { db.close(); ctx.deleteDatabase("virlin-fresh-test.db") }
+    }
+
+    @Test fun migrate17To18_addsMapNodePreviews_withoutChangingAnythingElse() {
+        val dbName = "virlin-migration-17-18.db"
+        // Seed v17 with real content so the migration is proven NON-DESTRUCTIVE rather than merely
+        // syntactically valid: a project, a workstream, a task and a Page block must all survive.
+        helper.createDatabase(dbName, 17).apply {
+            execSQL(
+                "INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort," +
+                    "defaultExecutionMode,createdAt,updatedAt,completedAt,iconPath,iconId) " +
+                    "VALUES ('p1','Kept project','d','ACTIVE','HIGH',NULL,144000000,'HUMAN'," +
+                    "1700000000000,1700000000000,NULL,NULL,NULL)"
+            )
+            execSQL(
+                "INSERT INTO task_page_blocks (id, taskId, typeKey, contentId, sortOrder, createdAt, updatedAt) " +
+                    "VALUES ('b1', 't1', 'capture.link', 'c1', 0, 1700000000000, 1700000000000)"
+            )
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 18, true, VirlinDatabase.MIGRATION_17_18).close()
+
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                // Existing data is untouched.
+                assertEquals("Kept project", db.projects().all().single().title)
+                assertEquals("capture.link", db.taskPageBlocks().byTask("t1").single().typeKey)
+                // The new table exists and starts empty: a node with no preview simply has no row.
+                assertEquals(0, db.mapNodePreviews().count())
+
+                val now = java.time.Instant.ofEpochMilli(1_700_000_000_000L)
+                db.mapNodePreviews().upsert(
+                    com.virlin.app.data.db.MapNodePreviewEntity(
+                        ownerKey = "task-1",
+                        documentJson = """{"version":1,"text":"hello","runs":[],"images":[]}""",
+                        revision = 1, createdAt = now, updatedAt = now,
+                    )
+                )
+                assertEquals(1, db.mapNodePreviews().count())
+                assertEquals("task-1", db.mapNodePreviews().byOwner("task-1")!!.ownerKey)
+            }
+        } finally { db.close(); ctx.deleteDatabase(dbName) }
+    }
+
+    /**
+     * The long chain: a database created at the oldest supported version must reach v18 through
+     * every intermediate migration, carrying its data the whole way. This is what catches a
+     * migration that only works when applied to a recently-created database.
+     */
+    @Test fun migrate1To18_longChain_preservesSeededData() {
+        val dbName = "virlin-migration-1-18.db"
+        helper.createDatabase(dbName, 1).apply {
+            execSQL(
+                "INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort," +
+                    "createdAt,updatedAt,completedAt) " +
+                    "VALUES ('p-old','Oldest project','d','ACTIVE','HIGH',NULL,144000000," +
+                    "1600000000000,1600000000000,NULL)"
+            )
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 18, true, *VirlinDatabase.MIGRATIONS).close()
+
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                assertEquals("Oldest project", db.projects().all().single { it.id == "p-old" }.title)
+                assertEquals(0, db.mapNodePreviews().count())
+            }
+            assertEquals(18, db.openHelper.readableDatabase.version)
+        } finally { db.close(); ctx.deleteDatabase(dbName) }
     }
 }

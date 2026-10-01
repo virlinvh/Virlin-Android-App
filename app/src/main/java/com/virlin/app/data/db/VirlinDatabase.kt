@@ -212,6 +212,15 @@ interface VirlinNoteDao {
 }
 
 @Dao
+interface MapNodePreviewDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(row: MapNodePreviewEntity)
+    @Query("SELECT * FROM map_node_previews WHERE ownerKey = :ownerKey") suspend fun byOwner(ownerKey: String): MapNodePreviewEntity?
+    @Query("SELECT * FROM map_node_previews") suspend fun all(): List<MapNodePreviewEntity>
+    @Query("DELETE FROM map_node_previews WHERE ownerKey = :ownerKey") suspend fun deleteByOwner(ownerKey: String)
+    @Query("SELECT COUNT(*) FROM map_node_previews") suspend fun count(): Int
+}
+
+@Dao
 interface TaskPageBlockDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(block: TaskPageBlockEntity)
     @Query("SELECT * FROM task_page_blocks ORDER BY taskId, sortOrder, createdAt, id")
@@ -242,9 +251,10 @@ interface TaskPageBlockDao {
         CaptureEntity::class, NoteDocumentEntity::class, PromptDocumentEntity::class,
         AttachmentDocumentEntity::class, VoiceDocumentEntity::class, PriorityPreferenceEntity::class,
         ExternalStageEntity::class, ProjectTagEntity::class, TagLinkEntity::class,
-        TaskStepEntity::class, VirlinNoteEntity::class, TaskPageBlockEntity::class
+        TaskStepEntity::class, VirlinNoteEntity::class, TaskPageBlockEntity::class,
+        MapNodePreviewEntity::class
     ],
-    version = 17,
+    version = 18,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
@@ -258,6 +268,7 @@ abstract class VirlinDatabase : RoomDatabase() {
     abstract fun events(): EventDao
     abstract fun meta(): MetaDao
     abstract fun captures(): CaptureDao
+    abstract fun mapNodePreviews(): MapNodePreviewDao
     abstract fun noteDocuments(): NoteDocumentDao
     abstract fun promptDocuments(): PromptDocumentDao
     abstract fun priorityPreferences(): PriorityPreferenceDao
@@ -542,7 +553,25 @@ abstract class VirlinDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
+        /**
+         * v18: `map_node_previews`, one optional compact preview per mind-map node.
+         *
+         * Purely additive - one new table, no existing table touched and no data rewritten - so
+         * every existing project, map, Page block and attachment is preserved untouched. Nodes
+         * without a preview simply have no row, which is exactly the empty state the map renders.
+         */
+        val MIGRATION_17_18: Migration = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `map_node_previews` (" +
+                        "`ownerKey` TEXT NOT NULL, `documentJson` TEXT NOT NULL, " +
+                        "`revision` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`ownerKey`))"
+                )
+            }
+        }
+
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

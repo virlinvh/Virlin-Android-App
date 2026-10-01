@@ -454,6 +454,35 @@ interface VirlinActions {
 
     // ---- The Notes page's own documents (self-contained; see NoteDocActions).
     /** The Notes-page document filed under [ownerKey], or null when never written. */
+    // ---- Mind-map node previews (see MapPreviewActions).
+    //
+    // Presentation data owned by one map node. These never create a Capture, never appear in the
+    // Inbox and never register a Task Page block, which is what keeps private map decoration
+    // distinguishable from the user's real attached work.
+
+    /** One node's preview, or null when it has none. */
+    suspend fun loadMapNodePreview(ownerId: String): com.virlin.app.domain.mappreview.MapNodePreview?
+
+    /** Every stored preview, so a map is rendered without one query per node. */
+    suspend fun loadAllMapNodePreviews(): Map<String, com.virlin.app.domain.mappreview.MapNodePreview>
+
+    /**
+     * Saves one node's preview atomically. An empty preview is removed rather than stored.
+     * Rejects more than seven images, duplicate image ids and a blank owner id.
+     */
+    suspend fun saveMapNodePreview(
+        ownerId: String,
+        description: com.virlin.app.domain.mappreview.FormattedText,
+        images: List<com.virlin.app.domain.mappreview.MapPreviewImage>,
+        expanded: Boolean = false,
+    ): ActionResult<com.virlin.app.domain.mappreview.MapNodePreview?>
+
+    /** Clears a node's preview. Never touches the underlying Task/WorkStream or its Task Page. */
+    suspend fun clearMapNodePreview(ownerId: String): ActionResult<Unit>
+
+    /** Persists only the collapsed/expanded preference. */
+    suspend fun setMapNodePreviewExpanded(ownerId: String, expanded: Boolean): ActionResult<Unit>
+
     suspend fun loadNoteDoc(ownerKey: String): com.virlin.app.domain.notedoc.VirlinNoteDoc?
 
     /** Writes the whole Notes-page document. Idempotent: identical content is not re-written. */

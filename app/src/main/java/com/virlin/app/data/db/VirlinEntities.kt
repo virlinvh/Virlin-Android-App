@@ -354,6 +354,23 @@ data class VirlinNoteEntity(
     val updatedAt: Instant
 )
 
+/**
+ * One mind-map node's optional compact preview.
+ *
+ * Keyed by the node's own stable entity id (Project, WorkStream or Task), mirroring the
+ * `virlin_notes` owner-key shape. The payload is a versioned JSON document rather than columns, so
+ * the description's bold/italic runs and the ordered image metadata evolve without a schema change.
+ * Image BYTES never live here - only relative paths into the preview image root.
+ */
+@Entity(tableName = "map_node_previews")
+data class MapNodePreviewEntity(
+    @PrimaryKey val ownerKey: String,
+    val documentJson: String,
+    val revision: Int,
+    val createdAt: Instant,
+    val updatedAt: Instant,
+)
+
 @Entity(tableName = "task_steps", indices = [Index("taskId")])
 data class TaskStepEntity(
     @PrimaryKey val id: String,

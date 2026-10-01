@@ -7,7 +7,7 @@ The user may explicitly reassign this role; feature agents may not infer reassig
 
 | Version | Reservation | Status |
 |---|---|---|
-| 18 | Unassigned | Available only through integration owner |
+| 18 | **Mind map node preview** (`map_node_previews`) — Claude, `feature/mind-map-node-preview` | **Reserved** under explicit user instruction in the node-preview brief ("Reserve exactly one version"), which the queue permits the user to grant. Not self-assigned by a feature agent. |
 | 19 | Unassigned | Do not reserve before v18 design is accepted |
 
 Rules:

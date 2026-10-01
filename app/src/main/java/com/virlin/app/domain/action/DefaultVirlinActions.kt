@@ -233,6 +233,19 @@ class DefaultVirlinActions(
     override suspend fun restoreSteps(cleared: com.virlin.app.domain.model.ClearedSteps) =
         tagging.restoreSteps(cleared)
 
+    private val mapPreviews = MapPreviewActions(repository, clock)
+    override suspend fun loadMapNodePreview(ownerId: String) = mapPreviews.load(ownerId)
+    override suspend fun loadAllMapNodePreviews() = mapPreviews.loadAll()
+    override suspend fun saveMapNodePreview(
+        ownerId: String,
+        description: com.virlin.app.domain.mappreview.FormattedText,
+        images: List<com.virlin.app.domain.mappreview.MapPreviewImage>,
+        expanded: Boolean,
+    ) = mapPreviews.save(ownerId, description, images, expanded)
+    override suspend fun clearMapNodePreview(ownerId: String) = mapPreviews.clear(ownerId)
+    override suspend fun setMapNodePreviewExpanded(ownerId: String, expanded: Boolean) =
+        mapPreviews.setExpanded(ownerId, expanded)
+
     private val noteDocs = NoteDocActions(repository, clock)
     override suspend fun loadNoteDoc(ownerKey: String) = noteDocs.loadNoteDoc(ownerKey)
     override suspend fun saveNoteDoc(
