@@ -13,9 +13,9 @@ Updated: 2026-09-30
 | Prompt | Implemented prompt/code/response workspace | `PROMPT_FEATURE.md` | Maintained |
 | Link | Implemented validation, previews and YouTube segments | `LINK_FEATURE.md` | Maintained |
 | Generic File/Attachment | Implemented Capture import/viewer | `FILE_ATTACHMENT_FEATURE.md` | Maintained |
-| Voice | Implemented Capture multi-clip recorder/player | `VOICE_FEATURE.md` | Input for future Audio design |
+| Voice | Implemented Capture multi-clip recorder/player | `VOICE_FEATURE.md` | Canonical store behind Audio v1 |
 | PDF palette feature | Name/icon foundation only; disabled | `PDF_FEATURE_FOUNDATION.md` | Proposed Codex feature |
-| Audio palette feature | Disabled; contract decision pending | `VOICE_FEATURE.md` | Proposed Claude feature |
+| Audio palette feature | **Implemented (v1, record-only)** — reuses Capture Voice, no new model | `AUDIO_FEATURE.md` | Claude (Audio lane) |
 | Attachment palette feature | Disabled | None yet | Unassigned |
 | Image palette feature | Disabled | None yet | Unassigned |
 | Sticker | Disabled | None yet | Unassigned |

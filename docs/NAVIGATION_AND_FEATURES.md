@@ -39,7 +39,8 @@ navigation decision, not a feature-local styling edit.
 - Prompt: new and capture/task-scoped prompt editor routes.
 - Link: new and capture/task-scoped link editor routes.
 - File: new/import and `file_viewer/{captureId}` compatibility/content route.
-- Voice: new/record and `voice_editor/{captureId}` routes.
+- Voice/Audio: new/record, `voice_editor/{captureId}`, and `voice_editor/new/task/{taskId}`
+  (Audio v1, task-owned recording).
 - `focus_clock` — alternate presentation of the same active Focus session.
 
 ## Mind-map Add palette
@@ -50,13 +51,14 @@ Implemented and enabled:
 - Note → redesigned owner-scoped task Note and Page registration.
 - Prompt → task-attached Prompt workspace.
 - Link → task-attached Link workspace.
+- Audio → task-owned voice recording (Audio v1 is recorded voice; imported audio stays with
+  `AttachmentKind.AUDIO` and is not offered here).
 
 Visible but disabled (`Not yet`):
 
 - PDF (renamed from Topic link; PDF icon; no storage/navigation yet).
 - Attachment.
 - Image.
-- Audio.
 - Sticker.
 - Illustration.
 

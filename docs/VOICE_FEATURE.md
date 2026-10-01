@@ -20,3 +20,8 @@ decide whether it is:
 
 Do not introduce a second incompatible audio table/file lifecycle without explicit approval and a
 migration/compatibility plan.
+
+## Audio v1
+
+The mind-map **Audio** entry is this feature, reached with an explicit task owner through
+`voice_editor/new/task/{taskId}`. There is no separate Audio model. See `AUDIO_FEATURE.md`.
