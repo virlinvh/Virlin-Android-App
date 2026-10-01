@@ -91,6 +91,17 @@ const val VoiceEditorRoute = "voice_editor"
 fun voiceEditorRoute(captureId: String?) =
     if (captureId.isNullOrBlank()) "voice_editor" else "voice_editor/$captureId"
 
+/**
+ * Audio v1: a NEW recording owned by [taskId], following the same task-route shape Prompt and Link
+ * already use. Ownership travels as an explicit id in the route; it is never inferred from the
+ * focused stream, a title or a list position.
+ */
+const val VoiceEditorTaskRoute = "voice_editor/new/task/{taskId}"
+fun voiceEditorForTask(taskId: String): String {
+    require(taskId.isNotBlank()) { "A task-owned recording requires a task id" }
+    return "voice_editor/new/task/$taskId"
+}
+
 const val VoiceScreenTag = "voice_editor_screen"
 const val VoiceTitleTag = "voice_title"
 const val VoiceStopTag = "voice_stop_recording"
@@ -108,8 +119,11 @@ private val RecRed = Color(0xFFE11D48)
 fun VoiceEditorScreen(
     navController: NavController,
     captureId: String?,
+    /** Ownership for a new recording. Ignored when [captureId] is set; that row owns itself. */
+    initialContext: CaptureContext = CaptureContext.None,
     vm: VoiceEditorViewModel = viewModel(
-        factory = VoiceEditorViewModel.factory(captureId, LocalContext.current)
+        key = "voice-${captureId ?: "new"}-${initialContext.taskId ?: "global"}",
+        factory = VoiceEditorViewModel.factory(captureId, LocalContext.current, initialContext)
     )
 ) {
     val state by vm.state.collectAsState()

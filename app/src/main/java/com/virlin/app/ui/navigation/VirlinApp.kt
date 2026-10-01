@@ -481,6 +481,27 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     FileViewerScreen(navController, captureId = entry.arguments?.getString("captureId"))
                 }
 
+                composable(
+                    route = "pdf_workspace/new/task/{taskId}",
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.pdf.PdfWorkspaceScreen(
+                        navController = navController,
+                        captureId = null,
+                        taskId = entry.arguments?.getString("taskId")
+                    )
+                }
+                composable(
+                    route = "pdf_workspace/capture/{captureId}",
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.pdf.PdfWorkspaceScreen(
+                        navController = navController,
+                        captureId = entry.arguments?.getString("captureId"),
+                        taskId = null
+                    )
+                }
+
                 // Full-screen Capture Voice editor (single screen; not a bottom-nav destination).
                 composable("voice_editor") {
                     VoiceEditorScreen(navController, captureId = null)
@@ -490,6 +511,51 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     arguments = listOf(navArgument("captureId") { type = NavType.StringType })
                 ) { entry ->
                     VoiceEditorScreen(navController, captureId = entry.arguments?.getString("captureId"))
+                }
+                // Audio v1: a NEW recording owned by an explicit task. Only the task id travels;
+                // CaptureActions derives project and WorkStream from that task, so ownership has
+                // exactly one source of truth.
+                // Task-scoped universal file space. One imported file = one capture = one Page block.
+                composable(
+                    route = com.virlin.app.ui.attachment.AttachmentWorkspaceTaskRoute,
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.attachment.AttachmentWorkspaceScreen(
+                        navController,
+                        taskId = entry.arguments?.getString("taskId").orEmpty()
+                    )
+                }
+                composable(
+                    route = com.virlin.app.ui.image.ImageWorkspaceTaskRoute,
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.image.ImageWorkspaceScreen(
+                        navController = navController,
+                        taskId = entry.arguments?.getString("taskId"),
+                        captureId = null,
+                    )
+                }
+                composable(
+                    route = com.virlin.app.ui.image.ImageWorkspaceCaptureRoute,
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.image.ImageWorkspaceScreen(
+                        navController = navController,
+                        taskId = null,
+                        captureId = entry.arguments?.getString("captureId"),
+                    )
+                }
+                composable(
+                    route = com.virlin.app.ui.voice.VoiceEditorTaskRoute,
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    VoiceEditorScreen(
+                        navController,
+                        captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(
+                            taskId = entry.arguments?.getString("taskId")
+                        )
+                    )
                 }
             }
             }

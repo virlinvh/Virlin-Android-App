@@ -10,6 +10,8 @@ object AttachmentKindResolver {
         val ext = displayName.substringAfterLast('.', "").lowercase()
         return when {
             mime == "application/pdf" || ext == "pdf" -> AttachmentKind.PDF
+            ext in markdownExt -> AttachmentKind.MARKDOWN
+            ext in archiveExt || mime in archiveMime -> AttachmentKind.ARCHIVE
             mime.startsWith("image/") || ext in imageExt -> AttachmentKind.IMAGE
             mime.startsWith("video/") || ext in videoExt -> AttachmentKind.VIDEO
             mime.startsWith("audio/") || ext in audioExt -> AttachmentKind.AUDIO
@@ -33,6 +35,8 @@ object AttachmentKindResolver {
         AttachmentKind.DOCX -> "Word"
         AttachmentKind.XLSX -> "Spreadsheet"
         AttachmentKind.PPTX -> "Presentation"
+        AttachmentKind.MARKDOWN -> "Markdown"
+        AttachmentKind.ARCHIVE -> "Archive"
         AttachmentKind.UNSUPPORTED -> "File"
     }
 
@@ -42,8 +46,35 @@ object AttachmentKindResolver {
         else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
     }
 
+    /**
+     * How a kind may be shown. Kept here so routing stays centralized: there is deliberately no
+     * second capability enum elsewhere in the app.
+     */
+    enum class Preview {
+        /** Rendered inside the Attachment workspace. */
+        IN_APP,
+        /** Handed to the dedicated PDF workspace. */
+        PDF_WORKSPACE,
+        /** Stored safely, described only - share or open with another app. */
+        DETAILS_ONLY,
+    }
+
+    fun previewOf(kind: AttachmentKind): Preview = when (kind) {
+        AttachmentKind.PDF -> Preview.PDF_WORKSPACE
+        AttachmentKind.ARCHIVE, AttachmentKind.UNSUPPORTED -> Preview.DETAILS_ONLY
+        else -> Preview.IN_APP
+    }
+
+    private val markdownExt = setOf("md", "markdown")
+    private val archiveExt = setOf("zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz")
+    private val archiveMime = setOf(
+        "application/zip", "application/x-zip-compressed", "application/vnd.rar",
+        "application/x-rar-compressed", "application/x-7z-compressed", "application/x-tar",
+        "application/gzip", "application/x-gzip",
+    )
+
     private val imageExt = setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp")
     private val videoExt = setOf("mp4", "webm", "3gp", "mkv", "mov")
     private val audioExt = setOf("mp3", "m4a", "aac", "ogg", "wav", "flac")
-    private val textExt = setOf("txt", "log", "md", "markdown", "json", "xml", "html", "htm", "css", "js", "kt", "java", "py")
+    private val textExt = setOf("txt", "log", "json", "xml", "html", "htm", "css", "js", "kt", "java", "py")
 }

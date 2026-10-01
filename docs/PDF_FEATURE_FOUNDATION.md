@@ -12,8 +12,16 @@ root:
 - Its hierarchy/network icon was replaced by Material's outlined PDF document icon.
 - Its position remains the left item of the third palette row, opposite Attachment.
 
-This is currently a disabled **Not yet** placeholder. Clicking behavior, storage, import, editing,
-Page integration and map rendering were intentionally not introduced in this change.
+This section records the original rename-only foundation. The later implemented and integrated
+behavior is authoritative in `PDF_WORKSPACE_FEATURE.md`: PDF is now enabled in the palette and opens
+the task-scoped workspace.
+
+## Isolated implementation update
+
+The implementation contract lives in `PDF_WORKSPACE_FEATURE.md`. It specializes
+`CaptureType.FILE + AttachmentKind.PDF`, keeps Room at v17, and is wired into the palette,
+navigation, and kind-based Task Page routing. The capability gates for durable annotation and
+offline OCR remain explicit; they must not be bypassed with UI-only success.
 
 ## Persistence boundary
 
@@ -29,5 +37,4 @@ database migration and cannot strand existing user data. Existing generic Attach
 4. Define ownership and Page-block registration before attaching PDFs to tasks.
 5. Reuse existing PDF/attachment primitives only after deciding whether a PDF is a specialized
    attachment or its own document contract; do not create duplicate records accidentally.
-6. Until storage and navigation are real, `MapAddKind.PDF.isSupported` must remain false and the
-   tile must continue to show **Not yet**.
+6. The enabled tile must continue routing by stable task/capture IDs and persisted attachment kind.

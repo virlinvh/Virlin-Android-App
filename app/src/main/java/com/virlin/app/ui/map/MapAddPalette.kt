@@ -68,7 +68,9 @@ enum class MapAddKind(val label: String) {
  *
  * The enabled choices have an honest live destination: a To-do is a `TaskStep`, Prompt creates
  * a task-context capture, Link opens its full-page Capture workspace with project context, and
- * Note opens the full-page Notes workspace backed by its own `virlin_notes` document.
+ * Note opens the full-page Notes workspace backed by its own `virlin_notes` document, and Audio
+ * opens the existing Capture Voice recorder with the selected task as its owner (Audio v1 is
+ * recorded voice; imported audio stays with `AttachmentKind.AUDIO` and is not offered here yet).
  * Link and Note deliberately create no map node; that relationship is deferred to the future
  * design. The attachment and voice DOCUMENT tables key on `captureItemId`, so they belong to the
  * Capture Inbox, not to a task - routing a file there would file an inbox item rather than
@@ -77,7 +79,9 @@ enum class MapAddKind(val label: String) {
  */
 val MapAddKind.isSupported: Boolean
     get() = this == MapAddKind.TODO || this == MapAddKind.TASK ||
-        this == MapAddKind.LINK || this == MapAddKind.NOTE
+        this == MapAddKind.LINK || this == MapAddKind.NOTE ||
+        this == MapAddKind.AUDIO || this == MapAddKind.PDF ||
+        this == MapAddKind.ATTACHMENT || this == MapAddKind.IMAGE
 
 private val rows = listOf(
     MapAddKind.TODO to MapAddKind.NOTE,

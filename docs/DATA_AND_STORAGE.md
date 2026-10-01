@@ -62,10 +62,9 @@ icons and map appearance are private application state and must not be exposed t
 
 ## Existing PDF distinction
 
-`AttachmentKind.PDF` already identifies PDFs inside the generic Capture File system and the universal
-viewer can render them. The new mind-map `MapAddKind.PDF` is currently only a disabled product intent.
-A future dedicated PDF feature must decide whether it specializes the existing attachment contract or
-introduces a separate document contract; it must not create two records for one imported file.
+`AttachmentKind.PDF` identifies PDFs inside the generic Capture File system. The enabled mind-map
+PDF workspace specializes that same attachment contract and routes by persisted kind; it does not
+introduce a parallel PDF table or create two records for one imported file.
 
 ## Migration governance
 

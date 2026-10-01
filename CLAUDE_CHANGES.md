@@ -601,3 +601,263 @@ needs an emulator cold boot.
 The 17 Roborazzi differences remain the untouched user-approval gate described in
 `docs/GOLDEN_BASELINE_REVIEW.md`, and the PDF/Audio product decision in
 `docs/CLAUDE_FINAL_DOCUMENTATION_AUDIT.md` §6 is still required before parallel lanes begin.
+
+---
+
+## 2026-10-01 — Audio v1 (record-only) on `feature/audio-workspace`
+
+**Requested by:** User, with an approved product decision: **Audio v1 is record-only.**
+**Status:** Implemented and verified. Branch not merged. No golden recorded or replaced; Room
+stays at **v17**; `CODEX_CHANGES.md` untouched.
+
+### What Audio v1 is
+
+The mind-map **Audio** tile opens the **existing Capture Voice workspace** with the selected task
+supplied explicitly. **There is no new Audio entity, capture type, table, storage model or editor.**
+Imported audio remains `AttachmentKind.AUDIO` through the File flow and is deliberately not offered
+in this entry.
+
+### The smallest adapter
+
+- `VoiceEditorViewModel` takes an optional `initialContext: CaptureContext`, applied **only** when
+  creating a new recording. An existing capture still hydrates its owner from the persisted row in
+  `loadExisting`, so reopening a saved recording can never be re-homed by its route.
+- `voiceEditorForTask(taskId)` builds `voice_editor/new/task/{taskId}` and `require`s a non-blank
+  id, following the Prompt/Link task-route pattern. Registered in `VirlinApp`.
+- Only `taskId` travels; `CaptureActions` derives project and WorkStream from the task, keeping one
+  source of truth for ownership.
+- `MapAddKind.AUDIO` is now supported and routes from `ProjectMapScreen`. Its existing `MicNone`
+  icon was already correct.
+- Saving continues to go through the existing `CaptureActions` transaction, which registers the
+  `capture.voice` Page block automatically. No separate registration path was added.
+
+### Shared seam correction — now owned by the Audio lane
+
+`openBlock` in `ui/page/TaskPageScreen.kt` had **no branch for `capture.voice` or `capture.file`
+and no `else`**, so both block types rendered and were labelled correctly but their taps did
+nothing at all. Fixed for both, using each feature's own published builder after verifying the
+registered destinations: `voiceEditorRoute(contentId)` → `voice_editor/{captureId}` and
+`fileViewerRoute(contentId)` → `file_viewer/{captureId}`. No route was invented. An unknown
+`typeKey` now reports through the Page's existing message dialog instead of failing silently.
+Labels, row projection, icons, ordering, reconciliation and ownership were **not** touched.
+**The PDF lane must reuse the `capture.file` case and not edit that block.**
+
+### Files changed
+
+Production: `ui/voice/VoiceEditorViewModel.kt`, `ui/voice/VoiceEditorScreen.kt`,
+`ui/navigation/VirlinApp.kt`, `ui/map/MapAddPalette.kt`, `ui/map/ProjectMapScreen.kt`,
+`ui/page/TaskPageScreen.kt`.
+Tests: `test/.../AudioWorkspaceTest.kt` (new, 12 tests).
+Docs: `AUDIO_FEATURE.md` and `AUDIO_FEATURE_AUDIT.md` (new); `FEATURE_REGISTRY.md`,
+`NAVIGATION_AND_FEATURES.md`, `TASK_PAGE_FOUNDATION.md`, `PROJECT_DOCUMENTATION_INDEX.md`,
+`VOICE_FEATURE.md` updated.
+
+### Verification
+
+- `AudioWorkspaceTest`: **12 tests, 0 failures**.
+- `:app:testDebugUnitTest`: **1065 tests, 0 failures** (1053 baseline + 12 new).
+- `:app:compileDebugAndroidTestKotlin` and `:app:assembleDebug`: **BUILD SUCCESSFUL**.
+- `:app:verifyRoborazziDebug`: **17 failures — the same 17 documented differences, name for name.
+  Zero new or changed visual differences.** No golden was recorded, replaced or deleted.
+- No database or schema file changed; no ignored artifact staged.
+
+### Investigated and documented, deliberately NOT implemented
+
+1. **No maximum recording duration or file-size policy** — `MediaRecorder.setMaxDuration` and
+   `setMaxFileSize` are never called, so a recording can grow unbounded.
+2. **Archiving a voice capture orphans its media** — `VoiceFileStore.deleteClip` and
+   `deleteCaptureTree` are called only from the editor; `archiveCapture` does not touch managed
+   storage, so `.m4a` files survive indefinitely. Destructive cleanup was not implemented because
+   deletion semantics are shared with Attachment and Prompt and should be designed once for all
+   capture types.
+3. **Missing or corrupt media is already safe** — the player is built with
+   `runCatching { ... }.getOrNull()`, so a bad file yields a null player rather than a crash.
+4. Recording across process death is untested, and the emulator microphone is synthetic.
+
+---
+
+## 2026-10-01 — Attachment workspace (task-scoped universal file space)
+
+**Requested by:** User, with binding decisions: reuse the existing resolver, imported audio is an
+Attachment rather than a Voice capture, PDF keeps its canonical workspace, reuse the existing office
+renderers.
+**Branch:** `feature/attachment-workspace`, based on Codex's integration commit `e28b521`.
+**Status:** Implemented and verified by build and tests. **Emulator walkthrough is BLOCKED by the
+environment, not by this code — evidence below.** `CODEX_CHANGES.md` untouched.
+
+### Audit outcome — most of the request already existed
+
+`UniversalFileViewer` (587 lines) already renders all ten kinds, **including DOCX, XLSX and PPTX**
+through `OoxmlReaders`, each bounded and disclosing truncation. A centralized
+`AttachmentKindResolver` already existed. Building the specified `AttachmentPreviewCapability` would
+have created a second resolver, which the brief itself forbids, so the existing one was extended.
+
+**Room was not changed and stays at v17.** `attachment_documents.kind` is a String column decoded
+with `runCatching { valueOf }.getOrDefault(UNSUPPORTED)`, so adding enum values is purely additive,
+leaves existing rows untouched, and lets an older build read a newer row safely.
+
+### What was built
+
+- `AttachmentKind` gained `MARKDOWN` and `ARCHIVE`; `AttachmentKindResolver` gained their
+  extensions/MIMEs, labels, and a `previewOf(kind)` accessor returning `IN_APP`, `PDF_WORKSPACE` or
+  `DETAILS_ONLY`. One resolver, not two.
+- `domain/attachment/MarkdownPreviewParser` — a conservative parser with **no HTML block type at
+  all**, so raw HTML stays literal text and nothing can reach a JavaScript-capable WebView.
+- `ui/attachment/` — route contract, ViewModel and screen: library with per-row View/Play/Details,
+  multi-select import via `OpenMultipleDocuments`, progress, per-file failure reporting, rename
+  preserving the extension, Share and Open-with through `FileProvider`, confirmed removal, and a
+  missing-file state.
+- `UniversalFileViewer` gained a Markdown viewer with a Preview/Source toggle and a "File stored
+  safely" details view for archives and unknown binaries, replacing the blunter
+  "cannot render this format" screen.
+- Wiring: `attachment_workspace/new/task/{taskId}` registered, `MapAddKind.ATTACHMENT` enabled and
+  routed. **PDF and Audio wiring preserved byte-for-byte; the Task Page `openBlock` seam was not
+  touched.**
+
+### Imported Audio is not a Voice capture
+
+Imported audio stays `CaptureType.FILE` + `AttachmentDocument(kind = AUDIO)` in
+`filesDir/attachments/`, appears as a `capture.file` block, and opens the read-only `AudioViewer`.
+Voice recording stays `CaptureType.VOICE` + `VoiceDocument` in `filesDir/voices/` as a
+`capture.voice` block opening the Voice workspace. An imported MP3 has no `VoiceDocument`, so
+routing it into the recorder would open an empty editor over the user's file.
+
+### One pre-existing test updated, deliberately
+
+`AttachmentCaptureTest.kindResolver_mapsCommonTypes` asserted `a.zip` resolves to `UNSUPPORTED`.
+Archives are now their own kind, so that line was updated to `ARCHIVE` **and an assertion added that
+`ARCHIVE` still resolves to `DETAILS_ONLY`** — user-facing behaviour is unchanged (stored, described,
+never previewed or extracted); the kind is simply labelled honestly. This was not a weakened
+assertion.
+
+### Verification
+
+- `AttachmentWorkspaceTest`: **22 tests, 0 failures**.
+- `:app:testDebugUnitTest`: **1091 tests, 0 failures** (1065 before this lane + 22 new + 4 from the
+  rebased integration base).
+- `:app:compileDebugKotlin`, `:app:compileDebugAndroidTestKotlin`, `:app:assembleDebug`: passed.
+- `:app:verifyRoborazziDebug`: **17 failures — exactly the documented baseline, no new or changed
+  visual difference.** No golden recorded, replaced or deleted.
+
+### Emulator verification BLOCKED — and it is not this code
+
+The app installs and launches (process alive, `MainActivity` top-resumed, **zero exceptions in
+logcat**) but renders a black window while the launcher renders normally.
+
+**Decisive test:** the base integration APK built from `e28b521` — the exact build that rendered the
+PDF workspace correctly earlier the same session — was installed and produced an **identical 15,845
+byte black frame**. The regression is therefore in the emulator's surface for this app, not in the
+Attachment changes. A clean shutdown and restart left the emulator stuck `offline` with a 7.5 GB
+resident QEMU process, so the walkthrough could not be completed.
+
+**Outstanding:** the import walkthrough (Markdown, TXT, DOCX, image, audio, video, PDF, ZIP), Page
+block reopening and restart persistence remain unverified on device. They should be run once the
+emulator is healthy, before this branch is merged.
+
+---
+
+## 2026-10-01 — Emulator fixed, and the Attachment walkthrough completed
+
+**Root cause of the black screen: the emulator's host GPU, not any Virlin code.** Starting the
+Pixel 8 AVD with `-gpu swiftshader_indirect` (software rendering) restored it immediately: the same
+APK that produced a 15,845 byte black frame now renders at ~658 KB. This matches the earlier
+decisive test in which the base `e28b521` APK reproduced the black frame identically.
+
+**For future sessions:** if this app renders black while the launcher renders normally, restart the
+emulator with `-gpu swiftshader_indirect` before suspecting the code.
+
+### Walkthrough completed on `feature/attachment-workspace` (`fe7eb90`)
+
+Installed with `adb install -r`; app data was never cleared. **Zero crashes throughout.**
+
+1. **Palette** — Attachment is enabled alongside To-do, Note, Prompt, Link, PDF and Audio. Image,
+   Sticker and Illustration remain honestly "Not yet".
+2. **Empty state** — "Attachments / Attached to · Pixel 8 Validation", the Add-any-file card, and
+   "No files yet · Anything you add stays on this device, attached to this task."
+3. **Multi-select import** — five files selected in one picker pass (`release-notes.md`,
+   `server.log`, `source-bundle.zip`, `unknown.bin`, `virlin-pdf-validation.pdf`) and all five
+   imported, giving "Saved files · 5".
+4. **Contextual actions resolved by kind** — **View** for Markdown, text and PDF; **Details** for
+   the archive and the unknown binary. Badges: MD, LOG, ZIP (amber), BIN, PDF (red).
+5. **Markdown preview** — Preview/Source chips, H1/H2 headings, checked and unchecked task
+   checkboxes, the fenced `bash` code block rendered monospaced on dark, and the quote line.
+6. **Archive details** — "File stored safely / Archives are kept exactly as imported. Virlin does
+   not open or extract them." with name and `application/zip`. Nothing was extracted.
+7. **PDF handoff** — opening the imported PDF routed **by kind** into Codex's canonical PDF
+   workspace, which loaded it as "5 pages · 81.4 KB" with Preview, Annotate, Organize, Crop, OCR
+   and Export all enabled. Cross-feature integration confirmed working.
+8. **Task Page** — each imported file appears as its own independent block with its resolved kind:
+   `release-notes.md · Markdown`, `server.log · Text`, `source-bundle.zip · Archive`,
+   `unknown.bin · File`, and `virlin-pdf-validation.pdf` labelled **PDF** by Codex's kind-aware
+   projection. Pre-existing Note and Link blocks were untouched.
+9. **Persistence** — after a full force-stop and relaunch, all five files and their Page blocks
+   were still present.
+
+This supersedes the "emulator verification BLOCKED" note in the previous entry. The Attachment lane
+is now verified end to end on device as well as by the 1091-test suite.
+## 2026-10-01 — Image workspace emulator audit and crash fix
+
+Branch `feature/image-emulator-fix`, from `codex/image-workspace` @ `b96f998`, in an isolated worktree.
+
+**Files touched**
+- `app/src/main/java/com/virlin/app/ui/image/ImageWorkspaceScreen.kt` — removed two
+  `DisposableEffect { onDispose { bitmap.recycle() } }` blocks (`EditPreview`, `ManagedBitmap`).
+- `app/src/test/java/com/virlin/app/image/ImageBitmapLifecycleTest.kt` — new source-level guard.
+- `docs/IMAGE_EMULATOR_AUDIT.md` — new.
+
+**Requested outcome**
+Audit-first reproduction of "tapping a file in the picker returns to the launcher", then a minimal
+safe fix only if reproducible.
+
+**Behaviour impact**
+The reported symptom was a real crash, but not in the picker or the import pipeline — the import
+had already succeeded and the record was persisted. The app died in a Compose draw frame with
+"Canvas: trying to use a recycled bitmap", because `asImageBitmap()` wraps a Bitmap without
+copying and a RenderNode display list can replay after `onDispose`. Removing the recycles fixes
+it; `minSdk 26` makes them unnecessary anyway. `ImageRenderEngine`'s recycles were examined and
+left alone — those are internal intermediates never handed to Compose.
+
+**Verification actually performed**
+Reproduced twice with logcat captured before the triggering tap. Post-fix on the emulator: same
+PID before and after (9145), `MainActivity` still resumed, 0 crashes. Unit tests, android-test
+compilation and `assembleDebug` pass; Roborazzi reports exactly the 17 known pre-existing diffs
+and no golden was recorded; Room stays at v17. The new guard was proven to fail when the recycle
+is reintroduced and pass when it is not.
+
+**Not verified** — a substantial part of the acceptance checklist, listed explicitly in section 8
+of `docs/IMAGE_EMULATOR_AUDIT.md`. This feature is NOT fully acceptance-tested.
+
+## 2026-10-01 — Final content-workspace integration and Image acceptance
+
+Branch `claude/final-content-workspaces`, cherry-picked from `a1a5a44` + `b96f998` + `da60ce8` in a
+fresh worktree. Full report: `docs/FINAL_CONTENT_WORKSPACES_INTEGRATION.md`.
+
+**Files touched (beyond the two cherry-picked Image commits)**
+- `app/src/main/java/com/virlin/app/ui/image/ImageWorkspaceContract.kt` — added
+  `ImageBackAction` / `imageBackAction(...)`.
+- `app/src/main/java/com/virlin/app/ui/image/ImageWorkspaceScreen.kt` — `back()` now uses it.
+- `app/src/test/java/com/virlin/app/image/ImageBackNavigationTest.kt` — new (5 tests).
+- `docs/FINAL_CONTENT_WORKSPACES_INTEGRATION.md` — new.
+- `docs/FEATURE_REGISTRY.md`, `docs/NAVIGATION_AND_FEATURES.md`,
+  `docs/PROJECT_DOCUMENTATION_INDEX.md`, `docs/TASK_PAGE_FOUNDATION.md`,
+  `docs/TESTING_AND_RELEASE.md` — reconciled to the integrated state.
+
+**Behaviour impact**
+Image is now integrated and enabled alongside PDF, Audio and Attachment. One new defect was found
+during acceptance and fixed: opening an IMAGE block from the Task Page trapped the user in the
+editor, because `back()` set the mode to EDIT while already in EDIT, so `popBackStack()` was never
+reached and neither the arrow, system Back nor the edge-swipe could leave. Back now exits that
+route. Nothing else in production code changed; conflicts were confined to documentation and the
+two append-only agent logs, both of which keep every entry verbatim.
+
+**Verification actually performed**
+1,105 JVM tests (0 failures) — exactly 1,091 + 7 + 2 + 5, so nothing was lost in the merge;
+android-test compilation; `assembleDebug`; connected `ImageRenderEngineTest` 2/2 on the emulator;
+Roborazzi at exactly the 17 documented differences with no golden changed; Room still v17. Both new
+guards were proven to fail when their defect is reintroduced. A full emulator acceptance matrix was
+run in a disposable `ImageAudit` project — no real project was touched and app data was never
+cleared.
+
+**Known limitation found:** a corrupt image with a valid MIME type and non-zero size is accepted and
+shown as a placeholder rather than refused at import. It fails safely but is not rejected; left
+unchanged as a product decision.

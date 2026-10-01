@@ -500,6 +500,26 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
                 scope.launch { com.virlin.app.domain.action.TaskPageActions(VirlinGraph.repository, VirlinGraph.clock, VirlinGraph.ids).ensure(topic.id, com.virlin.app.domain.model.TaskPageTypeKeys.NOTE, com.virlin.app.domain.model.TaskPageTypeKeys.noteOwner(topic.id)) }
                 navController.navigate(com.virlin.app.ui.notes.notesForTask(topic.id, topic.title))
             }
+            // Audio v1 = a recorded voice note owned by this task. It reuses the existing Capture
+            // Voice workspace unchanged; only the task context is new. No map node is created.
+            MapAddKind.AUDIO -> {
+                addChoice = null
+                navController.navigate(com.virlin.app.ui.voice.voiceEditorForTask(topic.id))
+            }
+            MapAddKind.PDF -> {
+                addChoice = null
+                navController.navigate(com.virlin.app.ui.pdf.pdfWorkspaceForTask(topic.id))
+            }
+            // Attachment is the task's universal file space. Each imported file becomes its own
+            // CaptureItem(FILE) + AttachmentDocument, so no new container entity is introduced.
+            MapAddKind.ATTACHMENT -> {
+                addChoice = null
+                navController.navigate(com.virlin.app.ui.attachment.attachmentWorkspaceForTask(topic.id))
+            }
+            MapAddKind.IMAGE -> {
+                addChoice = null
+                navController.navigate(com.virlin.app.ui.image.imageWorkspaceForTask(topic.id))
+            }
             // The palette does not let the remaining kinds be chosen; belt-and-braces case.
             else -> {
                 addChoice = null

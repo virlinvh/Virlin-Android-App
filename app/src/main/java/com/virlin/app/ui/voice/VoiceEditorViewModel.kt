@@ -57,6 +57,13 @@ data class VoiceUiState(
 class VoiceEditorViewModel(
     private val initialCaptureId: String?,
     private val appContext: Context,
+    /**
+     * Ownership for a NEW recording, supplied explicitly by the caller (for example the mind-map
+     * Audio entry passing its selected task). An existing capture ignores this and hydrates its
+     * ownership from the persisted row in [loadExisting] instead, so reopening a saved recording
+     * can never be re-homed by whatever route happened to open it.
+     */
+    private val initialContext: CaptureContext = CaptureContext.None,
     private val actions: VirlinActions = VirlinGraph.actions,
     private val repository: WorkStreamRepository = VirlinGraph.repository,
     private val ids: IdProvider = VirlinGraph.ids,
@@ -77,7 +84,8 @@ class VoiceEditorViewModel(
             captureId = initialCaptureId,
             voiceId = if (initialCaptureId == null) draftVoiceId else null,
             committedToInbox = initialCaptureId != null,
-            loading = initialCaptureId != null
+            loading = initialCaptureId != null,
+            context = if (initialCaptureId == null) initialContext else CaptureContext.None
         )
     )
     val state: StateFlow<VoiceUiState> = _state.asStateFlow()
@@ -393,11 +401,15 @@ class VoiceEditorViewModel(
     }
 
     companion object {
-        fun factory(captureId: String?, context: Context): ViewModelProvider.Factory =
+        fun factory(
+            captureId: String?,
+            context: Context,
+            initialContext: CaptureContext = CaptureContext.None
+        ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    VoiceEditorViewModel(captureId, context.applicationContext) as T
+                    VoiceEditorViewModel(captureId, context.applicationContext, initialContext) as T
             }
     }
 }

@@ -32,7 +32,13 @@ import kotlinx.coroutines.launch
 const val TaskPageRoute = "task_page/{taskId}"
 fun taskPage(taskId: String) = "task_page/$taskId"
 
-data class TaskPageRow(val block: TaskPageBlock, val label: String, val title: String, val preview: String)
+data class TaskPageRow(
+    val block: TaskPageBlock,
+    val label: String,
+    val title: String,
+    val preview: String,
+    val attachmentKind: AttachmentKind? = null,
+)
 data class TaskPageState(
     val task: Task? = null,
     val rows: List<TaskPageRow> = emptyList(),
@@ -89,7 +95,10 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
                         CaptureType.LINK -> LinkDocumentCodec.decode(capture.content).note.ifBlank { capture.sourceUrl.orEmpty() }
                         else -> capture?.content.orEmpty()
                     }.lineSequence().firstOrNull().orEmpty().ifBlank { "Content unavailable" }
-                    TaskPageRow(block, label, title, preview)
+                    val attachmentKind = if (capture?.type == CaptureType.FILE) {
+                        repository.getAttachmentByCaptureId(capture.id)?.kind
+                    } else null
+                    TaskPageRow(block, if (attachmentKind == AttachmentKind.PDF) "PDF" else label, title, preview, attachmentKind)
                 }
             }
         }
@@ -109,6 +118,9 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
         buildState()
     }
     fun clearMessage() { state = state.copy(message = null) }
+
+    /** Surfaces a notice through the Page's existing message dialog. */
+    fun notify(text: String) { state = state.copy(message = text) }
 
     companion object { fun factory(id: String) = object : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST") override fun <T : ViewModel> create(modelClass: Class<T>): T = TaskPageViewModel(id) as T
@@ -139,10 +151,10 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
                 item { Text("Everything attached to this task", color = Color.Gray, fontSize = 14.sp); Spacer(Modifier.height(2.dp)) }
                 items(s.rows, key = { it.block.id }) { row ->
                     Surface(shape = RoundedCornerShape(18.dp), color = Color.White, tonalElevation = 1.dp) {
-                        Row(Modifier.fillMaxWidth().clickable { openBlock(navController, row) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth().clickable { openBlock(navController, row, vm::notify) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(iconFor(row.block.typeKey), null, tint = green, modifier = Modifier.size(25.dp)); Spacer(Modifier.width(14.dp))
                             Column(Modifier.weight(1f)) { Text(row.label.uppercase(), color = green, fontSize = 11.sp, fontWeight = FontWeight.Bold); Text(row.title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1); Text(row.preview, color = Color.Gray, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                            if (!organize) IconButton({ openBlock(navController, row) }) { Icon(Icons.Default.Edit, "Edit ${row.label}", tint = Color.Gray) }
+                            if (!organize) IconButton({ openBlock(navController, row, vm::notify) }) { Icon(Icons.Default.Edit, "Edit ${row.label}", tint = Color.Gray) }
                             else Column { Row { IconButton({ vm.moveBy(row.block.id, -1) }) { Icon(Icons.Default.KeyboardArrowUp, "Move up") }; IconButton({ vm.moveBy(row.block.id, 1) }) { Icon(Icons.Default.KeyboardArrowDown, "Move down") } }; Row { IconButton({ transfer = row to false }) { Icon(Icons.Default.DriveFileMove, "Move") }; IconButton({ transfer = row to true }, enabled = row.block.typeKey.startsWith("capture.")) { Icon(Icons.Default.ContentCopy, "Duplicate") } } }
                         }
                     }
@@ -156,9 +168,31 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
 
 private fun iconFor(key: String) = when (key) { TaskPageTypeKeys.TODO -> Icons.Default.CheckBox; TaskPageTypeKeys.NOTE -> Icons.Default.Description; TaskPageTypeKeys.capture(CaptureType.LINK) -> Icons.Default.Link; TaskPageTypeKeys.capture(CaptureType.PROMPT) -> Icons.Default.Assignment; else -> Icons.Default.InsertDriveFile }
 
-private fun openBlock(nav: NavController, row: TaskPageRow) { when (row.block.typeKey) {
-    TaskPageTypeKeys.TODO -> nav.navigate(com.virlin.app.ui.todo.taskTodo(row.block.taskId))
-    TaskPageTypeKeys.NOTE -> nav.navigate(com.virlin.app.ui.notes.notesForTask(row.block.taskId, row.title))
-    TaskPageTypeKeys.capture(CaptureType.PROMPT) -> nav.navigate(com.virlin.app.ui.prompt.promptEditorRoute(row.block.contentId))
-    TaskPageTypeKeys.capture(CaptureType.LINK) -> nav.navigate(com.virlin.app.ui.link.linkEditorRoute(row.block.contentId))
-} }
+/**
+ * Opens a block in its own canonical editor, always by stable `contentId`.
+ *
+ * `capture.file` is the shared attachment dispatch seam. It selects specialized PDF and Image
+ * workspaces by persisted `AttachmentKind`; every other file continues to use the universal file
+ * viewer. New file specializations must extend this single kind-based branch rather than infer a
+ * destination from filenames or add a parallel Page contract.
+ *
+ * An unknown `typeKey` now reports through the Page's existing message dialog instead of failing
+ * silently, which keeps the open-string type-key contract forward-compatible.
+ */
+private fun openBlock(nav: NavController, row: TaskPageRow, onUnsupported: (String) -> Unit) {
+    when (row.block.typeKey) {
+        TaskPageTypeKeys.TODO -> nav.navigate(com.virlin.app.ui.todo.taskTodo(row.block.taskId))
+        TaskPageTypeKeys.NOTE -> nav.navigate(com.virlin.app.ui.notes.notesForTask(row.block.taskId, row.title))
+        TaskPageTypeKeys.capture(CaptureType.PROMPT) -> nav.navigate(com.virlin.app.ui.prompt.promptEditorRoute(row.block.contentId))
+        TaskPageTypeKeys.capture(CaptureType.LINK) -> nav.navigate(com.virlin.app.ui.link.linkEditorRoute(row.block.contentId))
+        TaskPageTypeKeys.capture(CaptureType.VOICE) -> nav.navigate(com.virlin.app.ui.voice.voiceEditorRoute(row.block.contentId))
+        TaskPageTypeKeys.capture(CaptureType.FILE) -> nav.navigate(
+            when (row.attachmentKind) {
+                AttachmentKind.PDF -> com.virlin.app.ui.pdf.pdfWorkspaceForCapture(row.block.contentId)
+                AttachmentKind.IMAGE -> com.virlin.app.ui.image.imageWorkspaceForCapture(row.block.contentId)
+                else -> com.virlin.app.ui.file.fileViewerRoute(row.block.contentId)
+            }
+        )
+        else -> onUnsupported("This build cannot open a ${row.label} block yet.")
+    }
+}

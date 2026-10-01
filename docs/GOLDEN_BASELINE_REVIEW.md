@@ -8,7 +8,7 @@ Source command: `:app:verifyRoborazziDebug`
 
 Do not bulk-record or bulk-accept the current screenshots. The failures are understood, but changing committed goldens remains a user-approved visual decision.
 
-The audit originally reported 18 failures: 17 Roborazzi failures and one ordinary unit-test failure. The ordinary failure was a stale expectation for domain-shaped links and has been corrected without weakening URL safety. A fresh run now passes all 1,053 ordinary JVM tests and reports exactly the 17 visual failures classified below.
+The audit originally reported 18 failures: 17 Roborazzi failures and one ordinary unit-test failure. The ordinary failure was a stale expectation for domain-shaped links and has been corrected without weakening URL safety. On the 2026-10-01 non-Image baseline, all 1,091 ordinary JVM tests pass and Roborazzi still reports exactly the same 17 visual failures classified below.
 
 ## Roborazzi classification
 

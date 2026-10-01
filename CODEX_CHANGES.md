@@ -340,3 +340,55 @@ screen. No content was entered during verification.
   README.
 - Parallel feature work remains intentionally blocked until the live dirty state is reviewed,
   verified and checkpointed into an integration branch.
+# 2026-10-01 - Isolated PDF workspace foundation
+
+- Created `codex/pdf-workspace` in a separate worktree while Claude owns Audio changes.
+- Specialized the existing managed Attachment contract; no new entity, table or migration.
+- Added strict PDF import, dashboard, mobile viewer/page overlay, page organization, normalized crop,
+  rasterized PDF extraction and PNG conversion with task-context Page registration.
+- Kept Annotation and OCR honest capability gates pending a durable sidecar contract and approved
+  bundled offline OCR dependency.
+- Added `PDF_WORKSPACE_FEATURE.md` and a shared-file wiring request; no active Audio/shared root was
+  edited.
+- Verification and final commit details will be appended after the complete test pass.
+- Verification: `compileDebugKotlin`, focused PDF tests, all 1,057 JVM tests,
+  `compileDebugAndroidTestKotlin`, and `assembleDebug` passed. `verifyRoborazziDebug` reported exactly
+  the already documented 17 visual differences; no golden was changed.
+
+# 2026-10-01 - PDF and Audio integration wiring
+
+- Combined the independently verified Audio and PDF feature commits on
+  `codex/pdf-audio-integration`; the feature branches remain available as isolated provenance.
+- Registered task-scoped new-PDF and existing-capture PDF workspace destinations in the shared
+  navigation graph.
+- Enabled PDF in the mind-map Add palette and routed it to the selected task's PDF workspace.
+- Made Task Page attachment rows retain their attachment kind, label PDF captures as **PDF**, and
+  open PDF captures in the dedicated workspace while preserving the generic viewer for other files.
+- Installed the integration APK over the existing emulator app without clearing data and visually
+  verified task -> Add -> PDF -> full-page PDF workspace.
+- Combined verification passed: `testDebugUnitTest`, `compileDebugAndroidTestKotlin`, and
+  `assembleDebug`. No Room schema change and no golden update.
+
+# 2026-10-01 - Non-Image PR readiness audit
+
+- Audited the committed Attachment/PDF/Audio baseline together with To-do, Notes, Prompt, Link and
+  Task Page contracts while Image remained isolated with Claude.
+- Corrected stale authoritative documentation that still described PDF, Audio, or Attachment as
+  disabled or awaiting integration; no production code or schema changed.
+- Added `NON_IMAGE_PR_READINESS_AUDIT.md` with architecture boundaries, feature status, known
+  limitations, and the final Image integration gate.
+- Verification passed: 1,091 ordinary JVM tests, Android-test compilation, and debug APK assembly.
+  Roborazzi reported exactly the 17 previously documented differences; no golden was changed.
+# 2026-10-01 - Image workspace foundation
+
+- Created `codex/image-workspace` from Claude's clean Attachment commit `fe7eb90`, preserving the
+  existing PDF, Audio and universal Attachment contracts.
+- Specialized managed `AttachmentKind.IMAGE`; no entity, table or Room migration was added.
+- Added task-scoped image library/import and existing-capture routes, light-theme non-destructive
+  adjustments, filters, crop, rotate/flip/straighten, markup, undo/redo and Save-copy PNG output.
+- Enabled Image in the mind-map Add palette and routed IMAGE Page blocks by persisted attachment
+  kind to the canonical Image workspace.
+- Added the authoritative `IMAGE_WORKSPACE_FEATURE.md` contract and focused pure contract tests.
+- Verification passed: all 1,098 JVM tests, Android-test compilation, APK assembly and both
+  on-device renderer tests. The APK installed over existing emulator data and launched cleanly.
+  Roborazzi remained at the 17 documented pre-existing differences; no golden was changed.
