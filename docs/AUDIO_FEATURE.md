@@ -82,9 +82,9 @@ Both builders and their registered destinations were verified before use; no rou
 An unknown `typeKey` now reports through the Page's existing message dialog rather than failing
 silently, preserving the open-string forward-compatibility contract.
 
-**The PDF lane must reuse the corrected `capture.file` case and must not edit this `when` block**
-unless a later integration change is approved. Labels, row projection, icons, ordering,
-reconciliation and ownership were **not** changed.
+The integrated PDF workspace now reuses this corrected `capture.file` case and dispatches by
+persisted attachment kind. This remains a shared integration seam and must not be duplicated
+feature-locally. Labels, ordering, reconciliation and ownership remain shared contracts.
 
 ## Permission policy
 

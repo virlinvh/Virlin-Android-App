@@ -1,6 +1,6 @@
 # PDF workspace feature contract
 
-Status: isolated feature implementation on `codex/pdf-workspace`; shared wiring pending integration.
+Status: implemented and wired on the combined Attachment/PDF/Audio baseline.
 
 ## Product meaning
 
@@ -27,7 +27,7 @@ PDFs and images are independent canonical attachments because they are new user-
 
 Route arguments are stable IDs. Titles and map positions are never identifiers.
 
-## Implemented isolated module
+## Implemented module
 
 `ui/pdf` currently provides:
 

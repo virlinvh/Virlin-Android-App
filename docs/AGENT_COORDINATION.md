@@ -4,9 +4,9 @@ Status: baseline policy for Codex, Claude, Cursor and Antigravity/other coding a
 
 ## Current safety warning
 
-The live workspace is substantially dirty and contains foundational untracked files. Do not create
-parallel feature worktrees from the last Git commit yet. First review, test and checkpoint the live
-state on an integration branch.
+The shared baseline has been checkpointed and feature worktrees exist. Agents must branch from the
+explicit combined commit named in their task, not from an older `integration` or `main` tip by
+assumption. Image work remains isolated until its emulator audit is accepted.
 
 ## Required topology after checkpoint
 

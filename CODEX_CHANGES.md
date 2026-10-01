@@ -368,3 +368,14 @@ screen. No content was entered during verification.
   verified task -> Add -> PDF -> full-page PDF workspace.
 - Combined verification passed: `testDebugUnitTest`, `compileDebugAndroidTestKotlin`, and
   `assembleDebug`. No Room schema change and no golden update.
+
+# 2026-10-01 - Non-Image PR readiness audit
+
+- Audited the committed Attachment/PDF/Audio baseline together with To-do, Notes, Prompt, Link and
+  Task Page contracts while Image remained isolated with Claude.
+- Corrected stale authoritative documentation that still described PDF, Audio, or Attachment as
+  disabled or awaiting integration; no production code or schema changed.
+- Added `NON_IMAGE_PR_READINESS_AUDIT.md` with architecture boundaries, feature status, known
+  limitations, and the final Image integration gate.
+- Verification passed: 1,091 ordinary JVM tests, Android-test compilation, and debug APK assembly.
+  Roborazzi reported exactly the 17 previously documented differences; no golden was changed.

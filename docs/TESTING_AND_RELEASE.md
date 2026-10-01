@@ -1,6 +1,6 @@
 # Virlin testing and release baseline
 
-Verified against the live workspace: 2026-09-30
+Verified against `feature/attachment-workspace`: 2026-10-01
 
 ## Toolchain
 
@@ -56,10 +56,10 @@ cannot write its default cache.
 
 ## Current audit result
 
-- 83 JVM test source files and 46 instrumentation test source files are present.
+- 86 JVM test source files and 46 instrumentation test source files are present.
 - Application, JVM-test and Android-test Kotlin compilation passed after the latest changes.
-- `testDebugUnitTest` currently executes 1,053 tests successfully.
-- `verifyRoborazziDebug` executes the same 1,053 tests with comparison enabled and currently reports
+- `testDebugUnitTest` currently executes 1,091 tests successfully.
+- `verifyRoborazziDebug` executes the same suite with comparison enabled and currently reports
   17 reviewed screenshot failures. This red visual baseline is under review and must not be mass
   re-recorded.
 - Focused task-routing, cycle-guard and Note reconciliation tests pass.

@@ -47,6 +47,8 @@ shared extension foundation needed by future Plus-menu features.
 - `LINK_FEATURE.md`
 - `FILE_ATTACHMENT_FEATURE.md`
 - `VOICE_FEATURE.md`
+- `PDF_WORKSPACE_FEATURE.md` — task PDF specialization and capability boundaries
+- `ATTACHMENT_WORKSPACE_FEATURE.md` — universal task file space and preview matrix
 - `AUDIO_FEATURE.md` — Audio v1 (record-only) and the shared Task Page routing correction
 - `AUDIO_FEATURE_AUDIT.md` — the audit behind the Audio v1 decision
 
@@ -55,6 +57,7 @@ relevant contract rather than restating it differently.
 
 ## Historical and operational references
 
+- `NON_IMAGE_PR_READINESS_AUDIT.md` — verified combined baseline and final Image integration gate.
 - `DEVELOPMENT_STATUS.md` — detailed historical pass log; useful, but its 2026-09-18 header means
   it is not the sole authority for features added afterward.
 - `DEVELOPMENT_TOOLCHAIN.md` — tooling and screenshot practices.

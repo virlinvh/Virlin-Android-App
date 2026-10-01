@@ -1,6 +1,6 @@
 # Virlin navigation and feature map
 
-Verified against the live workspace: 2026-09-30
+Verified against `feature/attachment-workspace`: 2026-10-01
 
 ## Root destinations
 
@@ -39,6 +39,8 @@ navigation decision, not a feature-local styling edit.
 - Prompt: new and capture/task-scoped prompt editor routes.
 - Link: new and capture/task-scoped link editor routes.
 - File: new/import and `file_viewer/{captureId}` compatibility/content route.
+- Attachment: `attachment_workspace/new/task/{taskId}` task-scoped multi-file library/import.
+- PDF: `pdf_workspace/new/task/{taskId}` and `pdf_workspace/capture/{captureId}`.
 - Voice/Audio: new/record, `voice_editor/{captureId}`, and `voice_editor/new/task/{taskId}`
   (Audio v1, task-owned recording).
 - `focus_clock` — alternate presentation of the same active Focus session.
@@ -53,11 +55,11 @@ Implemented and enabled:
 - Link → task-attached Link workspace.
 - Audio → task-owned voice recording (Audio v1 is recorded voice; imported audio stays with
   `AttachmentKind.AUDIO` and is not offered here).
+- PDF → task-owned PDF workspace using managed `AttachmentKind.PDF` files.
+- Attachment → task-owned universal local file workspace.
 
 Visible but disabled (`Not yet`):
 
-- PDF (renamed from Topic link; PDF icon; no storage/navigation yet).
-- Attachment.
 - Image.
 - Sticker.
 - Illustration.
@@ -70,8 +72,10 @@ failure handling and tests.
 - Green task hierarchy: canonical. Removed cream Task Detail must not return.
 - Owner-scoped Notes: canonical for new visual Notes.
 - Legacy Capture Note editor: compatibility for existing capture rows.
-- Capture File and Voice systems: existing canonical Capture implementations; future Page-facing
-  PDF/Audio features need an explicit integration decision rather than silent replacement.
+- Capture File remains the canonical storage boundary for Attachment and PDF. PDF specializes
+  persisted `AttachmentKind.PDF`; every other Page file block opens the universal file viewer.
+- Capture Voice remains the canonical model behind Audio v1. Imported `AttachmentKind.AUDIO` files
+  remain read-only attachments and are not routed into the recorder.
 - `task_detail/{id}`: preserved route contract, redirected presentation.
 
 ## Permissions and external surfaces
