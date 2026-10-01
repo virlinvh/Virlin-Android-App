@@ -83,8 +83,8 @@ half a move or half a registration.
 - Normal mode is a document-style list with compact type label, content preview, and a quiet pen.
 - The pen opens the canonical To-do, Notes, Prompt, Link, Audio (Voice) or File editor.
 - `openBlock` is a shared integration seam. `capture.voice` opens the canonical Voice editor.
-  `capture.file` dispatches PDF-kind rows to the PDF workspace and every other file to the
-  universal viewer. Unknown type keys report through the Page's message dialog instead of failing
+  `capture.file` dispatches by persisted `AttachmentKind`: PDF-kind rows open the PDF workspace,
+  IMAGE-kind rows open the Image workspace, and every other file opens the universal viewer. Unknown type keys report through the Page's message dialog instead of failing
   silently. Future specializations must extend this kind-based branch rather than infer from names.
 - Organize mode exposes drag/reorder affordances and per-block Move/Duplicate actions.
 - Move/Duplicate uses a task destination picker scoped to the current project.

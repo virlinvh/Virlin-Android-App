@@ -69,8 +69,11 @@ fun ImageWorkspaceScreen(
         vm.importImages(it.orEmpty())
     }
     fun back() {
-        if (state.mode == ImageWorkspaceMode.LIBRARY) navController.popBackStack()
-        else vm.setMode(if (captureId != null) ImageWorkspaceMode.EDIT else ImageWorkspaceMode.LIBRARY)
+        when (imageBackAction(state.mode, hasCaptureOwner = captureId != null)) {
+            ImageBackAction.EXIT -> navController.popBackStack()
+            ImageBackAction.TO_LIBRARY -> vm.setMode(ImageWorkspaceMode.LIBRARY)
+            ImageBackAction.TO_EDIT -> vm.setMode(ImageWorkspaceMode.EDIT)
+        }
     }
     BackHandler { back() }
 

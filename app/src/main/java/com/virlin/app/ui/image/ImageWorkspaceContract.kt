@@ -76,3 +76,20 @@ data class ImageMarkupStroke(
     val points: List<Pair<Float, Float>>,
     val text: String? = null,
 )
+
+/** What a back gesture should do in the Image workspace. */
+enum class ImageBackAction { EXIT, TO_LIBRARY, TO_EDIT }
+
+/**
+ * Resolves one back gesture for the Image workspace.
+ *
+ * CROP and MARKUP are sub-screens of the editor, so they always step back to EDIT. EDIT steps back
+ * to the library only when a library exists: opening an IMAGE block from the Task Page addresses one
+ * capture directly ([hasCaptureOwner]), and there is no library behind it, so back must leave the
+ * screen. Returning EDIT in that case would be a self-loop and would trap the user in the editor.
+ */
+fun imageBackAction(mode: ImageWorkspaceMode, hasCaptureOwner: Boolean): ImageBackAction = when (mode) {
+    ImageWorkspaceMode.CROP, ImageWorkspaceMode.MARKUP -> ImageBackAction.TO_EDIT
+    ImageWorkspaceMode.EDIT -> if (hasCaptureOwner) ImageBackAction.EXIT else ImageBackAction.TO_LIBRARY
+    ImageWorkspaceMode.LIBRARY -> ImageBackAction.EXIT
+}

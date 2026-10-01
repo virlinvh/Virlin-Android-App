@@ -57,10 +57,11 @@ Implemented and enabled:
   `AttachmentKind.AUDIO` and is not offered here).
 - PDF → task-owned PDF workspace using managed `AttachmentKind.PDF` files.
 - Attachment → task-owned universal local file workspace.
+- Image → task-owned image library and non-destructive editor using managed `AttachmentKind.IMAGE`
+  files. Save copy writes a new PNG and leaves the source bytes untouched.
 
 Visible but disabled (`Not yet`):
 
-- Image.
 - Sticker.
 - Illustration.
 

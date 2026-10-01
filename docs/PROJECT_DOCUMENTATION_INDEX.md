@@ -60,6 +60,9 @@ relevant contract rather than restating it differently.
 ## Historical and operational references
 
 - `NON_IMAGE_PR_READINESS_AUDIT.md` — verified combined baseline and final Image integration gate.
+- `IMAGE_EMULATOR_AUDIT.md` — the reproduced recycled-bitmap crash, its root cause and its fix.
+- `FINAL_CONTENT_WORKSPACES_INTEGRATION.md` — the integrated PDF/Audio/Attachment/Image baseline,
+  its conflict resolutions, verification and emulator acceptance matrix.
 - `DEVELOPMENT_STATUS.md` — detailed historical pass log; useful, but its 2026-09-18 header means
   it is not the sole authority for features added afterward.
 - `DEVELOPMENT_TOOLCHAIN.md` — tooling and screenshot practices.

@@ -826,3 +826,38 @@ is reintroduced and pass when it is not.
 
 **Not verified** — a substantial part of the acceptance checklist, listed explicitly in section 8
 of `docs/IMAGE_EMULATOR_AUDIT.md`. This feature is NOT fully acceptance-tested.
+
+## 2026-10-01 — Final content-workspace integration and Image acceptance
+
+Branch `claude/final-content-workspaces`, cherry-picked from `a1a5a44` + `b96f998` + `da60ce8` in a
+fresh worktree. Full report: `docs/FINAL_CONTENT_WORKSPACES_INTEGRATION.md`.
+
+**Files touched (beyond the two cherry-picked Image commits)**
+- `app/src/main/java/com/virlin/app/ui/image/ImageWorkspaceContract.kt` — added
+  `ImageBackAction` / `imageBackAction(...)`.
+- `app/src/main/java/com/virlin/app/ui/image/ImageWorkspaceScreen.kt` — `back()` now uses it.
+- `app/src/test/java/com/virlin/app/image/ImageBackNavigationTest.kt` — new (5 tests).
+- `docs/FINAL_CONTENT_WORKSPACES_INTEGRATION.md` — new.
+- `docs/FEATURE_REGISTRY.md`, `docs/NAVIGATION_AND_FEATURES.md`,
+  `docs/PROJECT_DOCUMENTATION_INDEX.md`, `docs/TASK_PAGE_FOUNDATION.md`,
+  `docs/TESTING_AND_RELEASE.md` — reconciled to the integrated state.
+
+**Behaviour impact**
+Image is now integrated and enabled alongside PDF, Audio and Attachment. One new defect was found
+during acceptance and fixed: opening an IMAGE block from the Task Page trapped the user in the
+editor, because `back()` set the mode to EDIT while already in EDIT, so `popBackStack()` was never
+reached and neither the arrow, system Back nor the edge-swipe could leave. Back now exits that
+route. Nothing else in production code changed; conflicts were confined to documentation and the
+two append-only agent logs, both of which keep every entry verbatim.
+
+**Verification actually performed**
+1,105 JVM tests (0 failures) — exactly 1,091 + 7 + 2 + 5, so nothing was lost in the merge;
+android-test compilation; `assembleDebug`; connected `ImageRenderEngineTest` 2/2 on the emulator;
+Roborazzi at exactly the 17 documented differences with no golden changed; Room still v17. Both new
+guards were proven to fail when their defect is reintroduced. A full emulator acceptance matrix was
+run in a disposable `ImageAudit` project — no real project was touched and app data was never
+cleared.
+
+**Known limitation found:** a corrupt image with a valid MIME type and non-zero size is accepted and
+shown as a placeholder rather than refused at import. It fails safely but is not rejected; left
+unchanged as a product decision.
