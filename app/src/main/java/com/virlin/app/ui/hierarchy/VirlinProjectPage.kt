@@ -84,9 +84,7 @@ data class ProjectPageUi(
     val activityContent: @Composable () -> Unit = {},
     /** The Knowledge tab's own content, given a bounded height by this page. */
     val knowledgeContent: @Composable () -> Unit = {},
-    val executionDefaultLabel: String = "Human",
-    /** The app has no archive state; the menu offers the existing completion action instead. */
-    val archiveLabel: String = "Complete project"
+    val executionDefaultLabel: String = "Human"
 ) {
     val totalTasks: Int get() = workstreams.sumOf { it.totalTasks } + standaloneTasks.size
     val completedTasks: Int get() = workstreams.sumOf { it.completedTasks } + standaloneTasks.count { it.completed }
@@ -134,8 +132,7 @@ data class ProjectPageActions(
     val onAddDocument: () -> Unit,
     val onProjectSettings: () -> Unit,
     val onEditProject: () -> Unit,
-    val onManageWorkstreams: () -> Unit,
-    val onArchiveProject: () -> Unit
+    val onManageWorkstreams: () -> Unit
 )
 
 private object P {
@@ -188,10 +185,6 @@ fun VirlinProjectPage(ui: ProjectPageUi, actions: ProjectPageActions, modifier: 
                     )
                     DropdownMenuItem(text = { Text("Search this project") }, onClick = {
                         menuOpen = false; actions.onSearch()
-                    })
-                    HorizontalDivider()
-                    DropdownMenuItem(text = { Text(ui.archiveLabel) }, onClick = {
-                        menuOpen = false; actions.onArchiveProject()
                     })
                 }
             }

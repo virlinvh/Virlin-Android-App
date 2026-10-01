@@ -418,3 +418,5 @@ screen. No content was entered during verification.
   WorkStream creation control.
 - Made no schema change because the parallel Mind-map Node Preview lane owns migration 17 to 18;
   future policy fields are honestly marked Planned and documented for the next reserved migration.
+- Consolidated Project completion under `Project settings > Project management`; removed the
+  duplicate three-dot-menu action while preserving the existing confirmation and mutation path.

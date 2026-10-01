@@ -111,10 +111,6 @@ fun VirlinProjectExperience(
                     DropdownMenuItem(text = { Text("Project settings") }, onClick = {
                         menuOpen = false; actions.project.onProjectSettings()
                     })
-                    HorizontalDivider()
-                    DropdownMenuItem(text = { Text(project.archiveLabel) }, onClick = {
-                        menuOpen = false; actions.project.onArchiveProject()
-                    })
                 }
             }
         }

@@ -203,8 +203,7 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
                 subtitle = capture.type.name.lowercase().replaceFirstChar { it.uppercase() }
             )
         },
-        executionDefaultLabel = if (project.defaultExecutionMode == EffectiveExecutionMode.EXTERNAL) "External" else "Human",
-        archiveLabel = "Complete project"
+        executionDefaultLabel = if (project.defaultExecutionMode == EffectiveExecutionMode.EXTERNAL) "External" else "Human"
     )
 
     val actions = ProjectPageActions(
@@ -237,8 +236,7 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
         },
         onProjectSettings = { settingsOpen = true },
         onEditProject = { editingIcon = true },
-        onManageWorkstreams = { addingStream = true },
-        onArchiveProject = { confirmComplete = true }
+        onManageWorkstreams = { addingStream = true }
     )
 
     // Only THIS project's tasks: a list built from every task in the app would show, and offer

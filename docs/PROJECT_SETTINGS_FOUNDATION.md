@@ -25,7 +25,9 @@ part of this contract.
 - Default execution uses `VirlinActions.setProjectExecutionDefault` and its processing safeguards.
 - Completed tasks lists DONE tasks in the project, supports multi-selection, and requires explicit
   confirmation before `VirlinActions.restoreTask` returns them to TODO.
-- Complete project reuses the existing confirmed completion flow.
+- Complete project lives only in Project settings > Project management and reuses the existing
+  confirmed completion flow. It is intentionally absent from the project overflow menu so this
+  consequential action has one deliberate, discoverable home.
 
 ## Planned rows and schema ownership
 
@@ -41,4 +43,3 @@ copied into WorkStream or Task rows.
 `restoreTask(id)` accepts only `TaskStatus.DONE`, writes `TODO`, clears `completedAt`, updates
 `updatedAt`, and records `TASK_UPDATED` for WorkStream tasks. It refuses CANCELLED tasks, preserves
 ownership/order/content, and never changes Focus.
-
