@@ -51,6 +51,8 @@ shared extension foundation needed by future Plus-menu features.
 - `ATTACHMENT_WORKSPACE_FEATURE.md` — universal task file space and preview matrix
 - `AUDIO_FEATURE.md` — Audio v1 (record-only) and the shared Task Page routing correction
 - `AUDIO_FEATURE_AUDIT.md` — the audit behind the Audio v1 decision
+- `ATTACHMENT_WORKSPACE_FEATURE.md` — universal task-scoped file space and viewer routing
+- `IMAGE_WORKSPACE_FEATURE.md` — task-scoped image library and non-destructive raster editor
 
 These are normative for their feature boundaries. Future feature documents must link back to the
 relevant contract rather than restating it differently.

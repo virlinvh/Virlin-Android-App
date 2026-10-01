@@ -526,6 +526,26 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     )
                 }
                 composable(
+                    route = com.virlin.app.ui.image.ImageWorkspaceTaskRoute,
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.image.ImageWorkspaceScreen(
+                        navController = navController,
+                        taskId = entry.arguments?.getString("taskId"),
+                        captureId = null,
+                    )
+                }
+                composable(
+                    route = com.virlin.app.ui.image.ImageWorkspaceCaptureRoute,
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })
+                ) { entry ->
+                    com.virlin.app.ui.image.ImageWorkspaceScreen(
+                        navController = navController,
+                        taskId = null,
+                        captureId = entry.arguments?.getString("captureId"),
+                    )
+                }
+                composable(
                     route = com.virlin.app.ui.voice.VoiceEditorTaskRoute,
                     arguments = listOf(navArgument("taskId") { type = NavType.StringType })
                 ) { entry ->

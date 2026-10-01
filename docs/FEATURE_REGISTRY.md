@@ -17,7 +17,7 @@ Updated: 2026-10-01
 | PDF palette feature | **Implemented** task workspace; specialized managed Attachment | `PDF_WORKSPACE_FEATURE.md` | Maintained |
 | Audio palette feature | **Implemented (v1, record-only)** — reuses Capture Voice, no new model | `AUDIO_FEATURE.md` | Maintained |
 | Attachment palette feature | **Implemented** task-scoped universal local file space | `ATTACHMENT_WORKSPACE_FEATURE.md` | Maintained |
-| Image palette feature | Disabled | None yet | Unassigned |
+| Image palette feature | **Implemented** task-scoped library and non-destructive editor | `IMAGE_WORKSPACE_FEATURE.md` | Maintained |
 | Sticker | Disabled | None yet | Unassigned |
 | Illustration | Disabled | None yet | Unassigned |
 

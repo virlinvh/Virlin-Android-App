@@ -379,3 +379,16 @@ screen. No content was entered during verification.
   limitations, and the final Image integration gate.
 - Verification passed: 1,091 ordinary JVM tests, Android-test compilation, and debug APK assembly.
   Roborazzi reported exactly the 17 previously documented differences; no golden was changed.
+# 2026-10-01 - Image workspace foundation
+
+- Created `codex/image-workspace` from Claude's clean Attachment commit `fe7eb90`, preserving the
+  existing PDF, Audio and universal Attachment contracts.
+- Specialized managed `AttachmentKind.IMAGE`; no entity, table or Room migration was added.
+- Added task-scoped image library/import and existing-capture routes, light-theme non-destructive
+  adjustments, filters, crop, rotate/flip/straighten, markup, undo/redo and Save-copy PNG output.
+- Enabled Image in the mind-map Add palette and routed IMAGE Page blocks by persisted attachment
+  kind to the canonical Image workspace.
+- Added the authoritative `IMAGE_WORKSPACE_FEATURE.md` contract and focused pure contract tests.
+- Verification passed: all 1,098 JVM tests, Android-test compilation, APK assembly and both
+  on-device renderer tests. The APK installed over existing emulator data and launched cleanly.
+  Roborazzi remained at the 17 documented pre-existing differences; no golden was changed.

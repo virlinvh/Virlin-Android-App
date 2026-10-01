@@ -516,6 +516,10 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
                 addChoice = null
                 navController.navigate(com.virlin.app.ui.attachment.attachmentWorkspaceForTask(topic.id))
             }
+            MapAddKind.IMAGE -> {
+                addChoice = null
+                navController.navigate(com.virlin.app.ui.image.imageWorkspaceForTask(topic.id))
+            }
             // The palette does not let the remaining kinds be chosen; belt-and-braces case.
             else -> {
                 addChoice = null

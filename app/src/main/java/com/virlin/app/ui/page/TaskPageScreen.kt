@@ -171,11 +171,10 @@ private fun iconFor(key: String) = when (key) { TaskPageTypeKeys.TODO -> Icons.D
 /**
  * Opens a block in its own canonical editor, always by stable `contentId`.
  *
- * OWNERSHIP: the Audio lane owns this routing seam. The `capture.voice` and `capture.file` cases
- * were added here to fix a defect where both block types rendered and were labelled correctly but
- * their taps did nothing at all - the `when` had no branch and no `else`. Both use the route
- * builders their own features already publish (`voiceEditorRoute`, `fileViewerRoute`); no route is
- * invented here. The PDF lane should reuse the `capture.file` case rather than editing this block.
+ * `capture.file` is the shared attachment dispatch seam. It selects specialized PDF and Image
+ * workspaces by persisted `AttachmentKind`; every other file continues to use the universal file
+ * viewer. New file specializations must extend this single kind-based branch rather than infer a
+ * destination from filenames or add a parallel Page contract.
  *
  * An unknown `typeKey` now reports through the Page's existing message dialog instead of failing
  * silently, which keeps the open-string type-key contract forward-compatible.
@@ -188,8 +187,11 @@ private fun openBlock(nav: NavController, row: TaskPageRow, onUnsupported: (Stri
         TaskPageTypeKeys.capture(CaptureType.LINK) -> nav.navigate(com.virlin.app.ui.link.linkEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.VOICE) -> nav.navigate(com.virlin.app.ui.voice.voiceEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.FILE) -> nav.navigate(
-            if (row.attachmentKind == AttachmentKind.PDF) com.virlin.app.ui.pdf.pdfWorkspaceForCapture(row.block.contentId)
-            else com.virlin.app.ui.file.fileViewerRoute(row.block.contentId)
+            when (row.attachmentKind) {
+                AttachmentKind.PDF -> com.virlin.app.ui.pdf.pdfWorkspaceForCapture(row.block.contentId)
+                AttachmentKind.IMAGE -> com.virlin.app.ui.image.imageWorkspaceForCapture(row.block.contentId)
+                else -> com.virlin.app.ui.file.fileViewerRoute(row.block.contentId)
+            }
         )
         else -> onUnsupported("This build cannot open a ${row.label} block yet.")
     }
