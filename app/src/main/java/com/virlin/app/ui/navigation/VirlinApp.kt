@@ -491,6 +491,21 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 ) { entry ->
                     VoiceEditorScreen(navController, captureId = entry.arguments?.getString("captureId"))
                 }
+                // Audio v1: a NEW recording owned by an explicit task. Only the task id travels;
+                // CaptureActions derives project and WorkStream from that task, so ownership has
+                // exactly one source of truth.
+                composable(
+                    route = com.virlin.app.ui.voice.VoiceEditorTaskRoute,
+                    arguments = listOf(navArgument("taskId") { type = NavType.StringType })
+                ) { entry ->
+                    VoiceEditorScreen(
+                        navController,
+                        captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(
+                            taskId = entry.arguments?.getString("taskId")
+                        )
+                    )
+                }
             }
             }
         }

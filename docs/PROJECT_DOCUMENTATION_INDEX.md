@@ -47,6 +47,8 @@ shared extension foundation needed by future Plus-menu features.
 - `LINK_FEATURE.md`
 - `FILE_ATTACHMENT_FEATURE.md`
 - `VOICE_FEATURE.md`
+- `AUDIO_FEATURE.md` — Audio v1 (record-only) and the shared Task Page routing correction
+- `AUDIO_FEATURE_AUDIT.md` — the audit behind the Audio v1 decision
 
 These are normative for their feature boundaries. Future feature documents must link back to the
 relevant contract rather than restating it differently.

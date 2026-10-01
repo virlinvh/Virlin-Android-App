@@ -601,3 +601,75 @@ needs an emulator cold boot.
 The 17 Roborazzi differences remain the untouched user-approval gate described in
 `docs/GOLDEN_BASELINE_REVIEW.md`, and the PDF/Audio product decision in
 `docs/CLAUDE_FINAL_DOCUMENTATION_AUDIT.md` §6 is still required before parallel lanes begin.
+
+---
+
+## 2026-10-01 — Audio v1 (record-only) on `feature/audio-workspace`
+
+**Requested by:** User, with an approved product decision: **Audio v1 is record-only.**
+**Status:** Implemented and verified. Branch not merged. No golden recorded or replaced; Room
+stays at **v17**; `CODEX_CHANGES.md` untouched.
+
+### What Audio v1 is
+
+The mind-map **Audio** tile opens the **existing Capture Voice workspace** with the selected task
+supplied explicitly. **There is no new Audio entity, capture type, table, storage model or editor.**
+Imported audio remains `AttachmentKind.AUDIO` through the File flow and is deliberately not offered
+in this entry.
+
+### The smallest adapter
+
+- `VoiceEditorViewModel` takes an optional `initialContext: CaptureContext`, applied **only** when
+  creating a new recording. An existing capture still hydrates its owner from the persisted row in
+  `loadExisting`, so reopening a saved recording can never be re-homed by its route.
+- `voiceEditorForTask(taskId)` builds `voice_editor/new/task/{taskId}` and `require`s a non-blank
+  id, following the Prompt/Link task-route pattern. Registered in `VirlinApp`.
+- Only `taskId` travels; `CaptureActions` derives project and WorkStream from the task, keeping one
+  source of truth for ownership.
+- `MapAddKind.AUDIO` is now supported and routes from `ProjectMapScreen`. Its existing `MicNone`
+  icon was already correct.
+- Saving continues to go through the existing `CaptureActions` transaction, which registers the
+  `capture.voice` Page block automatically. No separate registration path was added.
+
+### Shared seam correction — now owned by the Audio lane
+
+`openBlock` in `ui/page/TaskPageScreen.kt` had **no branch for `capture.voice` or `capture.file`
+and no `else`**, so both block types rendered and were labelled correctly but their taps did
+nothing at all. Fixed for both, using each feature's own published builder after verifying the
+registered destinations: `voiceEditorRoute(contentId)` → `voice_editor/{captureId}` and
+`fileViewerRoute(contentId)` → `file_viewer/{captureId}`. No route was invented. An unknown
+`typeKey` now reports through the Page's existing message dialog instead of failing silently.
+Labels, row projection, icons, ordering, reconciliation and ownership were **not** touched.
+**The PDF lane must reuse the `capture.file` case and not edit that block.**
+
+### Files changed
+
+Production: `ui/voice/VoiceEditorViewModel.kt`, `ui/voice/VoiceEditorScreen.kt`,
+`ui/navigation/VirlinApp.kt`, `ui/map/MapAddPalette.kt`, `ui/map/ProjectMapScreen.kt`,
+`ui/page/TaskPageScreen.kt`.
+Tests: `test/.../AudioWorkspaceTest.kt` (new, 12 tests).
+Docs: `AUDIO_FEATURE.md` and `AUDIO_FEATURE_AUDIT.md` (new); `FEATURE_REGISTRY.md`,
+`NAVIGATION_AND_FEATURES.md`, `TASK_PAGE_FOUNDATION.md`, `PROJECT_DOCUMENTATION_INDEX.md`,
+`VOICE_FEATURE.md` updated.
+
+### Verification
+
+- `AudioWorkspaceTest`: **12 tests, 0 failures**.
+- `:app:testDebugUnitTest`: **1065 tests, 0 failures** (1053 baseline + 12 new).
+- `:app:compileDebugAndroidTestKotlin` and `:app:assembleDebug`: **BUILD SUCCESSFUL**.
+- `:app:verifyRoborazziDebug`: **17 failures — the same 17 documented differences, name for name.
+  Zero new or changed visual differences.** No golden was recorded, replaced or deleted.
+- No database or schema file changed; no ignored artifact staged.
+
+### Investigated and documented, deliberately NOT implemented
+
+1. **No maximum recording duration or file-size policy** — `MediaRecorder.setMaxDuration` and
+   `setMaxFileSize` are never called, so a recording can grow unbounded.
+2. **Archiving a voice capture orphans its media** — `VoiceFileStore.deleteClip` and
+   `deleteCaptureTree` are called only from the editor; `archiveCapture` does not touch managed
+   storage, so `.m4a` files survive indefinitely. Destructive cleanup was not implemented because
+   deletion semantics are shared with Attachment and Prompt and should be designed once for all
+   capture types.
+3. **Missing or corrupt media is already safe** — the player is built with
+   `runCatching { ... }.getOrNull()`, so a bad file yields a null player rather than a crash.
+4. Recording across process death is untested, and the emulator microphone is synthetic.

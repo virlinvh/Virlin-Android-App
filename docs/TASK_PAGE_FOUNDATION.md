@@ -81,7 +81,12 @@ half a move or half a registration.
 
 - Mind map `Page` opens `task_page/{taskId}`.
 - Normal mode is a document-style list with compact type label, content preview, and a quiet pen.
-- The pen opens the canonical To-do, Notes, Prompt, or Link editor.
+- The pen opens the canonical To-do, Notes, Prompt, Link, Audio (Voice) or File editor.
+- `openBlock` routing is **owned by the Audio lane** (see `AUDIO_FEATURE.md`). It gained the
+  `capture.voice` and `capture.file` cases, which previously had no branch and no `else`, so
+  those blocks rendered but could not be opened. Unknown type keys now report through the
+  Page's message dialog instead of failing silently. The PDF lane reuses the `capture.file`
+  case and must not edit that block without an approved integration change.
 - Organize mode exposes drag/reorder affordances and per-block Move/Duplicate actions.
 - Move/Duplicate uses a task destination picker scoped to the current project.
 - Empty Pages explain that content added from the task's `+` palette will appear here.
