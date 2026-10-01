@@ -113,6 +113,11 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
     val scope = rememberCoroutineScope()
     var structureMode by remember { mutableStateOf(false) }
     var selectedNode by remember { mutableStateOf<MapTopic?>(null) }
+
+    // --- Mind-map node previews. Entirely separate from the lower action bar's Add.
+    val previewHost = com.virlin.app.ui.map.preview.rememberMapPreviewHostState()
+    val previewContext = androidx.compose.ui.platform.LocalContext.current
+    var replacingImage by remember { mutableStateOf(false) }
     var clipboard by remember { mutableStateOf<MapTopic?>(null) }
     var intent by remember { mutableStateOf<StructureIntent?>(null) }
     var refused by remember { mutableStateOf<String?>(null) }
@@ -120,6 +125,16 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
         mutableStateOf<com.virlin.app.domain.structure.PlacementCommit?>(null)
     }
     val snackbar = remember { SnackbarHostState() }
+    val previewPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            previewHost.addImage(previewContext, uri, replacingImage) { message ->
+                scope.launch { snackbar.showSnackbar(message) }
+            }
+        }
+        replacingImage = false
+    }
     var renaming by remember { mutableStateOf<MapTopic?>(null) }
     // Messages that are not about a placement keep their own copy; reusing the placement
     // dialog's title hid the real reason an edit was refused.
@@ -316,7 +331,31 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
         },
         // One selection id: the map renders the host's value and reports every change here.
         selectedId = selectedNode?.id,
-        onStructureSelect = { selectedNode = it },
+        onStructureSelect = {
+            selectedNode = it
+            // A resting node shows its title only, so deselecting collapses any open preview.
+            previewHost.onSelectionChanged(it?.id)
+        },
+        previewOwners = previewHost.owners(),
+        expandedPreviewId = previewHost.expandedId,
+        expandedPreviewHeight = previewHost.expandedExtraHeight(),
+        onTogglePreview = { previewHost.toggleExpanded(it.id) },
+        onEditPreview = { previewHost.startEditing(it.id) },
+        expandedPreviewContent = { rect ->
+            val id = previewHost.expandedId
+            val preview = id?.let { previewHost.previews[it] }
+            val topic = id?.let { owner -> topics.firstOrNull { it.id == owner } }
+            if (preview != null && topic != null) {
+                com.virlin.app.ui.map.preview.ExpandedNodeCard(
+                    rect = rect,
+                    title = topic.title,
+                    preview = preview,
+                    density = androidx.compose.ui.platform.LocalDensity.current,
+                    onCollapse = { previewHost.toggleExpanded(topic.id) },
+                    onEdit = { previewHost.startEditing(topic.id) },
+                )
+            }
+        },
         isValidTarget = ::canDrop,
         canInsertBeside = ::canInsertBeside,
         branchSizeOf = ::branchSize,
@@ -411,6 +450,39 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
             )
         },
     )
+
+    previewHost.editing?.let { ownerId ->
+        val draft = previewHost.draft
+        val topic = topics.firstOrNull { it.id == ownerId }
+        if (draft != null && topic != null) {
+            com.virlin.app.ui.map.preview.MapNodePreviewPopup(
+                nodeTitle = topic.title,
+                draft = draft,
+                onDraftChange = { previewHost.draft = it },
+                onPickImage = { replacingImage = false; previewPicker.launch(arrayOf("image/*")) },
+                onReplaceImage = { replacingImage = true; previewPicker.launch(arrayOf("image/*")) },
+                onRequestClear = { previewHost.confirmingClear = true },
+                onCancel = { previewHost.cancelEditing(previewContext) },
+                onSave = {
+                    previewHost.save(previewContext) { error ->
+                        if (error != null) scope.launch { snackbar.showSnackbar(error) }
+                    }
+                },
+                imageLoader = { image, modifier ->
+                    com.virlin.app.ui.map.preview.MapPreviewImageView(image, modifier)
+                },
+            )
+        }
+        if (previewHost.confirmingClear) {
+            com.virlin.app.ui.map.preview.ClearPreviewDialog(
+                onConfirm = {
+                    previewHost.draft = previewHost.draft?.cleared()
+                    previewHost.confirmingClear = false
+                },
+                onDismiss = { previewHost.confirmingClear = false },
+            )
+        }
+    }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         SnackbarHost(snackbar, Modifier.padding(bottom = 96.dp))

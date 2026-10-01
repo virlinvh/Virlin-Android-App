@@ -861,3 +861,53 @@ cleared.
 **Known limitation found:** a corrupt image with a valid MIME type and non-zero size is accepted and
 shown as a placeholder rather than refused at import. It fails safely but is not rejected; left
 unchanged as a product decision.
+
+## 2026-10-02 — Mind map node previews
+
+Branch `feature/mind-map-node-preview`, from `origin/main` @ `a30d676`. Contract:
+`docs/MIND_MAP_NODE_PREVIEW.md`.
+
+**Files touched**
+- New: `domain/mappreview/` (MapNodePreview, FormattedTextEditor, MapPreviewCodec),
+  `data/mappreview/MapPreviewImageStore.kt`, `domain/action/MapPreviewActions.kt`,
+  `ui/map/preview/` (draft, popup, rendering, host), `docs/MIND_MAP_NODE_PREVIEW.md`,
+  two JVM test files.
+- Modified: `VirlinEntities.kt`, `VirlinDatabase.kt` (v18 + migration + DAO),
+  `RoomWorkStreamRepository.kt`, `InMemoryWorkStreamRepository.kt`,
+  `BootstrappingWorkStreamRepository.kt`, `WorkStreamRepository.kt`, `VirlinActions.kt`,
+  `DefaultVirlinActions.kt`, `ActionResult.kt`, `VirlinMindMap.kt`, `ProjectMapScreen.kt`,
+  `VirlinMigrationTest.kt`, `DATABASE_MIGRATION_QUEUE.md`.
+
+**Behaviour impact**
+Optional compact previews on mind-map nodes: one formatted description (bold/italic only, 180
+chars) and up to seven images, with a popup editor and an expanded in-node carousel. Resting nodes
+are unchanged, and the lower Open Task / Move / Page / Add bar is untouched. Previews are stored in
+their own `map_node_previews` table keyed by the node's stable entity id and never create a
+Capture, an Inbox item or a Task Page block - verified on device. Images live in their own managed
+root with relative paths, never Attachment storage.
+
+Room v18 was reserved in the migration queue under the user's explicit instruction in the brief;
+the queue otherwise reserves versions to the integration owner, so the attribution is recorded
+there.
+
+**Two defects found and fixed during emulator acceptance**
+1. `selectedId` was not a `pointerInput` key, so the node-level plus compared against a stale null
+   and never opened the editor.
+2. The caret and pencil were drawn by the Canvas, which skips the expanded node - so an expanded
+   node could not be collapsed. Both controls now live inside the overlay card, where they also get
+   real touch targets and semantics.
+
+**Verification actually performed**
+1,152 JVM tests (0 failures) = 1,105 + 47 new; android-test compilation; `assembleDebug`;
+`VirlinMigrationTest` 17/17 on the emulator including a non-destructive v17->v18 check and a v1->v18
+long chain; Roborazzi at exactly the 17 documented differences with no golden changed. Manual
+emulator acceptance of the full flow in a disposable project, including a live v17->v18 upgrade of
+restored real data.
+
+**Not verified:** no instrumentation UI tests were added for the preview itself; acceptance was
+manual. Reflow was exercised only in the tree layouts. Limitations are listed in the contract doc.
+
+**Data note:** running connected instrumentation tests reseeds the emulator's `virlin.db` (Virlin's
+instrumented tests share the real database and `DemoStateRule` restores the demo fixture). This
+cleared 3 captures / 3 Page blocks / 3 attachments during this work; they were restored from a
+snapshot at the user's direction, and the user confirmed connected tests may be run freely.

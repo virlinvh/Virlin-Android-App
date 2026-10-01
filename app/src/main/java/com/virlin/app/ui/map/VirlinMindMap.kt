@@ -120,7 +120,17 @@ internal data class MapGeometry(
  * Iterative traversal and bottom-up placement: no arbitrary subtask depth limit, and the whole
  * layout is computed once per hierarchy/template change — never on a pan or zoom frame.
  */
-internal fun arrange(topics: List<MapTopic>, layout: MapLayout): MapGeometry {
+/**
+ * [expanded] is the one node currently showing its preview, with the extra height that preview
+ * needs. Only the selected node can be expanded, so there is at most one. Passing it here rather
+ * than drawing a taller box later is what makes connectors genuinely reflow: the node's frame grows
+ * and everything below it is pushed down, so an expanded node never overlaps its neighbours.
+ */
+internal fun arrange(
+    topics: List<MapTopic>,
+    layout: MapLayout,
+    expanded: Pair<String, Float>? = null,
+): MapGeometry {
     require(topics.map { it.id }.distinct().size == topics.size) { "Map IDs must be unique" }
     val root = topics.singleOrNull { it.kind == MapKind.PROJECT && it.parentId == null }
         ?: error("Map requires one project root")
@@ -176,6 +186,17 @@ internal fun arrange(topics: List<MapTopic>, layout: MapLayout): MapGeometry {
             y[node.id] = (y.getValue(kids.first().id) + y.getValue(kids.last().id)) / 2f
         }
     }
+    // Make room for an expanded preview. Shifting by y rather than by sibling index keeps this
+    // correct for a parent node too: its children sit in another column, so only same-column
+    // neighbours below it need to move.
+    val extraHeight = expanded?.takeIf { it.first in y }?.second ?: 0f
+    if (extraHeight > 0f) {
+        val pivot = y.getValue(expanded!!.first)
+        y.keys.toList().forEach { id ->
+            if (id != expanded.first && y.getValue(id) > pivot) y[id] = y.getValue(id) + extraHeight
+        }
+        leaf += extraHeight
+    }
     val maxY = max(0f, leaf - 112f)
     val frames = linkedMapOf<String, Frame>()
     val outlineIndex = ordered.withIndex().associate { it.value.id to it.index }
@@ -188,7 +209,8 @@ internal fun arrange(topics: List<MapTopic>, layout: MapLayout): MapGeometry {
             MapKind.WORKSTREAM -> 208f
             MapKind.TASK -> 190f
         }
-        val h = if (node.kind == MapKind.PROJECT) 82f else 68f
+        val h = (if (node.kind == MapKind.PROJECT) 82f else 68f) +
+            if (node.id == expanded?.first) expanded.second else 0f
         val row = y.getValue(node.id)
         val x: Float
         val cy: Float
@@ -294,6 +316,23 @@ fun VirlinProjectMindMap(
     /** Rendered under the toolbar while a branch is selected: the host's action bar. */
     structureBar: (@Composable () -> Unit)? = null,
     /**
+     * Node ids that already have a saved preview. The selected node shows a pencil when its id is
+     * here and a faint plus when it is not.
+     */
+    previewOwners: Set<String> = emptySet(),
+    /** The one node currently showing its preview, and the extra height that preview needs. */
+    expandedPreviewId: String? = null,
+    expandedPreviewHeight: Float = 0f,
+    /** Left caret: reveals or conceals saved content. It never enters editing. */
+    onTogglePreview: (MapTopic) -> Unit = {},
+    /**
+     * Node-level plus/pencil. This opens ONLY the preview editor and is entirely separate from the
+     * lower action bar's Add, which remains the canonical feature palette.
+     */
+    onEditPreview: (MapTopic) -> Unit = {},
+    /** Draws the expanded node itself, in screen coordinates supplied by the map. */
+    expandedPreviewContent: (@Composable (androidx.compose.ui.geometry.Rect) -> Unit)? = null,
+    /**
      * May this branch legally land on that node? Answered with the same rules the command
      * validates with, so a target lights up only when the drop would really be accepted.
      */
@@ -324,7 +363,13 @@ fun VirlinProjectMindMap(
     onMoveTask: (MapTopic) -> Unit = {},
 ) {
     var current by remember(appearance) { mutableStateOf(appearance) }
-    val geometry = remember(topics, current.layout) { arrange(topics, current.layout) }
+    val geometry = remember(topics, current.layout, expandedPreviewId, expandedPreviewHeight) {
+        arrange(
+            topics,
+            current.layout,
+            expandedPreviewId?.takeIf { expandedPreviewHeight > 0f }?.let { it to expandedPreviewHeight },
+        )
+    }
     val byId = remember(geometry) { geometry.topics.associateBy { it.id } }
     val density = LocalDensity.current.density
     var viewport by remember { mutableStateOf(IntSize.Zero) }
@@ -487,7 +532,11 @@ fun VirlinProjectMindMap(
                     // A tap SELECTS in both modes and never navigates: opening is an explicit
                     // action, so a tap can neither leave the map mid-edit nor be mistaken for
                     // one. `onNodeOpen` is still the Open action's and the outline's path.
-                    .pointerInput(geometry, selectingColor) {
+                    // selectedId is a KEY, not merely captured: the preview caret and
+                    // plus/pencil belong to the already-selected node, so a detector built before
+                    // the selection existed would compare against a stale null and never fire
+                    // them. This is the same staleness the pan/zoom handler above guards against.
+                    .pointerInput(geometry, selectingColor, selectedId) {
                         detectTapGestures { tap ->
                             val world =
                                 (tap - Offset(offsetX, offsetY)) / (density * zoom)
@@ -503,6 +552,22 @@ fun VirlinProjectMindMap(
                             }
 
                             val topic = byId[frame.id] ?: return@detectTapGestures
+
+                            // Gesture priority: the caret and the plus/pencil belong to the node
+                            // that is ALREADY selected, so a first tap can only ever select. That
+                            // keeps selection the cheapest gesture on the map and means these
+                            // controls can never swallow a tap aimed at a different node.
+                            if (topic.id == selectedId) {
+                                if (caretZone(frame).contains(world.x, world.y)) {
+                                    onTogglePreview(topic)
+                                    return@detectTapGestures
+                                }
+                                if (previewEditZone(frame).contains(world.x, world.y)) {
+                                    onEditPreview(topic)
+                                    return@detectTapGestures
+                                }
+                            }
+
                             onStructureSelect(topic)
 
                             if (selectingColor) {
@@ -524,6 +589,8 @@ fun VirlinProjectMindMap(
                     )
                     paintMap(
                         native, geometry, current, visible, selectedId,
+                        previewOwners = previewOwners,
+                        expandedId = expandedPreviewId,
                         dragId = dragId, hoverId = hoverId,
                         hoverValid = dragId?.let { source ->
                             hoverId?.let { target -> isValidTarget(source, target) }
@@ -632,6 +699,21 @@ fun VirlinProjectMindMap(
                             c.nativeCanvas.drawText(moving, topLeft.x + 12.dp.toPx(), topLeft.y + 44.dp.toPx(), paint)
                         }
                     }
+                }
+            }
+            // The expanded node, drawn as ONE Compose overlay in screen space from the reflowed
+            // frame. Only the selected node can be expanded, so at most one of these exists and
+            // the map still costs no composables per node.
+            expandedPreviewId?.let { id ->
+                geometry.frames[id]?.let { frame ->
+                    val scale = density * zoom
+                    val rect = androidx.compose.ui.geometry.Rect(
+                        left = frame.x * scale + offsetX,
+                        top = frame.y * scale + offsetY,
+                        right = (frame.x + frame.w) * scale + offsetX,
+                        bottom = (frame.y + frame.h) * scale + offsetY,
+                    )
+                    expandedPreviewContent?.invoke(rect)
                 }
             }
             // A selected task gets a real 48dp drag handle. This owns its pointer sequence;
@@ -1019,6 +1101,10 @@ private fun paintMap(
     canvas: android.graphics.Canvas, g: MapGeometry, appearance: MapAppearance,
     viewport: RectF, selectedId: String?,
     dragId: String? = null, hoverId: String? = null, hoverValid: Boolean = false,
+    /** Node ids that have a saved preview, so the selected one shows a pencil rather than a plus. */
+    previewOwners: Set<String> = emptySet(),
+    /** The expanded node, drawn by the Compose overlay instead of here. */
+    expandedId: String? = null,
 ) {
     val palette = mapPalettes[appearance.paletteIndex.mod(mapPalettes.size)]
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -1061,6 +1147,10 @@ private fun paintMap(
         val f = g.frames.getValue(topic.id)
         val r = RectF(f.x, f.y, f.x + f.w, f.y + f.h)
         if (!RectF.intersects(viewport, r)) continue
+        // The expanded node is a Compose overlay: formatted text and a swipeable carousel cannot be
+        // drawn here without reimplementing text layout and paging by hand. Its connectors are
+        // still drawn above, from the reflowed frame, so the geometry stays in one place.
+        if (topic.id == expandedId) continue
         val color = accent(topic)
         val selected = selectedId == topic.id
         // While a branch is lifted, the nodes that would refuse it recede.
@@ -1116,5 +1206,58 @@ private fun paintMap(
             detail, android.text.TextPaint(paint), f.w - 28f, TextUtils.TruncateAt.END
         ).toString()
         canvas.drawText(sub, f.x + 14f, f.y + f.h - 14f, paint)
+
+        // The preview controls appear ONLY while the node is selected, so a resting map is
+        // unchanged: no caret, no plus, no pencil on any other node.
+        if (selected) drawPreviewAffordances(canvas, paint, f, topic.id in previewOwners, false)
     }
+}
+
+
+/** Hit zone of the disclosure caret, in world units, relative to a node frame. */
+internal fun caretZone(f: Frame) = RectF(f.x - 4f, f.y + f.h / 2f - 16f, f.x + 26f, f.y + f.h / 2f + 16f)
+
+/** Hit zone of the node-level plus/pencil. Separate from the lower Add action, which is untouched. */
+internal fun previewEditZone(f: Frame) =
+    RectF(f.x + f.w - 30f, f.y + f.h / 2f - 16f, f.x + f.w + 4f, f.y + f.h / 2f + 16f)
+
+/**
+ * The selected node's preview affordances: a caret on the left and a very faint plus (no preview)
+ * or pencil (preview exists) on the right. Both are deliberately quiet - they are secondary to the
+ * node's own content and to the lower action bar.
+ */
+private fun drawPreviewAffordances(
+    canvas: android.graphics.Canvas,
+    paint: Paint,
+    f: Frame,
+    hasPreview: Boolean,
+    expanded: Boolean,
+) {
+    val cy = f.y + f.h / 2f
+    paint.style = Paint.Style.STROKE
+    paint.strokeWidth = 2f
+    paint.color = android.graphics.Color.rgb(99, 114, 131)
+    paint.alpha = 190
+    // Caret: right-facing when collapsed, downward when expanded.
+    val cx = f.x + 12f
+    val path = Path()
+    if (expanded) {
+        path.moveTo(cx - 5f, cy - 2.5f); path.lineTo(cx, cy + 3f); path.lineTo(cx + 5f, cy - 2.5f)
+    } else {
+        path.moveTo(cx - 2.5f, cy - 5f); path.lineTo(cx + 3f, cy); path.lineTo(cx - 2.5f, cy + 5f)
+    }
+    canvas.drawPath(path, paint)
+
+    // Right affordance, very faint: a plus when there is nothing yet, a pencil when there is.
+    val ex = f.x + f.w - 15f
+    paint.alpha = 110
+    if (hasPreview) {
+        canvas.drawLine(ex - 4f, cy + 4f, ex + 4f, cy - 4f, paint)
+        canvas.drawLine(ex + 1.5f, cy - 5.5f, ex + 4.5f, cy - 2.5f, paint)
+    } else {
+        canvas.drawLine(ex - 5f, cy, ex + 5f, cy, paint)
+        canvas.drawLine(ex, cy - 5f, ex, cy + 5f, paint)
+    }
+    paint.style = Paint.Style.FILL
+    paint.alpha = 255
 }
