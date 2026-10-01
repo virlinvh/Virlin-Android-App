@@ -753,3 +753,45 @@ resident QEMU process, so the walkthrough could not be completed.
 **Outstanding:** the import walkthrough (Markdown, TXT, DOCX, image, audio, video, PDF, ZIP), Page
 block reopening and restart persistence remain unverified on device. They should be run once the
 emulator is healthy, before this branch is merged.
+
+---
+
+## 2026-10-01 — Emulator fixed, and the Attachment walkthrough completed
+
+**Root cause of the black screen: the emulator's host GPU, not any Virlin code.** Starting the
+Pixel 8 AVD with `-gpu swiftshader_indirect` (software rendering) restored it immediately: the same
+APK that produced a 15,845 byte black frame now renders at ~658 KB. This matches the earlier
+decisive test in which the base `e28b521` APK reproduced the black frame identically.
+
+**For future sessions:** if this app renders black while the launcher renders normally, restart the
+emulator with `-gpu swiftshader_indirect` before suspecting the code.
+
+### Walkthrough completed on `feature/attachment-workspace` (`fe7eb90`)
+
+Installed with `adb install -r`; app data was never cleared. **Zero crashes throughout.**
+
+1. **Palette** — Attachment is enabled alongside To-do, Note, Prompt, Link, PDF and Audio. Image,
+   Sticker and Illustration remain honestly "Not yet".
+2. **Empty state** — "Attachments / Attached to · Pixel 8 Validation", the Add-any-file card, and
+   "No files yet · Anything you add stays on this device, attached to this task."
+3. **Multi-select import** — five files selected in one picker pass (`release-notes.md`,
+   `server.log`, `source-bundle.zip`, `unknown.bin`, `virlin-pdf-validation.pdf`) and all five
+   imported, giving "Saved files · 5".
+4. **Contextual actions resolved by kind** — **View** for Markdown, text and PDF; **Details** for
+   the archive and the unknown binary. Badges: MD, LOG, ZIP (amber), BIN, PDF (red).
+5. **Markdown preview** — Preview/Source chips, H1/H2 headings, checked and unchecked task
+   checkboxes, the fenced `bash` code block rendered monospaced on dark, and the quote line.
+6. **Archive details** — "File stored safely / Archives are kept exactly as imported. Virlin does
+   not open or extract them." with name and `application/zip`. Nothing was extracted.
+7. **PDF handoff** — opening the imported PDF routed **by kind** into Codex's canonical PDF
+   workspace, which loaded it as "5 pages · 81.4 KB" with Preview, Annotate, Organize, Crop, OCR
+   and Export all enabled. Cross-feature integration confirmed working.
+8. **Task Page** — each imported file appears as its own independent block with its resolved kind:
+   `release-notes.md · Markdown`, `server.log · Text`, `source-bundle.zip · Archive`,
+   `unknown.bin · File`, and `virlin-pdf-validation.pdf` labelled **PDF** by Codex's kind-aware
+   projection. Pre-existing Note and Link blocks were untouched.
+9. **Persistence** — after a full force-stop and relaunch, all five files and their Page blocks
+   were still present.
+
+This supersedes the "emulator verification BLOCKED" note in the previous entry. The Attachment lane
+is now verified end to end on device as well as by the 1091-test suite.
