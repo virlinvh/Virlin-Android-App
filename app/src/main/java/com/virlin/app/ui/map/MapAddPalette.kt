@@ -20,7 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.AttachFile
-import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Description
@@ -28,7 +27,6 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.PictureAsPdf
-import androidx.compose.material.icons.outlined.SentimentSatisfiedAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -60,7 +58,6 @@ enum class MapAddKind(val label: String) {
     TASK("Prompt"), LINK("Link"),
     PDF("PDF"), ATTACHMENT("Attachment"),
     IMAGE("Image"), AUDIO("Audio"),
-    STICKER("Sticker"), ILLUSTRATION("Illustration"),
 }
 
 /**
@@ -74,8 +71,7 @@ enum class MapAddKind(val label: String) {
  * Link and Note deliberately create no map node; that relationship is deferred to the future
  * design. The attachment and voice DOCUMENT tables key on `captureItemId`, so they belong to the
  * Capture Inbox, not to a task - routing a file there would file an inbox item rather than
- * attach anything to this task. The rest have no model at all. They stay visible but plainly
- * unavailable, because an option that silently does nothing is worse than one that says so.
+ * attach anything to this task.
  */
 val MapAddKind.isSupported: Boolean
     get() = this == MapAddKind.TODO || this == MapAddKind.TASK ||
@@ -88,7 +84,6 @@ private val rows = listOf(
     MapAddKind.TASK to MapAddKind.LINK,
     MapAddKind.PDF to MapAddKind.ATTACHMENT,
     MapAddKind.IMAGE to MapAddKind.AUDIO,
-    MapAddKind.STICKER to MapAddKind.ILLUSTRATION,
 )
 
 private val ink = Color(0xFF19231E)
@@ -172,12 +167,6 @@ fun MapAddPalette(
                         AddChoice(right, Modifier.weight(1f), onChoose)
                     }
                 }
-                if (MapAddKind.entries.any { !it.isSupported }) {
-                    Text(
-                        "Dimmed options have nowhere to be saved in this build yet.",
-                        fontSize = 11.sp, color = Color(0xFF6B7A72),
-                    )
-                }
             }
             }
         }
@@ -245,8 +234,6 @@ private fun iconFor(kind: MapAddKind): ImageVector = when (kind) {
     MapAddKind.ATTACHMENT -> Icons.Outlined.AttachFile
     MapAddKind.IMAGE -> Icons.Outlined.Image
     MapAddKind.AUDIO -> Icons.Outlined.MicNone
-    MapAddKind.STICKER -> Icons.Outlined.SentimentSatisfiedAlt
-    MapAddKind.ILLUSTRATION -> Icons.Outlined.Brush
 }
 
 /**

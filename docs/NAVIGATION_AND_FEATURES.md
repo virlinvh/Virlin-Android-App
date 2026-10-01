@@ -1,6 +1,6 @@
 # Virlin navigation and feature map
 
-Verified against `feature/attachment-workspace`: 2026-10-01
+Verified against `claude/final-content-workspaces`: 2026-10-01
 
 ## Root destinations
 
@@ -60,13 +60,10 @@ Implemented and enabled:
 - Image → task-owned image library and non-destructive editor using managed `AttachmentKind.IMAGE`
   files. Save copy writes a new PNG and leaves the source bytes untouched.
 
-Visible but disabled (`Not yet`):
-
-- Sticker.
-- Illustration.
-
-Disabled items must not be marked supported until they have real storage, navigation, ownership,
-failure handling and tests.
+Sticker and Illustration are intentionally absent from the palette. They had no model, storage,
+route, or saved compatibility data and were removed from the current product surface. If either is
+reintroduced later, it must return as a newly specified feature with real storage, navigation,
+ownership, failure handling, and tests rather than by restoring the old placeholder enum entries.
 
 ## Canonical versus compatibility boundaries
 

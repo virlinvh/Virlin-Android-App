@@ -18,8 +18,7 @@ Updated: 2026-10-01
 | Audio palette feature | **Implemented (v1, record-only)** — reuses Capture Voice, no new model | `AUDIO_FEATURE.md` | Maintained |
 | Attachment palette feature | **Implemented** task-scoped universal local file space | `ATTACHMENT_WORKSPACE_FEATURE.md` | Maintained |
 | Image palette feature | **Implemented** task-scoped library and non-destructive editor | `IMAGE_WORKSPACE_FEATURE.md` | Maintained |
-| Sticker | Disabled | None yet | Unassigned |
-| Illustration | Disabled | None yet | Unassigned |
+| Sticker | **Not in current scope**; placeholder removed, no persisted feature existed | `NAVIGATION_AND_FEATURES.md` | Re-specify before any future implementation |
+| Illustration | **Not in current scope**; placeholder removed, no persisted feature existed | `NAVIGATION_AND_FEATURES.md` | Re-specify before any future implementation |
 
-PDF, Audio, and Attachment are combined on `feature/attachment-workspace`. Image remains isolated
-and is not part of this baseline until its emulator audit is complete.
+PDF, Audio, Attachment, and Image are integrated on `claude/final-content-workspaces`.
