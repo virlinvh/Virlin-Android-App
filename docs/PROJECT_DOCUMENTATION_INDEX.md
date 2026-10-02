@@ -42,6 +42,7 @@ shared extension foundation needed by future Plus-menu features.
 - `TASK_PAGE_FOUNDATION.md`
 - `PROJECT_SETTINGS_FOUNDATION.md`
 - `TASK_HIERARCHY_CLEANUP.md`
+- `EXECUTION_TIMING_FOUNDATION.md` — canonical state, Current/Focus switching and time roll-ups
 - `NOTE_SYSTEM_CLEANUP.md`
 - `PDF_FEATURE_FOUNDATION.md`
 - `PROMPT_FEATURE.md`

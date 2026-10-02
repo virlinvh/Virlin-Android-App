@@ -12,6 +12,7 @@ import com.virlin.app.domain.action.VirlinActions
 import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.FocusInvestment
+import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStream
@@ -533,6 +534,9 @@ class HierarchyViewModel(
         return total.takeIf { !it.isZero && !it.isNegative }
     }
 
+    /** Batched timing history for hierarchy projections; no UI surface reads Room directly. */
+    suspend fun allFocusSessions(): List<FocusSession> = repository.allFocusSessions()
+
     suspend fun nextCandidate(streamId: String): Task? = actions.nextTaskCandidate(streamId).let {
         (it as? ActionResult.Success)?.value
     }
@@ -579,7 +583,15 @@ class HierarchyViewModel(
 
     /** The existing whole-project completion. Virlin has no separate archive state. */
     fun completeProject(id: String) = dispatch("completeProject") { actions.completeProject(id) }
-    fun setActiveTask(streamId: String, taskId: String?) = dispatch("setActiveTask") { actions.setActiveTask(streamId, taskId) }
+    fun setActiveTask(streamId: String, taskId: String?) {
+        val stream = snapshot.value.streams.firstOrNull { it.id == streamId }
+        // On a focused stream, Current is a real attention switch and must use the same preview /
+        // confirmation path as Focus. The domain action also protects non-UI callers.
+        if (taskId != null && stream?.state == com.virlin.app.domain.model.WorkStreamState.FOCUS &&
+            stream.activeTaskId != taskId) {
+            focusWorkItem(taskId)
+        } else dispatch("setActiveTask") { actions.setActiveTask(streamId, taskId) }
+    }
 
     /**
      * PHASE 09 — start human focus on this work item. Resolving is a pure read, so an active focus

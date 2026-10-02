@@ -56,6 +56,8 @@ data class StreamTaskUi(
     val inheritedFrom: String? = null,
     val childCount: Int = 0,
     val progressPercent: Int? = null,
+    /** Exact leaf time, or descendant roll-up for a container. */
+    val focusedLabel: String? = null,
 )
 data class StreamTasksUi(
     val streamId: String,
@@ -66,6 +68,8 @@ data class StreamTasksUi(
     val streamEffectiveExecution: StreamExecutionMode,
     val tasks: List<StreamTaskUi>,
     val currentTaskId: String? = null,
+    val stateSummary: String = "Ready",
+    val totalFocusedLabel: String? = null,
 )
 /** Implement these against the existing ViewModel/repository, including loading and error states. */
 interface StreamTaskActions {
@@ -143,7 +147,12 @@ fun VirlinStreamTasks(
                     }
                     Column(Modifier.weight(1f)) {
                         Text(ui.streamName, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(if (parentId == null) "Stream · ${ui.projectName}" else path.mapNotNull { tasksById[it]?.title }.joinToString(" / "), fontSize = 12.sp, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            if (parentId == null) "${ui.stateSummary} · ${ui.projectName}"
+                            else path.mapNotNull { tasksById[it]?.title }.joinToString(" / "),
+                            fontSize = 12.sp, color = Muted, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                     ui.streamPercent?.let { Text("$it%", color = Ink, fontWeight = FontWeight.SemiBold) }
                     Box {
@@ -393,7 +402,11 @@ private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): Stri
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(task.title, color = Ink, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (task.childCount > 0) Text("${task.progressPercent?.let { "$it% · " }.orEmpty()}${task.childCount} subtasks", color = Muted, fontSize = 12.sp)
+            val detail = buildList {
+                if (task.childCount > 0) add("${task.progressPercent?.let { "$it% · " }.orEmpty()}${task.childCount} subtasks")
+                task.focusedLabel?.let { add("$it focused") }
+            }.joinToString(" · ")
+            if (detail.isNotBlank()) Text(detail, color = Muted, fontSize = 12.sp)
         }
         if (!organize) {
             // Completion is one-way in this domain: a finished task has no reopen action, so

@@ -6,6 +6,7 @@ import com.virlin.app.domain.activity.TaskEventDetail
 import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.ExecutionPreference
+import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.ProjectStatus
 import com.virlin.app.domain.model.Task
@@ -753,6 +754,13 @@ internal class StructureActions(
         val now = clock.now()
         if (taskId == null) {
             if (ws.activeTaskId == null) return@tx ActionResult.Success(ws)
+            if (ws.state == WorkStreamState.FOCUS) {
+                getOpenFocusSession(streamId)?.let { open ->
+                    if (open.isOpen) saveFocusSession(open.copy(endedAt = now))
+                }
+                // Focus may intentionally continue at WorkStream level without a current Task.
+                saveFocusSession(FocusSession(ids.newId("fs"), streamId, ws.currentCycleId, now))
+            }
             val cleared = ws.copy(activeTaskId = null, updatedAt = now)
             saveStream(cleared); streamEvent(streamId, EventType.ACTIVE_TASK_CLEARED, now, ws.activeTaskId)
             return@tx ActionResult.Success(cleared)
@@ -761,6 +769,15 @@ internal class StructureActions(
         if (t.workStreamId != streamId) return@tx ActionResult.Rejected(DomainError.TaskNotInWorkStream)
         if (t.status.isTerminal) return@tx ActionResult.Rejected(DomainError.TaskAlreadyClosed)
         if (TaskHierarchy.ancestry(allTasks(), taskId) == null) return@tx ActionResult.Rejected(DomainError.CyclicParent)
+        if (ws.activeTaskId == taskId) return@tx ActionResult.Success(ws)
+        if (ws.state == WorkStreamState.FOCUS) {
+            // Changing Current while Focus is running is a timing boundary. Never allow the open
+            // session to keep charging time to the previous Task.
+            getOpenFocusSession(streamId)?.let { open ->
+                if (open.isOpen) saveFocusSession(open.copy(endedAt = now))
+            }
+            saveFocusSession(FocusSession(ids.newId("fs"), streamId, ws.currentCycleId, now, taskId = taskId))
+        }
         val updated = ws.copy(activeTaskId = taskId, updatedAt = now)
         saveStream(updated)
         streamEvent(streamId, EventType.ACTIVE_TASK_SET, now, taskId)

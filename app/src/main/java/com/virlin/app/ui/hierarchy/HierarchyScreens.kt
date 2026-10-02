@@ -29,6 +29,9 @@ import androidx.navigation.NavController
 import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.ExecutionPreference
+import com.virlin.app.domain.model.ExecutionTiming
+import com.virlin.app.domain.model.FocusInvestment
+import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamState
@@ -50,6 +53,7 @@ import kotlinx.coroutines.launch
 import com.virlin.app.domain.model.AttachmentKind
 import com.virlin.app.domain.model.Project
 import com.virlin.app.ui.theme.VirlinColors
+import java.time.Instant
 
 const val ProjectDetailRoute = "project_detail/{id}"
 const val WorkStreamDetailRoute = "workstream_detail/{id}?path={path}"
@@ -156,6 +160,14 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
     var confirmComplete by remember { mutableStateOf(false) }
     var taskMenu by remember { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val sessionKey = remember(streams) { streams.map { it.id to it.updatedAt } }
+    val focusSessions by produceState<List<FocusSession>>(emptyList(), sessionKey) {
+        value = vm.allFocusSessions()
+    }
+    val timingNow = rememberTimingNow(streams.any {
+        it.state == WorkStreamState.FOCUS || it.state == WorkStreamState.PROCESSING ||
+            it.state == WorkStreamState.SNOOZED
+    })
 
     if (editingIcon) {
         com.virlin.app.ui.components.ProjectIconEditorSheet(
@@ -177,6 +189,7 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
         workstreams = streams.map { ws ->
             val progress = ProgressCalculator.ofWorkStream(s.tasks, ws.id)
             val structured = progress as? ProgressResult.Structured
+            val timing = ExecutionTiming.workStream(ws, s.tasks, focusSessions, timingNow)
             WorkstreamUi(
                 id = ws.id,
                 title = ws.title,
@@ -191,7 +204,7 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
                     WorkStreamState.BLOCKED -> WorkstreamState.BLOCKED
                     else -> WorkstreamState.NORMAL
                 },
-                stateLabel = ws.state.label(),
+                stateLabel = timing.summary,
                 unstructured = structured == null
             )
         },
@@ -334,14 +347,22 @@ fun WorkStreamDetailScreen(
     val message by vm.knowledgeMessage.collectAsState()
     val pendingSwitch by vm.pendingSwitch.collectAsState()
     var delegatingTaskId by rememberSaveable(stream.id) { mutableStateOf<String?>(null) }
+    val focusSessions by produceState<List<FocusSession>>(emptyList(), stream.id, stream.updatedAt) {
+        value = vm.allFocusSessions().filter { it.workStreamId == stream.id }
+    }
+    val timingNow = rememberTimingNow(
+        stream.state == WorkStreamState.FOCUS || stream.state == WorkStreamState.PROCESSING ||
+            stream.state == WorkStreamState.SNOOZED
+    )
     LaunchedEffect(message) {
         if (message != null) { kotlinx.coroutines.delay(3_500); vm.clearKnowledgeMessage() }
     }
 
     val tasksById = remember(s.tasks) { s.tasks.associateBy { it.id } }
     val projectDefault = ExecutionModeResolver.projectDefault(project)
-    val ui = remember(s.tasks, stream, project) {
+    val ui = remember(s.tasks, stream, project, focusSessions, timingNow) {
         val mine = s.tasks.filter { it.workStreamId == stream.id }
+        val timing = ExecutionTiming.workStream(stream, mine, focusSessions, timingNow)
         val childCounts = mine.groupingBy { it.parentTaskId }.eachCount()
         StreamTasksUi(
             streamId = stream.id,
@@ -373,9 +394,14 @@ fun WorkStreamDetailScreen(
                         .resolveTask(task, tasksById, stream, projectDefault).asStreamMode(),
                     inheritedFrom = executionSource(task, tasksById, stream, project),
                     childCount = children,
-                    progressPercent = progress
+                    progressPercent = progress,
+                    focusedLabel = timing.inclusiveTaskFocusSeconds[task.id]
+                        ?.takeIf { it > 0L }?.let(FocusInvestment::formatCompact)
                 )
-            }
+            },
+            stateSummary = timing.summary,
+            totalFocusedLabel = timing.totalFocusSeconds.takeIf { it > 0L }
+                ?.let(FocusInvestment::formatCompact)
         )
     }
 
@@ -518,6 +544,20 @@ fun WorkStreamState.label() = when (this) {
     WorkStreamState.FOCUS -> "Focus"; WorkStreamState.PROCESSING -> "Processing"; WorkStreamState.CHECK -> "Check due"
     WorkStreamState.READY -> "Ready"; WorkStreamState.SNOOZED -> "Snoozed"; WorkStreamState.BLOCKED -> "Blocked"
     WorkStreamState.PAUSED -> "Paused"; WorkStreamState.DONE -> "Done"
+}
+
+/** One display clock per screen. It derives labels from timestamps and never writes state. */
+@Composable
+private fun rememberTimingNow(live: Boolean): Instant {
+    var now by remember { mutableStateOf(com.virlin.app.domain.VirlinGraph.clock.now()) }
+    LaunchedEffect(live) {
+        now = com.virlin.app.domain.VirlinGraph.clock.now()
+        while (live) {
+            kotlinx.coroutines.delay(1_000L)
+            now = com.virlin.app.domain.VirlinGraph.clock.now()
+        }
+    }
+    return now
 }
 
 private fun stateSurface(s: WorkStreamState): Color = when (s) {

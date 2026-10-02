@@ -420,3 +420,15 @@ screen. No content was entered during verification.
   future policy fields are honestly marked Planned and documented for the next reserved migration.
 - Consolidated Project completion under `Project settings > Project management`; removed the
   duplicate three-dot-menu action while preserving the existing confirmation and mutation path.
+
+## 2026-10-02 - Execution and timing foundation
+
+- Added the canonical `ExecutionTiming` projection for WorkStream state wording, live session
+  timing, exact Task time, recursive parent roll-ups and Project totals without persisted counters.
+- Made Current changes during active Focus an atomic timing boundary: close the old attributed
+  session and open a new one for the selected Task. The hierarchy UI also uses the existing switch
+  confirmation, while the domain protects Agent and future callers.
+- Connected projected state/timing to Project WorkStream rows and WorkStream task rows. Now and
+  Pulse continue reading the same FocusSessions; no second timer system was introduced.
+- Added `EXECUTION_TIMING_FOUNDATION.md` and focused coverage for roll-ups, live summaries,
+  Project isolation and mid-focus task switching. No Room or managed-file migration.

@@ -214,18 +214,19 @@ class StructureActionsTest {
 
     // ================================================================ Focus / snapshot attribution
 
-    @Test fun focusSession_capturesActiveTaskAtStart_historyNeverRewritten() = runTest {
+    @Test fun changingCurrentWhileFocused_closesOldAttributionAndStartsNewSession() = runTest {
         seedTree()
         a.setActiveTask("agent", "nl")
         a.focusStream("agent")
         assertEquals("nl", repo.getOpenFocusSession("agent")!!.taskId)
-        a.setActiveTask("agent", "custom")                      // change mid-session
-        assertEquals("nl", repo.getOpenFocusSession("agent")!!.taskId) // unchanged
-        a.handOffStream("agent")
-        assertEquals("custom", repo.getLatestSnapshot("agent")!!.taskId) // snapshot has the current one
-        a.checkDue("agent"); a.focusStream("agent")
-        assertEquals("custom", repo.getOpenFocusSession("agent")!!.taskId) // new session, new attribution
+        a.setActiveTask("agent", "custom")
+        assertEquals("custom", repo.getOpenFocusSession("agent")!!.taskId)
         assertEquals(listOf("nl", "custom"), repo.getFocusSessions("agent").map { it.taskId })
+        a.handOffStream("agent")
+        assertEquals("custom", repo.getLatestSnapshot("agent")!!.taskId)
+        a.checkDue("agent"); a.focusStream("agent")
+        assertEquals("custom", repo.getOpenFocusSession("agent")!!.taskId)
+        assertEquals(listOf("nl", "custom", "custom"), repo.getFocusSessions("agent").map { it.taskId })
     }
 
     // ================================================================ Progress
@@ -381,7 +382,8 @@ class StructureActionsTest {
         a.focusStream("orphan")
         assertEquals("q17", repo.getOpenFocusSession("orphan")!!.taskId)
         a.setActiveTask("orphan", "q1_10")
-        assertEquals("q17", repo.getOpenFocusSession("orphan")!!.taskId)          // history not rewritten
+        assertEquals("q1_10", repo.getOpenFocusSession("orphan")!!.taskId)        // new attribution boundary
+        assertEquals(listOf("q17", "q1_10"), repo.getFocusSessions("orphan").map { it.taskId })
         a.handOffStream("orphan")
         assertEquals("q1_10", repo.getLatestSnapshot("orphan")!!.taskId)
         a.completeTask("q1_10")                                                     // clears while PROCESSING too
