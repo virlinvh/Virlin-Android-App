@@ -96,7 +96,8 @@ data class Task(
     val executionPreference: ExecutionPreference = ExecutionPreference.INHERIT,
     val createdAt: Instant,
     val updatedAt: Instant,
-    val completedAt: Instant? = null
+    val completedAt: Instant? = null,
+    val execution: TaskExecution? = null
 ) {
     val isStandalone: Boolean get() = workStreamId == null && parentTaskId == null
 }

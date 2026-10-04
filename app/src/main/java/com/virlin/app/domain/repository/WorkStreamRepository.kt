@@ -26,6 +26,8 @@ import kotlinx.coroutines.flow.StateFlow
  * `withTransaction` later without changing any action.
  */
 interface WorkStreamRepository : CaptureRepository {
+    /** Schema-v20 independent execution; legacy adapters can continue stream-only operation. */
+    val taskExecutionEnabled: Boolean get() = false
     /** Observable current state of every stream. UI observes this; it never writes to it. */
     val streams: StateFlow<List<WorkStream>>
 
@@ -101,6 +103,7 @@ interface WorkStreamRepository : CaptureRepository {
 
 /** Write surface available only inside a [WorkStreamRepository.transaction]. */
 interface WorkStreamWriter : CaptureWriter {
+    suspend fun getCycle(id: String): Cycle? = null
     suspend fun getStream(id: String): WorkStream?
     suspend fun getActiveFocus(): WorkStream?
     suspend fun getOpenFocusSession(streamId: String): FocusSession?

@@ -26,6 +26,50 @@ import com.virlin.app.domain.model.WorkStreamState
  */
 object ProgressCalculator {
 
+    /** Bottom-up progress for a whole forest: linear work, without recursive tree walks. */
+    fun forTasks(tasks: Collection<Task>): Map<String, ProgressResult> {
+        data class Totals(val complete: Int, val active: Int, val cancelled: Int,
+            val estimated: Int, val completeEffort: Long, val effort: Long) {
+            operator fun plus(other: Totals) = Totals(complete + other.complete, active + other.active,
+                cancelled + other.cancelled, estimated + other.estimated,
+                completeEffort + other.completeEffort, effort + other.effort)
+            fun result(): ProgressResult = if (active == 0) ProgressResult.NoActiveWork
+            else ProgressResult.Structured(
+                mode = if (estimated == active) ProgressMode.EFFORT_WEIGHTED else ProgressMode.COUNT_BASED,
+                completed = if (estimated == active) completeEffort else complete.toLong(),
+                total = if (estimated == active) effort else active.toLong(),
+                completedLeaves = complete, totalLeaves = active, cancelledLeaves = cancelled)
+        }
+        val byId = tasks.associateBy { it.id }
+        val children = tasks.groupBy { it.parentTaskId }
+        val remaining = tasks.associate { it.id to children[it.id].orEmpty().size }.toMutableMap()
+        val sums = hashMapOf<String, Totals>()
+        val results = hashMapOf<String, ProgressResult>()
+        val ready = java.util.ArrayDeque<Task>()
+        tasks.filter { remaining[it.id] == 0 }.forEach { ready.addLast(it) }
+        while (ready.isNotEmpty()) {
+            val task = ready.removeFirst()
+            val sum = sums[task.id] ?: run {
+                val unit = unitOf(task)
+                if (unit.cancelled) Totals(0, 0, 1, 0, 0, 0)
+                else Totals(if (unit.complete) 1 else 0, 1, 0, if (unit.effortMinutes != null) 1 else 0,
+                    if (unit.complete) unit.effortMinutes ?: 0 else 0, unit.effortMinutes ?: 0)
+            }
+            results[task.id] = sum.result()
+            task.parentTaskId?.let { parent ->
+                if (parent in byId) {
+                    sums[parent] = sums[parent]?.plus(sum) ?: sum
+                    val count = remaining.getValue(parent) - 1
+                    remaining[parent] = count
+                    if (count == 0) ready.addLast(byId.getValue(parent))
+                }
+            }
+        }
+        // Corrupt cycles cannot make this loop or report fictitious completed work.
+        tasks.forEach { results.putIfAbsent(it.id, ProgressResult.Unstructured) }
+        return results
+    }
+
     fun ofLeaves(leaves: List<Task>): ProgressResult {
         if (leaves.isEmpty()) return ProgressResult.Unstructured
         return build(leaves.map(::unitOf))

@@ -100,7 +100,9 @@ data class WorkStreamEntity(
     /** v12: stable id of the external actor doing the work (Phase 10); null = unknown/none. */
     val externalActorId: String? = null,
     /** v14: the user's sibling position under the project (0-based). Backfilled on migration. */
-    @ColumnInfo(name = "sortOrder") val sortOrder: Int = 0
+    @ColumnInfo(name = "sortOrder") val sortOrder: Int = 0,
+    @ColumnInfo(defaultValue = "0") val externalTrackedSeconds: Long = 0,
+    @ColumnInfo(defaultValue = "0") val externalTrackingPaused: Boolean = false
 )
 
 /**
@@ -145,7 +147,19 @@ data class TaskEntity(
     val executionPreference: String,
     val createdAt: Instant,
     val updatedAt: Instant,
-    val completedAt: Instant?
+    val completedAt: Instant?,
+    val executionState: String? = null,
+    val executionStartedAt: Instant? = null,
+    @ColumnInfo(defaultValue = "0") val executionExternalSeconds: Long = 0,
+    @ColumnInfo(defaultValue = "0") val executionPaused: Boolean = false,
+    val executionCheckAt: Instant? = null,
+    val executionReason: String? = null,
+    val executionBlocker: String? = null,
+    val executionCycleId: String? = null,
+    @ColumnInfo(defaultValue = "0") val executionCycleCount: Int = 0,
+    val executionActorId: String? = null,
+    val executionTool: String? = null,
+    val executionInstruction: String? = null
 )
 
 /**

@@ -305,13 +305,24 @@ fun LinkEditorScreen(
 }
 
 @Composable private fun RemoteImage(url: String, modifier: Modifier) {
-    val bitmap by produceState<android.graphics.Bitmap?>(null, url) {
-        value = withContext(Dispatchers.IO) {
+    var bitmap by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(url) {
+        bitmap = withContext(Dispatchers.IO) {
             runCatching {
                 val connection = URL(url).openConnection() as HttpURLConnection
                 connection.connectTimeout = 5_000; connection.readTimeout = 7_000
                 connection.instanceFollowRedirects = true; connection.setRequestProperty("User-Agent", "Virlin/1.0")
-                connection.inputStream.use(BitmapFactory::decodeStream).also { connection.disconnect() }
+                try {
+                    val bytes = connection.inputStream.use {
+                        com.virlin.app.domain.attachment.readBoundedImport(it, 4L * 1024 * 1024)
+                    }
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    if (bounds.outWidth !in 1..16384 || bounds.outHeight !in 1..16384) return@runCatching null
+                    var sample = 1
+                    while (bounds.outWidth / sample > 1024 || bounds.outHeight / sample > 1024) sample *= 2
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                } finally { connection.disconnect() }
             }.getOrNull()
         }
     }

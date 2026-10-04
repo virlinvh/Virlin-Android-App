@@ -27,6 +27,7 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
 
     private val bindLock = Mutex()
     @Volatile private var inner: WorkStreamRepository? = null
+    override val taskExecutionEnabled: Boolean get() = inner?.taskExecutionEnabled == true
     private var forwardJobs: List<Job> = emptyList()
 
     private val _streams = MutableStateFlow<List<WorkStream>>(emptyList())

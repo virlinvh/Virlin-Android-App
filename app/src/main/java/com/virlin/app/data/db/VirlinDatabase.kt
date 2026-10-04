@@ -32,7 +32,7 @@ interface WorkStreamDao {
     @Query("SELECT * FROM workstreams WHERE projectId = :projectId ORDER BY sortOrder, createdAt, id") suspend fun byProject(projectId: String): List<WorkStreamEntity>
     @Query("SELECT COUNT(*) FROM workstreams") suspend fun count(): Int
     /** Streams whose planned look-again time has passed — startup reconciliation. */
-    @Query("SELECT * FROM workstreams WHERE state IN ('PROCESSING','SNOOZED') AND checkAt IS NOT NULL AND checkAt <= :now")
+    @Query("SELECT * FROM workstreams WHERE (state IN ('PROCESSING','SNOOZED') OR (state = 'PAUSED' AND externalTrackingPaused = 1)) AND checkAt IS NOT NULL AND checkAt <= :now")
     suspend fun dueBy(now: Long): List<WorkStreamEntity>
 }
 
@@ -254,7 +254,7 @@ interface TaskPageBlockDao {
         TaskStepEntity::class, VirlinNoteEntity::class, TaskPageBlockEntity::class,
         MapNodePreviewEntity::class
     ],
-    version = 18,
+    version = 20,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
@@ -571,7 +571,35 @@ abstract class VirlinDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18)
+        val MIGRATION_18_19: Migration = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE workstreams ADD COLUMN externalTrackedSeconds INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE workstreams ADD COLUMN externalTrackingPaused INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        val MIGRATION_19_20: Migration = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf("executionState TEXT", "executionStartedAt INTEGER", "executionExternalSeconds INTEGER NOT NULL DEFAULT 0",
+                    "executionPaused INTEGER NOT NULL DEFAULT 0", "executionCheckAt INTEGER", "executionReason TEXT",
+                    "executionBlocker TEXT", "executionCycleId TEXT", "executionCycleCount INTEGER NOT NULL DEFAULT 0",
+                    "executionActorId TEXT", "executionTool TEXT", "executionInstruction TEXT").forEach {
+                    db.execSQL("ALTER TABLE tasks ADD COLUMN $it")
+                }
+                val pairs = listOf("executionState" to "state", "executionStartedAt" to "processingStartedAt",
+                    "executionExternalSeconds" to "externalTrackedSeconds", "executionPaused" to "externalTrackingPaused",
+                    "executionCheckAt" to "checkAt", "executionReason" to "snoozeReason", "executionBlocker" to "blockerReason",
+                    "executionCycleId" to "currentCycleId", "executionCycleCount" to "cycleCount",
+                    "executionActorId" to "externalActorId", "executionTool" to "tool", "executionInstruction" to "waitingFor")
+                val assignments = pairs.joinToString(",") { (target, source) ->
+                    "$target = (SELECT $source FROM workstreams WHERE activeTaskId = tasks.id AND id = tasks.workStreamId)"
+                }
+                db.execSQL("UPDATE tasks SET $assignments WHERE status NOT IN ('DONE','CANCELLED') AND EXISTS (SELECT 1 FROM workstreams WHERE activeTaskId = tasks.id AND id = tasks.workStreamId)")
+                // Historical sessions, cycles and snapshots keep their original stream/task attribution.
+                db.execSQL("UPDATE workstreams SET state='READY', activeTaskId=NULL, processingStartedAt=NULL, externalTrackedSeconds=0, externalTrackingPaused=0, checkAt=NULL, snoozedUntil=NULL, snoozeReason=NULL, currentCycleId=NULL WHERE activeTaskId IN (SELECT id FROM tasks WHERE executionState IS NOT NULL)")
+                db.execSQL("UPDATE tasks SET executionState=CASE WHEN status IN ('DONE','CANCELLED') THEN 'DONE' ELSE 'READY' END WHERE executionState IS NULL AND workStreamId IS NOT NULL")
+            }
+        }
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

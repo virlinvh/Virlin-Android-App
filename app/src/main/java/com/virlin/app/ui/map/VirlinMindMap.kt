@@ -666,7 +666,7 @@ fun VirlinProjectMindMap(
                         ).toString()
                         c.nativeCanvas.drawText(shown, topLeft.x + 12.dp.toPx(), topLeft.y + 24.dp.toPx(), paint)
                         paint.textSize = 10.dp.toPx()
-                        paint.typeface = android.graphics.Typeface.create("sans-serif", 0)
+                        paint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
                         // The destination in words. "Before" and "After" are what distinguishes
                         // a precise insertion from an append, so the preview has to say which.
                         val plan = dropPlan
@@ -1192,7 +1192,7 @@ private fun paintMap(
             topic.title, android.text.TextPaint(paint), f.w - 48f, TextUtils.TruncateAt.END
         ).toString()
         canvas.drawText(title, f.x + 33f, f.y + 29f, paint)
-        paint.typeface = android.graphics.Typeface.create("sans-serif", 0)
+        paint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
         paint.textSize = 11f
         // Colour is never the only signal: every status also carries a word and a glyph.
         paint.color = when (topic.status) {

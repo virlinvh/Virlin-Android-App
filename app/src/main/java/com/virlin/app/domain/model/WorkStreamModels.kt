@@ -54,7 +54,8 @@ typealias WorkStreamMode = EffectiveExecutionMode
 /**
  * Why a stream is SNOOZED — decides the wording and actions when the time is due.
  * HUMAN_RETURN: "I'll come back to this" (Leave with a return time).
- * EXTERNAL_RESULT_READY: the external work has FINISHED; the human chose to look later.
+ * EXTERNAL_RESULT_READY: the external work has FINISHED; CHECK awaits review, SNOOZED
+ * means the human chose to review later. It never means an external process is still running.
  */
 enum class SnoozeReason { HUMAN_RETURN, EXTERNAL_RESULT_READY }
 
@@ -102,6 +103,9 @@ data class WorkStream(
 
     // ---- Timing (timestamps are the source of truth; there are no counters here)
     val processingStartedAt: Instant? = null,
+    /** Closed external tracking segments. Paused wall time never contributes. */
+    val externalTrackedSeconds: Long = 0,
+    val externalTrackingPaused: Boolean = false,
     /** When to look again. Meaningful for PROCESSING and SNOOZED. */
     val checkAt: Instant? = null,
     /** Set only while SNOOZED. Distinct from a PROCESSING check time. */
@@ -226,6 +230,7 @@ fun effectiveAttentionState(stream: WorkStream, now: Instant): WorkStreamState {
     val due = stream.checkAt?.let { !now.isBefore(it) } ?: false
     return when (stream.state) {
         WorkStreamState.PROCESSING, WorkStreamState.SNOOZED -> if (due) WorkStreamState.CHECK else stream.state
+        WorkStreamState.PAUSED -> if (stream.externalTrackingPaused && due) WorkStreamState.CHECK else stream.state
         else -> stream.state
     }
 }

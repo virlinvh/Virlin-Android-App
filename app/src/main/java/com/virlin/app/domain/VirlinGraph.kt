@@ -136,7 +136,8 @@ object VirlinGraph {
             val seed = DemoSeed.build(clock.now())
             InMemoryWorkStreamRepository(seed.streams, seed.projects, seed.tasks)
         } else {
-            DemoSeed.applyIfEmpty(db, clock.now())
+            // Sample fixtures belong to development builds only. Existing data is never removed.
+            if (com.virlin.app.BuildConfig.DEBUG) DemoSeed.applyIfEmpty(db, clock.now())
             VirlinStartup.mark("prepareRepository_DemoSeed_DONE")
             SchedulingWorkStreamRepository(
                 RoomWorkStreamRepository.create(db),
@@ -146,6 +147,7 @@ object VirlinGraph {
             }
         }
         bootstrap.bind(ready, scope)
+        com.virlin.app.domain.action.reconcileContainerExecution(ready, clock.now())
         val dt = android.os.SystemClock.elapsedRealtime() - t0
         VirlinStartup.mark(
             "prepareRepository_BODY_END",
@@ -216,7 +218,7 @@ object VirlinGraph {
 
     suspend fun rescheduleAll(): Int {
         ensureReady()
-        val streams = repository.streams.value
+        val streams = com.virlin.app.domain.model.executionItems(repository.streams.value, repository.tasks.value)
         streams.forEach { s ->
             runCatching { scheduler.sync(s) }.onFailure { Log.w(TAG, "reschedule ${s.id} failed", it) }
         }
@@ -226,9 +228,10 @@ object VirlinGraph {
     suspend fun reconcileDue() {
         ensureReady()
         val now = clock.now()
-        val due = repository.streams.value.filter {
+        val due = com.virlin.app.domain.model.executionItems(repository.streams.value, repository.tasks.value).filter {
             (it.state == com.virlin.app.domain.model.WorkStreamState.PROCESSING ||
-                it.state == com.virlin.app.domain.model.WorkStreamState.SNOOZED) &&
+                it.state == com.virlin.app.domain.model.WorkStreamState.SNOOZED ||
+                (it.state == com.virlin.app.domain.model.WorkStreamState.PAUSED && it.externalTrackingPaused)) &&
                 it.checkAt?.let { t -> !now.isBefore(t) } == true
         }
         due.forEach { s ->

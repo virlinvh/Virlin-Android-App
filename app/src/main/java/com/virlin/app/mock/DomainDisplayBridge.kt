@@ -12,6 +12,9 @@ import com.virlin.app.domain.model.WorkStream as DomainStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
 import java.time.Duration
 import java.time.Instant
 
@@ -33,20 +36,23 @@ object DomainDisplayBridge {
 
     fun start(scope: CoroutineScope, repository: WorkStreamRepository, clock: VirlinClock) {
         if (job?.isActive == true) return
+        val executionRepository = com.virlin.app.domain.repository.ExecutionViewRepository(repository, scope)
         job = scope.launch {
-            repository.streams.collect { domainStreams ->
+            val ticks = flow { while (true) { emit(clock.now()); delay(1000) } }
+            combine(executionRepository.streams, ticks) { streams, _ -> streams }.collect { domainStreams ->
+                val tasksById = repository.tasks.value.associateBy { it.id }
                 val byId = domainStreams.associateBy { it.id }
                 // Focus time is derived from the persisted open FocusSession, never from a
                 // stored counter — so it is right again after a process restart.
                 val focusStreams = domainStreams.filter { it.state == WorkStreamState.FOCUS }
                 // Fail soft: a bad FocusSession row must never kill display projection.
                 val openSessions = focusStreams.associate { s ->
-                    s.id to runCatching { repository.getOpenFocusSession(s.id) }.getOrNull()
+                    s.id to runCatching { executionRepository.getOpenFocusSession(s.id) }.getOrNull()
                 }
                 val priorByStream = focusStreams.associate { s ->
                     s.id to runCatching {
                         val tAgg = android.os.SystemClock.elapsedRealtime()
-                        val sessions = repository.getFocusSessions(s.id)
+                        val sessions = executionRepository.getFocusSessions(s.id)
                         val prior = FocusInvestment.priorClosedSeconds(sessions, s.activeTaskId)
                             .coerceIn(0L, Int.MAX_VALUE.toLong())
                             .toInt()
@@ -72,9 +78,13 @@ object DomainDisplayBridge {
                             nextAction = s.nextHumanAction
                         )
                     }
-                    (display + added).map { d ->
+                    (display + added).filter { it.id in byId }.map { d ->
                         byId[d.id]?.let {
-                            project(d, it, clock.now(), openSessions[d.id], priorByStream[d.id] ?: 0)
+                            project(d, it, clock.now(), openSessions[d.id], priorByStream[d.id] ?: 0).let { row ->
+                                tasksById[it.id]?.let { task -> row.copy(title = task.title,
+                                    subtitle = com.virlin.app.domain.model.TaskHierarchy.ancestry(repository.tasks.value, task.id)
+                                        ?.reversed()?.dropLast(1)?.joinToString(" › ") { node -> node.title }.orEmpty()) } ?: row
+                            }
                         } ?: d
                     }
                 }
@@ -133,8 +143,10 @@ object DomainDisplayBridge {
         val focusSec = openSession?.let { Duration.between(it.startedAt, now).seconds.toInt().coerceAtLeast(0) }
         val processingSec = domain.processingStartedAt?.let { Duration.between(it, now).seconds.toInt().coerceAtLeast(0) }
         return display.copy(
+            title = domain.title,
+            subtitle = domain.nextHumanAction.orEmpty(),
             state = newState,
-            nextAction = domain.nextHumanAction ?: display.nextAction,
+            nextAction = domain.nextHumanAction,
             blockerReason = domain.blockerReason,
             checkInRemainingSec = when (domain.state) {
                 WorkStreamState.PROCESSING, WorkStreamState.SNOOZED, WorkStreamState.CHECK -> checkIn ?: display.checkInRemainingSec
@@ -143,9 +155,9 @@ object DomainDisplayBridge {
             processingElapsedSec = processingSec ?: display.processingElapsedSec,
             // Open FocusSession is authoritative for the current session. Otherwise keep the
             // display counter (MockTimerEngine). Seed starts at 0 so first paint is not a fake 32:35.
-            focusInvestedSec = focusSec ?: display.focusInvestedSec,
+            focusInvestedSec = focusSec ?: 0,
             priorFocusInvestedSec = if (domain.state == WorkStreamState.FOCUS) priorFocusInvestedSec else 0,
-            isOverdue = if (newState == StreamState.PROCESSING) false else display.isOverdue
+            isOverdue = newState == StreamState.NEEDS_YOU && (checkIn ?: 0) < 0
         )
     }
 

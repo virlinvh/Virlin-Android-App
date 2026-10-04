@@ -34,7 +34,8 @@ data class ExternalWorkItem(
     val stage: ExternalStage?,
     val stagePosition: Int?,
     val stageCount: Int,
-    val checkAt: Instant?
+    val checkAt: Instant?,
+    val taskPath: List<String> = emptyList()
 ) {
     val id: String get() = stream.id
     val actorName: String get() = actor?.displayName ?: stream.tool ?: "External process"
@@ -91,7 +92,8 @@ object ExternalWork {
             stage = stage,
             stagePosition = ExternalStages.position(stages, stream.id, stage),
             stageCount = ExternalStages.count(stages, stream.id),
-            checkAt = stream.checkAt
+            checkAt = stream.checkAt,
+            taskPath = activeTask?.let { TaskHierarchy.ancestry(tasks, it.id)?.reversed()?.map { node -> node.title } }.orEmpty()
         )
     }
 

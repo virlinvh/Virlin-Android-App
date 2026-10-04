@@ -172,6 +172,8 @@ interface VirlinActions {
 
     /** "I am choosing not to work on this now." No wake time. */
     suspend fun pauseStream(streamId: String): ActionResult<WorkStream>
+    suspend fun pauseExternalTracking(streamId: String, returnAt: Instant? = null): ActionResult<WorkStream>
+    suspend fun resumeExternalTracking(streamId: String, checkAt: Instant? = null): ActionResult<WorkStream>
 
     /** "I cannot meaningfully proceed." */
     suspend fun blockStream(streamId: String, reason: String? = null): ActionResult<WorkStream>

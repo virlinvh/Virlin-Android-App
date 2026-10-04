@@ -32,7 +32,8 @@ import kotlinx.coroutines.sync.withLock
 class InMemoryWorkStreamRepository(
     seed: List<WorkStream> = emptyList(),
     seedProjects: List<Project> = emptyList(),
-    seedTasks: List<Task> = emptyList()
+    seedTasks: List<Task> = emptyList(),
+    override val taskExecutionEnabled: Boolean = false
 ) : WorkStreamRepository {
 
     private val lock = Mutex()
@@ -318,6 +319,8 @@ class InMemoryWorkStreamRepository(
             if (staged != null) return staged.takeIf { it.endedAt == null }
             return this@InMemoryWorkStreamRepository.cycles.lastOrNull { it.workStreamId == streamId && it.endedAt == null }
         }
+        override suspend fun getCycle(id: String): Cycle? =
+            cycleUpdates.lastOrNull { it.id == id } ?: cycles[id] ?: this@InMemoryWorkStreamRepository.cycles.lastOrNull { it.id == id }
         override suspend fun getLatestSnapshot(streamId: String) =
             snapshots.lastOrNull { it.workStreamId == streamId }
                 ?: this@InMemoryWorkStreamRepository.snapshots.lastOrNull { it.workStreamId == streamId }

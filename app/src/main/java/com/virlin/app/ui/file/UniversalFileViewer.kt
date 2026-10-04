@@ -604,7 +604,7 @@ private fun CsvViewer(file: File) {
 private fun DocxViewer(file: File) {
     var view by remember(file.absolutePath) { mutableStateOf<OoxmlReaders.DocView?>(null) }
     LaunchedEffect(file.absolutePath) {
-        view = withContext(Dispatchers.IO) {
+        view = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
             FileInputStream(file).use { OoxmlReaders.readDocx(it) }
         }
     }
@@ -641,7 +641,7 @@ private fun XlsxViewer(file: File) {
     var workbook by remember(file.absolutePath) { mutableStateOf<OoxmlReaders.WorkbookView?>(null) }
     var sheetIndex by remember { mutableIntStateOf(0) }
     LaunchedEffect(file.absolutePath) {
-        workbook = withContext(Dispatchers.IO) {
+        workbook = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
             FileInputStream(file).use { OoxmlReaders.readXlsx(it) }
         }
     }
@@ -707,7 +707,7 @@ private fun XlsxViewer(file: File) {
 private fun PptxViewer(file: File) {
     var deck by remember(file.absolutePath) { mutableStateOf<OoxmlReaders.DeckView?>(null) }
     LaunchedEffect(file.absolutePath) {
-        deck = withContext(Dispatchers.IO) {
+        deck = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
             FileInputStream(file).use { OoxmlReaders.readPptx(it) }
         }
     }

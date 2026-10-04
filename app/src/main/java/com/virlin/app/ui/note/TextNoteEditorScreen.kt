@@ -772,8 +772,8 @@ private fun PickerGroup(title: String, items: List<Pair<String, NoteBlockType>>,
 
 @Composable
 private fun ContextPickerSheet(vm: TextNoteViewModel) {
-    val projects = VirlinGraph.repository.projects.value
-    val streams = VirlinGraph.repository.streams.value
+    val projects by VirlinGraph.repository.projects.collectAsState()
+    val streams by VirlinGraph.repository.streams.collectAsState()
     Column(
         Modifier
             .fillMaxWidth()

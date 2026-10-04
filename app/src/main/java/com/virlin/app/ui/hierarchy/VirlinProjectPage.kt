@@ -27,6 +27,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -54,10 +60,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -67,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 // UI models only. Adapt your existing entities into these models in the ViewModel.
 data class ProjectPageUi(
@@ -89,6 +99,8 @@ data class ProjectPageUi(
     val totalTasks: Int get() = workstreams.sumOf { it.totalTasks } + standaloneTasks.size
     val completedTasks: Int get() = workstreams.sumOf { it.completedTasks } + standaloneTasks.count { it.completed }
     val progress: Float get() = if (totalTasks == 0) 0f else completedTasks.toFloat() / totalTasks
+    val humanActiveCount: Int get() = workstreams.sumOf { it.humanRunCount ?: if (it.state == WorkstreamState.HUMAN_FOCUS) 1 else 0 }
+    val externalActiveCount: Int get() = workstreams.sumOf { it.externalRunCount ?: if (it.state == WorkstreamState.EXTERNAL_RUNNING) 1 else 0 }
 }
 
 data class WorkstreamUi(
@@ -97,15 +109,22 @@ data class WorkstreamUi(
     val completedTasks: Int,
     val totalTasks: Int,
     val kind: WorkstreamKind = WorkstreamKind.GENERAL,
-    val state: WorkstreamState = WorkstreamState.NORMAL,
+    val state: WorkstreamState = WorkstreamState.READY,
     /** The app's own state wording ("Processing", "Blocked", …) shown under the title. */
     val stateLabel: String = "",
+    /** Exact concurrent item count when [state] is [WorkstreamState.MULTI_RUN]. */
+    val activeRunCount: Int = 0,
+    val humanRunCount: Int? = null,
+    val externalRunCount: Int? = null,
     /** True when the row has no task structure at all, so it reads "No tasks yet", never "0%". */
     val unstructured: Boolean = false
 )
 
 enum class WorkstreamKind { DESIGN, ASSISTANT, BUILD, CLOUD, GENERAL }
-enum class WorkstreamState { NORMAL, IN_PROGRESS, BLOCKED }
+/** Read-only rendering states. Domain state remains authoritative in HierarchyScreens. */
+enum class WorkstreamState {
+    HUMAN_FOCUS, EXTERNAL_RUNNING, MULTI_RUN, NEEDS_ATTENTION, READY, WAITING, BLOCKED, PAUSED, COMPLETE
+}
 data class ProjectTaskUi(val id: String, val title: String, val completed: Boolean)
 data class ProjectDocumentUi(
     val id: String,
@@ -132,7 +151,8 @@ data class ProjectPageActions(
     val onAddDocument: () -> Unit,
     val onProjectSettings: () -> Unit,
     val onEditProject: () -> Unit,
-    val onManageWorkstreams: () -> Unit
+    val onManageWorkstreams: () -> Unit,
+    val onWorkstreamControls: (String) -> Unit = {}
 )
 
 private object P {
@@ -147,6 +167,13 @@ private object P {
     val amberWash = Color(0xFFFFFCF3)
     val coral = Color(0xFFD34C3C)
     val ivory = Color(0xFFFAF8F4)
+    val focus = Color(0xFF1FA676)
+    val external = Color(0xFF2F6BDE)
+    val externalLight = Color(0xFF49A9FF)
+    val parallel = Color(0xFF1AA6B7)
+    val attention = Color(0xFFE6A400)
+    val inactive = Color(0xFFBCC6C2)
+    val executionWash = Color(0xFFF3F8F5)
 }
 
 @Composable
@@ -323,6 +350,8 @@ private fun SectionHeading(title: String, action: String, tag: String? = null, o
 
 @Composable
 private fun OverviewBody(ui: ProjectPageUi, actions: ProjectPageActions) {
+    ExecutionLegend(ui.humanActiveCount, ui.externalActiveCount)
+    Spacer(Modifier.height(18.dp))
     // The app's existing tag, so the hierarchy journey still finds this control.
     SectionHeading("Workstreams", "New", AddWorkStreamButtonTag, actions.onAddWorkstream)
     Spacer(Modifier.height(7.dp))
@@ -379,29 +408,15 @@ private fun OverviewBody(ui: ProjectPageUi, actions: ProjectPageActions) {
 
 @Composable
 private fun WorkstreamRow(item: WorkstreamUi, onClick: () -> Unit) {
-    val active = item.state == WorkstreamState.IN_PROGRESS
     val blocked = item.state == WorkstreamState.BLOCKED
     Surface(
         onClick = onClick, modifier = Modifier.fillMaxWidth().testTag("stream_row_${item.id}"),
         shape = RoundedCornerShape(12.dp),
-        color = if (active) P.amberWash else Color.White,
-        border = BorderStroke(1.dp, if (active) P.amberLine else P.line)
+        color = Color.White,
+        border = BorderStroke(1.dp, P.line)
     ) {
-        Row(Modifier.height(66.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(42.dp).clip(RoundedCornerShape(11.dp)).background(P.ivory),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    when (item.kind) {
-                        WorkstreamKind.DESIGN -> "✎"
-                        WorkstreamKind.ASSISTANT -> "▢"
-                        WorkstreamKind.BUILD -> "◇"
-                        WorkstreamKind.CLOUD -> "☁"
-                        WorkstreamKind.GENERAL -> "▣"
-                    }, fontSize = 25.sp, color = P.ink
-                )
-            }
+        Row(Modifier.defaultMinSize(minHeight = 76.dp).padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+            ExecutionDial(item.state, Modifier.size(48.dp), item.activeRunCount)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(item.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = P.ink,
@@ -413,14 +428,15 @@ private fun WorkstreamRow(item: WorkstreamUi, onClick: () -> Unit) {
                         fontSize = 12.sp, color = P.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                     if (blocked) Text(" · Blocked", fontSize = 12.sp, color = P.coral)
-                    else if (item.stateLabel.isNotBlank() && !active) {
+                    else if (item.stateLabel.isNotBlank()) {
                         Text(" · ${item.stateLabel}", fontSize = 12.sp, color = P.secondary, maxLines = 1)
                     }
                 }
+                Spacer(Modifier.height(5.dp))
+                ExecutionBars(item.state)
             }
-            if (active) {
-                Text("In progress", color = P.amber, fontSize = 11.sp,
-                    modifier = Modifier.background(Color(0xFFFFF2D7), RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 4.dp))
+            StatePill(item.state)
+            if (item.state != WorkstreamState.READY) {
                 Spacer(Modifier.width(7.dp))
             }
             if (!item.unstructured) {
@@ -430,6 +446,281 @@ private fun WorkstreamRow(item: WorkstreamUi, onClick: () -> Unit) {
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = P.ink, modifier = Modifier.size(22.dp))
         }
     }
+}
+
+@Composable
+internal fun ExecutionLegend(human: Int, external: Int) {
+    Surface(shape = RoundedCornerShape(14.dp), color = P.executionWash) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Execution signals", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = P.ink)
+                Text("Live modes inside each workstream", fontSize = 11.sp, color = P.secondary)
+            }
+            CountChip("$human human", P.focus, Color(0xFFE7F7F0))
+            Spacer(Modifier.width(6.dp))
+            CountChip("$external external", P.external, Color(0xFFF0ECFF))
+        }
+    }
+}
+
+@Composable
+private fun CountChip(text: String, color: Color, background: Color) {
+    Text(text, color = color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.background(background, RoundedCornerShape(50)).padding(horizontal = 9.dp, vertical = 6.dp))
+}
+
+@Composable
+internal fun ExecutionDial(state: WorkstreamState, modifier: Modifier = Modifier, activeRunCount: Int = 0) {
+    val animated = state == WorkstreamState.HUMAN_FOCUS ||
+        state == WorkstreamState.EXTERNAL_RUNNING ||
+        state == WorkstreamState.MULTI_RUN ||
+        state == WorkstreamState.NEEDS_ATTENTION ||
+        state == WorkstreamState.BLOCKED
+    val transition = rememberInfiniteTransition(label = "execution-dial")
+    val angle by transition.animateFloat(
+        initialValue = 0f, targetValue = if (animated) 360f else 0f,
+        animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing), RepeatMode.Restart),
+        label = "dial-rotation"
+    )
+    val shimmer by transition.animateFloat(
+        initialValue = 0.25f, targetValue = if (animated) 1f else 0.25f,
+        animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
+        label = "dial-shimmer"
+    )
+    val color = when (state) {
+        WorkstreamState.HUMAN_FOCUS -> P.focus
+        WorkstreamState.EXTERNAL_RUNNING -> P.external
+        WorkstreamState.MULTI_RUN -> P.parallel
+        WorkstreamState.NEEDS_ATTENTION -> P.attention
+        else -> P.inactive
+    }
+    val dialDescription = when (state) {
+        WorkstreamState.MULTI_RUN -> "${activeRunCount.coerceAtLeast(2)} active tasks, multi run"
+        else -> state.name.lowercase().replace('_', ' ')
+    }
+    Box(modifier.semantics { contentDescription = dialDescription }, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val inset = 3.dp.toPx()
+            val diameter = size.minDimension - inset * 2
+            val bounds = androidx.compose.ui.geometry.Size(diameter, diameter)
+            when (state) {
+                WorkstreamState.HUMAN_FOCUS -> {
+                    // Four separate aperture corners breathe inward around the focused item.
+                    // It reads as attention rather than a circular loading indicator.
+                    val travel = (1f - shimmer) * 2.5.dp.toPx()
+                    val left = size.width * .17f + travel
+                    val right = size.width * .83f - travel
+                    val top = size.height * .17f + travel
+                    val bottom = size.height * .83f - travel
+                    val arm = size.minDimension * .18f
+                    val cornerStroke = Stroke(4.4.dp.toPx(), cap = StrokeCap.Round)
+                    val cornerColors = listOf(
+                        P.focus.copy(alpha = .72f + shimmer * .28f),
+                        Color(0xFF32B894).copy(alpha = .66f + shimmer * .34f),
+                        Color(0xFF42C49D).copy(alpha = .62f + shimmer * .38f),
+                        P.focus.copy(alpha = .72f + shimmer * .28f)
+                    )
+                    drawLine(cornerColors[0], Offset(left, top + arm), Offset(left, top), strokeWidth = cornerStroke.width, cap = StrokeCap.Round)
+                    drawLine(cornerColors[0], Offset(left, top), Offset(left + arm, top), strokeWidth = cornerStroke.width, cap = StrokeCap.Round)
+                    drawLine(cornerColors[1], Offset(right - arm, top), Offset(right, top), strokeWidth = cornerStroke.width, cap = StrokeCap.Round)
+                    drawLine(cornerColors[1], Offset(right, top), Offset(right, top + arm), strokeWidth = cornerStroke.width, cap = StrokeCap.Round)
+                    drawLine(cornerColors[2], Offset(right, bottom - arm), Offset(right, bottom), strokeWidth = cornerStroke.width, cap = StrokeCap.Round)
+                    drawLine(cornerColors[2], Offset(right, bottom), Offset(right - arm, bottom), strokeWidth = cornerStroke.width, cap = StrokeCap.Round)
+                    drawLine(cornerColors[3], Offset(left + arm, bottom), Offset(left, bottom), strokeWidth = cornerStroke.width, cap = StrokeCap.Round)
+                    drawLine(cornerColors[3], Offset(left, bottom), Offset(left, bottom - arm), strokeWidth = cornerStroke.width, cap = StrokeCap.Round)
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val diamondRadius = (3.1f + shimmer * .8f).dp.toPx()
+                    val diamond = Path().apply {
+                        moveTo(center.x, center.y - diamondRadius)
+                        lineTo(center.x + diamondRadius, center.y)
+                        lineTo(center.x, center.y + diamondRadius)
+                        lineTo(center.x - diamondRadius, center.y)
+                        close()
+                    }
+                    drawCircle(P.focus.copy(alpha = .07f + shimmer * .09f), 10.dp.toPx(), center)
+                    drawPath(diamond, P.parallel.copy(alpha = .55f + shimmer * .45f))
+                    drawCircle(Color.White.copy(alpha = .72f), .8.dp.toPx(), center)
+                }
+                WorkstreamState.EXTERNAL_RUNNING -> {
+                    // Three offset waves flow horizontally; the bright head travels with them.
+                    val phase = angle / 360f
+                    repeat(3) { lane ->
+                        val path = Path()
+                        val baseline = size.height * (.36f + lane * .14f)
+                        val amplitude = size.height * .10f
+                        for (step in 0..24) {
+                            val x = size.width * step / 24f
+                            val wave = sin((step / 24f * Math.PI * 2.0 + phase * Math.PI * 2.0 + lane * .75)).toFloat()
+                            val y = baseline + wave * amplitude
+                            if (step == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                        }
+                        drawPath(path, if (lane == 1) P.external else P.externalLight.copy(alpha = .42f + lane * .18f),
+                            style = Stroke((3.8f - lane * .65f).dp.toPx(), cap = StrokeCap.Round))
+                    }
+                    val headX = size.width * (.08f + .84f * phase)
+                    val headY = size.height * .50f + sin((phase * Math.PI * 4.0)).toFloat() * size.height * .10f
+                    drawCircle(P.externalLight.copy(alpha = .20f), 6.dp.toPx(), Offset(headX, headY))
+                    drawCircle(P.externalLight, 2.6.dp.toPx(), Offset(headX, headY))
+                }
+                WorkstreamState.MULTI_RUN -> {
+                    // Independent lanes orbit one shared center. Each ribbon uses the established
+                    // execution palette and its own speed/direction, so this never reads as a
+                    // single spinner recolored four times.
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val ribbonBounds = androidx.compose.ui.geometry.Size(diameter * .82f, diameter * .72f)
+                    val ribbonTopLeft = Offset((size.width - ribbonBounds.width) / 2f, (size.height - ribbonBounds.height) / 2f)
+                    val ribbons = listOf(
+                        Triple(P.focus, 1f, 4.8f),
+                        Triple(P.externalLight, -2f, 4.4f),
+                        Triple(P.attention, 3f, 4.0f),
+                        Triple(Color(0xFF7757E8), -1f, 4.6f)
+                    )
+                    ribbons.forEachIndexed { index, (ribbonColor, speed, widthDp) ->
+                        val orbit = angle * speed + index * 90f
+                        rotate(orbit, center) {
+                            drawArc(
+                                color = ribbonColor.copy(alpha = .82f + shimmer * .18f),
+                                startAngle = -72f,
+                                sweepAngle = 104f,
+                                useCenter = false,
+                                topLeft = ribbonTopLeft,
+                                size = ribbonBounds,
+                                style = Stroke(widthDp.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                            val glowAngle = Math.toRadians((-72f + 104f).toDouble())
+                            val glow = Offset(
+                                center.x + kotlin.math.cos(glowAngle).toFloat() * ribbonBounds.width * .42f,
+                                center.y + kotlin.math.sin(glowAngle).toFloat() * ribbonBounds.height * .36f
+                            )
+                            drawCircle(ribbonColor.copy(alpha = .10f + shimmer * .08f), 5.dp.toPx(), glow)
+                        }
+                    }
+                    drawCircle(Color.White.copy(alpha = .94f), size.minDimension * .19f, center)
+                }
+                WorkstreamState.NEEDS_ATTENTION -> {
+                    // An abstract inspection eye: open ribbons frame the result while a diamond
+                    // scans calmly from side to side. It signals review, never an error/loading loop.
+                    val upper = Path().apply {
+                        moveTo(size.width * .10f, size.height * .43f)
+                        quadraticBezierTo(size.width * .43f, size.height * .13f, size.width * .72f, size.height * .34f)
+                    }
+                    val lower = Path().apply {
+                        moveTo(size.width * .28f, size.height * .66f)
+                        quadraticBezierTo(size.width * .57f, size.height * .87f, size.width * .90f, size.height * .55f)
+                    }
+                    drawPath(upper, Color(0xFFFFC85A).copy(alpha = .56f + shimmer * .32f),
+                        style = Stroke(4.4.dp.toPx(), cap = StrokeCap.Round))
+                    drawPath(lower, P.attention.copy(alpha = .62f + shimmer * .34f),
+                        style = Stroke(4.4.dp.toPx(), cap = StrokeCap.Round))
+                    val scan = .5f - .5f * kotlin.math.cos((angle / 360f * Math.PI * 2.0)).toFloat()
+                    val bead = Offset(size.width * (.32f + scan * .36f), size.height * .50f)
+                    val beadRadius = 3.5.dp.toPx()
+                    val diamond = Path().apply {
+                        moveTo(bead.x, bead.y - beadRadius)
+                        lineTo(bead.x + beadRadius, bead.y)
+                        lineTo(bead.x, bead.y + beadRadius)
+                        lineTo(bead.x - beadRadius, bead.y)
+                        close()
+                    }
+                    drawCircle(Color(0xFFFFC64A).copy(alpha = .10f + shimmer * .10f), 9.dp.toPx(), bead)
+                    drawPath(diamond, Color(0xFFF2A900))
+                    drawLine(Color.White.copy(alpha = .68f),
+                        Offset(bead.x - 1.4.dp.toPx(), bead.y), Offset(bead.x + 1.4.dp.toPx(), bead.y),
+                        strokeWidth = .8.dp.toPx(), cap = StrokeCap.Round)
+                }
+                WorkstreamState.BLOCKED -> {
+                    // Segments keep trying to move horizontally, but the coral lock holds the
+                    // center gap. Motion makes the blocked work visible without implying progress.
+                    val barY = size.height * .46f
+                    val phase = angle / 360f
+                    val blockWidth = size.width * .19f
+                    val blockHeight = size.height * .16f
+                    val laneWidth = size.width * .38f
+                    repeat(2) { index ->
+                        val local = (phase + index * .55f) % 1f
+                        val leftX = -blockWidth + local * laneWidth
+                        val rightX = size.width + blockWidth - local * laneWidth - blockWidth
+                        val alpha = .48f + .42f * shimmer
+                        drawRoundRect(P.inactive.copy(alpha = alpha), Offset(leftX, barY),
+                            androidx.compose.ui.geometry.Size(blockWidth, blockHeight),
+                            androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()))
+                        drawRoundRect(P.inactive.copy(alpha = alpha), Offset(rightX, barY),
+                            androidx.compose.ui.geometry.Size(blockWidth, blockHeight),
+                            androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()))
+                    }
+                    drawRect(P.coral, Offset(size.width * .43f, barY + size.height * .02f),
+                        androidx.compose.ui.geometry.Size(size.width * .14f, size.height * .14f))
+                    drawArc(P.coral, 180f, 180f, false, Offset(size.width * .44f, size.height * .24f),
+                        androidx.compose.ui.geometry.Size(size.width * .12f, size.height * .28f),
+                        style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+                }
+                WorkstreamState.WAITING, WorkstreamState.PAUSED -> {
+                    val float = (shimmer - .5f) * 2.dp.toPx()
+                    drawArc(P.inactive, 20f, 140f, false, Offset(inset, inset + float), bounds, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round))
+                    drawArc(P.inactive.copy(alpha = .72f), 200f, 140f, false, Offset(inset, inset - float), bounds, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round))
+                    drawCircle(P.inactive, 2.dp.toPx(), Offset(size.width / 2f, size.height / 2f))
+                }
+                WorkstreamState.COMPLETE ->
+                    drawArc(P.focus.copy(alpha = .65f), -90f, 360f, false, Offset(inset, inset), bounds, style = Stroke(5.dp.toPx(), cap = StrokeCap.Round))
+                WorkstreamState.READY ->
+                    drawArc(P.inactive, -90f, 105f, false, Offset(inset, inset), bounds, style = Stroke(5.dp.toPx(), cap = StrokeCap.Round))
+            }
+            if (animated) {
+                drawCircle(color.copy(alpha = 0.06f * shimmer), radius = size.minDimension * 0.48f)
+                if (state == WorkstreamState.EXTERNAL_RUNNING) {
+                    drawCircle(P.externalLight.copy(alpha = .08f * shimmer), radius = size.minDimension * .43f)
+                }
+            }
+        }
+        if (state == WorkstreamState.MULTI_RUN) {
+            Text(activeRunCount.coerceAtLeast(2).toString(), fontSize = 11.sp,
+                fontWeight = FontWeight.Bold, color = P.ink)
+        } else if (state == WorkstreamState.COMPLETE || state == WorkstreamState.READY) {
+            Text(if (state == WorkstreamState.COMPLETE) "✓" else "0", fontSize = 11.sp,
+                fontWeight = FontWeight.Bold, color = P.ink)
+        }
+    }
+}
+
+@Composable
+internal fun ExecutionBars(state: WorkstreamState) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        val colors = when (state) {
+            WorkstreamState.HUMAN_FOCUS -> listOf(P.focus, P.inactive, P.inactive)
+            WorkstreamState.EXTERNAL_RUNNING -> listOf(P.external, P.inactive, P.inactive)
+            WorkstreamState.MULTI_RUN -> listOf(P.focus, P.external, P.attention, Color(0xFF7757E8))
+            WorkstreamState.NEEDS_ATTENTION -> listOf(P.attention, P.inactive, P.inactive)
+            else -> listOf(P.inactive)
+        }
+        colors.forEach { color -> Box(Modifier.width(22.dp).height(4.dp).clip(RoundedCornerShape(50)).background(color)) }
+    }
+}
+
+@Composable
+internal fun StatePill(state: WorkstreamState) {
+    val label = when (state) {
+        WorkstreamState.HUMAN_FOCUS -> "FOCUS"
+        WorkstreamState.EXTERNAL_RUNNING -> "RUNNING"
+        WorkstreamState.MULTI_RUN -> "MULTI RUN"
+        WorkstreamState.NEEDS_ATTENTION -> "REVIEW"
+        WorkstreamState.WAITING -> "WAITING"
+        WorkstreamState.BLOCKED -> "BLOCKED"
+        WorkstreamState.PAUSED -> "PAUSED"
+        WorkstreamState.COMPLETE -> "DONE"
+        WorkstreamState.READY -> return
+    }
+    val (foreground, background) = when (state) {
+        WorkstreamState.HUMAN_FOCUS -> P.focus to Color(0xFFE7F7F0)
+        WorkstreamState.EXTERNAL_RUNNING -> P.external to Color(0xFFEAF2FF)
+        WorkstreamState.MULTI_RUN -> Color(0xFF315FE8) to Color(0xFFF0EDFF)
+        WorkstreamState.NEEDS_ATTENTION -> P.attention to Color(0xFFFFF3D3)
+        WorkstreamState.BLOCKED -> P.coral to Color(0xFFFFECE9)
+        WorkstreamState.COMPLETE -> P.focus to Color(0xFFE7F7F0)
+        else -> P.secondary to Color(0xFFF1F3F4)
+    }
+    Text(label, color = foreground, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+        maxLines = 1, softWrap = false,
+        modifier = Modifier.background(background, RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 6.dp))
 }
 
 @Composable

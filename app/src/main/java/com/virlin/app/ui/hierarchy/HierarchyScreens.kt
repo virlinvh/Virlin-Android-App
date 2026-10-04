@@ -1,4 +1,5 @@
 package com.virlin.app.ui.hierarchy
+import com.virlin.app.domain.model.TaskHierarchy
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,6 +31,7 @@ import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.ExecutionTiming
+import com.virlin.app.domain.model.executionStream
 import com.virlin.app.domain.model.FocusInvestment
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Task
@@ -157,14 +159,15 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
     var addingStream by remember { mutableStateOf(false) }
     var editingIcon by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var controlStreamId by rememberSaveable(project.id) { mutableStateOf<String?>(null) }
     var confirmComplete by remember { mutableStateOf(false) }
     var taskMenu by remember { mutableStateOf<String?>(null) }
+    var confirmStandaloneClose by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
-    val sessionKey = remember(streams) { streams.map { it.id to it.updatedAt } }
-    val focusSessions by produceState<List<FocusSession>>(emptyList(), sessionKey) {
-        value = vm.allFocusSessions()
-    }
-    val timingNow = rememberTimingNow(streams.any {
+    val sessionKey = remember(streams, s.tasks) { streams.map { it.id to it.updatedAt } + s.tasks.map { it.id to it.updatedAt } }
+    var focusSessions by remember { mutableStateOf<List<FocusSession>>(emptyList()) }
+    LaunchedEffect(sessionKey) { focusSessions = vm.allFocusSessions() }
+    val timingNow = rememberTimingNow(s.tasks.any { it.execution?.state == WorkStreamState.FOCUS || it.execution?.processingStartedAt != null } || streams.any {
         it.state == WorkStreamState.FOCUS || it.state == WorkStreamState.PROCESSING ||
             it.state == WorkStreamState.SNOOZED
     })
@@ -199,12 +202,21 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
                 // the model actually makes, so it is the only one drawn.
                 kind = if (ExecutionModeResolver.resolveWorkStream(ws, s.projects) == EffectiveExecutionMode.EXTERNAL)
                     WorkstreamKind.ASSISTANT else WorkstreamKind.GENERAL,
-                state = when (ws.state) {
-                    WorkStreamState.FOCUS, WorkStreamState.PROCESSING -> WorkstreamState.IN_PROGRESS
+                state = activityState(s.tasks.filter { it.workStreamId == ws.id }).takeIf { it != WorkstreamState.READY } ?: when (ws.state) {
+                    WorkStreamState.FOCUS -> WorkstreamState.HUMAN_FOCUS
+                    WorkStreamState.PROCESSING -> WorkstreamState.EXTERNAL_RUNNING
+                    WorkStreamState.CHECK -> WorkstreamState.NEEDS_ATTENTION
+                    WorkStreamState.READY -> WorkstreamState.READY
+                    WorkStreamState.SNOOZED -> WorkstreamState.WAITING
                     WorkStreamState.BLOCKED -> WorkstreamState.BLOCKED
-                    else -> WorkstreamState.NORMAL
+                    WorkStreamState.PAUSED -> WorkstreamState.PAUSED
+                    WorkStreamState.DONE -> WorkstreamState.COMPLETE
                 },
-                stateLabel = timing.summary,
+                stateLabel = activitySummary(s.tasks.filter { it.workStreamId == ws.id }) ?: timing.summary,
+                activeRunCount = s.tasks.count { it.workStreamId == ws.id && !it.status.isTerminal &&
+                    (it.execution?.state == WorkStreamState.FOCUS || it.execution?.processingStartedAt != null) },
+                humanRunCount = s.tasks.count { it.workStreamId == ws.id && !it.status.isTerminal && it.execution?.state == WorkStreamState.FOCUS },
+                externalRunCount = s.tasks.count { it.workStreamId == ws.id && !it.status.isTerminal && it.execution?.processingStartedAt != null },
                 unstructured = structured == null
             )
         },
@@ -228,7 +240,11 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
         onAddWorkstream = { addingStream = true },
         onOpenMap = { navController.navigate(com.virlin.app.ui.map.projectMap(project.id)) },
         onOpenTask = { navController.navigate(taskDetail(it)) },
-        onToggleTask = { vm.completeTask(it) },
+        onToggleTask = { id ->
+            if (TaskHierarchy.descendants(s.tasks, id).any { !it.status.isTerminal }) {
+                confirmStandaloneClose = id to true
+            } else vm.completeTask(id)
+        },
         onTaskMenu = { taskMenu = it },
         onAddTask = { adding = true },
         onOpenDocument = { id ->
@@ -249,7 +265,8 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
         },
         onProjectSettings = { settingsOpen = true },
         onEditProject = { editingIcon = true },
-        onManageWorkstreams = { addingStream = true }
+        onManageWorkstreams = { addingStream = true },
+        onWorkstreamControls = { vm.workstreamIntents.clearFeedback(); controlStreamId = it }
     )
 
     // Only THIS project's tasks: a list built from every task in the app would show, and offer
@@ -261,7 +278,32 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
                     ?: (task.projectId == project.id))
         }
     }
-    ProjectExperienceHost(project.id, streams, projectTasks, ui, actions, vm, navController)
+    ProjectExperienceHost(project.id, streams, projectTasks, ui, actions, vm, navController,
+        controlsOpen = controlStreamId != null)
+    val controlChooser by vm.workstreamIntents.chooser.collectAsState()
+    val controlFeedback by vm.workstreamIntents.feedback.collectAsState()
+    val projectSwitch by vm.pendingSwitch.collectAsState()
+    controlStreamId?.let { id ->
+        val current = streams.firstOrNull { it.id == id }
+        if (current != null) {
+            WorkstreamControlsDialog(current, project.defaultExecutionMode,
+                ui.workstreams.first { it.id == id }.stateLabel,
+                executionAllowed = com.virlin.app.domain.model.ExecutionEligibility.isLeaf(id, s.tasks),
+                onDismiss = { controlStreamId = null; vm.workstreamIntents.dismissChooser(); vm.cancelSwitch(); vm.workstreamIntents.clearFeedback() },
+                onMode = { mode -> vm.setWorkStreamExecutionPreference(id, mode) },
+                onFocus = { vm.focusWorkItem(id) },
+                currentExecution = ExecutionModeResolver.resolveCurrent(current, s.projects, s.tasks),
+                pendingSwitch = projectSwitch,
+                onConfirmSwitch = vm::confirmSwitch,
+                onCancelSwitch = vm::cancelSwitch,
+                intents = vm.workstreamIntents, onRename = { vm.renameWorkstream(id, it) },
+                aggregateState = activityState(s.tasks.filter { it.workStreamId == id }),
+                childActivities = s.tasks.filter { it.workStreamId == id && it.execution != null && !it.status.isTerminal && com.virlin.app.domain.model.ExecutionEligibility.isLeaf(it.id, s.tasks) }
+                    .map { it.id to "${it.title} · ${it.execution!!.state.name.lowercase()}" },
+                onOpenActivity = { task -> controlStreamId = null; navController.navigate(workStreamDetailAt(id,
+                    com.virlin.app.domain.model.TaskHierarchy.ancestry(s.tasks, task).orEmpty().reversed().map { it.id })) })
+        }
+    }
 
     if (adding) AddTaskDialog("New task in ${project.title}", onDismiss = { adding = false }) { t, e -> vm.addStandaloneTask(project.id, t, e); adding = false }
     if (addingStream) AddNameDialog("New WorkStream in ${project.title}", "WorkStream name", onDismiss = { addingStream = false }) { vm.addWorkStream(project.id, it) }
@@ -275,8 +317,26 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
                 TextButton(onClick = { taskMenu = null; navController.navigate(taskDetail(id)) }) { Text("OPEN") }
             },
             dismissButton = {
-                TextButton(onClick = { taskMenu = null; vm.cancelTask(id) }) { Text("CANCEL TASK") }
+                TextButton(onClick = {
+                    taskMenu = null
+                    if (TaskHierarchy.descendants(s.tasks, id).any { !it.status.isTerminal }) {
+                        confirmStandaloneClose = id to false
+                    } else vm.cancelTask(id)
+                }) { Text("CANCEL TASK") }
             }
+        )
+    }
+    confirmStandaloneClose?.let { (id, complete) ->
+        val count = TaskHierarchy.descendants(s.tasks, id).count { !it.status.isTerminal }
+        AlertDialog(
+            onDismissRequest = { confirmStandaloneClose = null },
+            title = { Text(if (complete) "Complete this task?" else "Cancel this task?") },
+            text = { Text("This also closes $count remaining descendants and stops their timers. Recorded time is preserved. Other tasks stay unchanged.") },
+            confirmButton = { TextButton(onClick = {
+                confirmStandaloneClose = null
+                if (complete) vm.completeTask(id) else vm.cancelTask(id)
+            }) { Text(if (complete) "COMPLETE" else "CANCEL TASK") } },
+            dismissButton = { TextButton(onClick = { confirmStandaloneClose = null }) { Text("KEEP TASK") } }
         )
     }
     if (settingsOpen) {
@@ -347,11 +407,12 @@ fun WorkStreamDetailScreen(
     val message by vm.knowledgeMessage.collectAsState()
     val pendingSwitch by vm.pendingSwitch.collectAsState()
     var delegatingTaskId by rememberSaveable(stream.id) { mutableStateOf<String?>(null) }
-    val focusSessions by produceState<List<FocusSession>>(emptyList(), stream.id, stream.updatedAt) {
-        value = vm.allFocusSessions().filter { it.workStreamId == stream.id }
-    }
+    var controlsTaskId by rememberSaveable(stream.id) { mutableStateOf<String?>(null) }
+    var streamControlsOpen by rememberSaveable(stream.id) { mutableStateOf(false) }
+    var focusSessions by remember { mutableStateOf<List<FocusSession>>(emptyList()) }
+    LaunchedEffect(s.streams, s.tasks) { focusSessions = vm.allFocusSessions() }
     val timingNow = rememberTimingNow(
-        stream.state == WorkStreamState.FOCUS || stream.state == WorkStreamState.PROCESSING ||
+        s.tasks.any { it.execution?.state == WorkStreamState.FOCUS || it.execution?.processingStartedAt != null } || s.streams.any { it.state == WorkStreamState.FOCUS } || stream.state == WorkStreamState.PROCESSING ||
             stream.state == WorkStreamState.SNOOZED
     )
     LaunchedEffect(message) {
@@ -365,8 +426,21 @@ fun WorkStreamDetailScreen(
         val timing = ExecutionTiming.workStream(stream, mine, focusSessions, timingNow)
         val childCounts = mine.groupingBy { it.parentTaskId }.eachCount()
         StreamTasksUi(
+            projectId = stream.projectId,
             streamId = stream.id,
             streamName = stream.title,
+            elapsedSeconds = timing.totalFocusSeconds,
+            sectionFocusSeconds = timing.inclusiveTaskFocusSeconds,
+            externalSeconds = mine.mapNotNull { it.execution }.takeIf { list -> list.any { it.externalTrackedSeconds > 0 || it.processingStartedAt != null } }
+                ?.sumOf { it.externalTrackedSeconds + (it.processingStartedAt?.let { start -> java.time.Duration.between(start, timingNow).seconds.coerceAtLeast(0) } ?: 0) },
+            sectionExternalSeconds = mine.mapNotNull { task ->
+                val scope = taskScope(mine, task.id)
+                if (scope.none { (it.execution?.externalTrackedSeconds ?: 0) > 0 || it.execution?.processingStartedAt != null }) null
+                else task.id to scope.sumOf {
+                    (it.execution?.externalTrackedSeconds ?: 0) + (it.execution?.processingStartedAt?.let { start -> java.time.Duration.between(start, timingNow).seconds.coerceAtLeast(0) } ?: 0)
+                }
+            }.toMap(),
+            externalTaskId = stream.activeTaskId,
             projectName = project?.title ?: "No project",
             streamPercent = (ProgressCalculator.ofWorkStream(s.tasks, stream.id)
                 as? ProgressResult.Structured)?.let { percentOf(it) },
@@ -374,6 +448,16 @@ fun WorkStreamDetailScreen(
             streamEffectiveExecution =
                 ExecutionModeResolver.resolveWorkStream(stream, projectDefault).asStreamMode(),
             currentTaskId = stream.activeTaskId,
+            visualState = when (stream.state) {
+                WorkStreamState.FOCUS -> WorkstreamState.HUMAN_FOCUS
+                WorkStreamState.PROCESSING -> WorkstreamState.EXTERNAL_RUNNING
+                WorkStreamState.CHECK -> WorkstreamState.NEEDS_ATTENTION
+                WorkStreamState.READY -> WorkstreamState.READY
+                WorkStreamState.SNOOZED -> WorkstreamState.WAITING
+                WorkStreamState.BLOCKED -> WorkstreamState.BLOCKED
+                WorkStreamState.PAUSED -> WorkstreamState.PAUSED
+                WorkStreamState.DONE -> WorkstreamState.COMPLETE
+            },
             tasks = mine.map { task ->
                 val children = childCounts[task.id] ?: 0
                 // Partial parent progress is the app's own rule: executable leaves under it.
@@ -396,7 +480,8 @@ fun WorkStreamDetailScreen(
                     childCount = children,
                     progressPercent = progress,
                     focusedLabel = timing.inclusiveTaskFocusSeconds[task.id]
-                        ?.takeIf { it > 0L }?.let(FocusInvestment::formatCompact)
+                        ?.takeIf { it > 0L }?.let(FocusInvestment::formatCompact),
+                    activityState = activityState(taskScope(mine, task.id))
                 )
             },
             stateSummary = timing.summary,
@@ -404,7 +489,6 @@ fun WorkStreamDetailScreen(
                 ?.let(FocusInvestment::formatCompact)
         )
     }
-
     Column(Modifier.fillMaxSize().testTag(WorkStreamDetailTag)) {
         message?.let { text ->
             Box(Modifier.fillMaxWidth().background(VirlinColors.Background)) {
@@ -421,7 +505,10 @@ fun WorkStreamDetailScreen(
                 override fun add(parentId: String?, title: String, afterId: String?, execution: StreamExecutionMode) =
                     vm.addStreamTask(stream.id, parentId, title, afterId, execution.asPreference())
                 override fun rename(taskId: String, title: String) = vm.renameTask(taskId, title)
-                override fun toggleComplete(taskId: String) = vm.completeTask(taskId)
+                override fun toggleComplete(taskId: String) {
+                    if (com.virlin.app.domain.model.TaskHierarchy.descendants(s.tasks, taskId).any { !it.status.isTerminal }) controlsTaskId = taskId
+                    else vm.completeTask(taskId)
+                }
                 override fun setCurrent(taskId: String) = vm.setActiveTask(stream.id, taskId)
                 override fun setExecution(taskId: String, mode: StreamExecutionMode) {
                     if (mode == StreamExecutionMode.INHERIT) vm.resetTaskExecutionPreference(taskId)
@@ -436,15 +523,66 @@ fun WorkStreamDetailScreen(
                 override fun duplicate(taskId: String) = vm.duplicateTask(taskId)
                 override fun delete(taskIds: List<String>) = taskIds.forEach { vm.cancelTask(it) }
                 override fun focus(taskId: String) { vm.focusWorkItem(taskId) }
+                override fun workControls(taskId: String) { vm.workstreamIntents.clearFeedback(); controlsTaskId = taskId }
+                override fun streamWorkControls() { vm.workstreamIntents.clearFeedback(); streamControlsOpen = true }
                 override fun delegate(taskId: String) { delegatingTaskId = taskId }
                 override fun openStreamWorkItem(streamId: String) { navController.popBackStack() }
             }
         )
     }
-    pendingSwitch?.let { pending ->
+    if (streamControlsOpen) {
+        WorkstreamControlsDialog(stream, projectDefault ?: EffectiveExecutionMode.HUMAN, activitySummary(s.tasks.filter { it.workStreamId == stream.id }) ?: ui.stateSummary,
+            executionAllowed = com.virlin.app.domain.model.ExecutionEligibility.isLeaf(stream.id, s.tasks),
+            onDismiss = { streamControlsOpen = false; vm.workstreamIntents.dismissChooser(); vm.cancelSwitch() },
+            onMode = { vm.setWorkStreamExecutionPreference(stream.id, it) },
+            onFocus = { vm.focusWorkItem(stream.id) },
+            currentExecution = ExecutionModeResolver.resolveCurrent(stream, s.projects, s.tasks),
+            pendingSwitch = pendingSwitch, onConfirmSwitch = vm::confirmSwitch, onCancelSwitch = vm::cancelSwitch,
+            intents = vm.workstreamIntents, onRename = { vm.renameWorkstream(stream.id, it) },
+            aggregateState = activityState(s.tasks.filter { it.workStreamId == stream.id }),
+            childActivities = s.tasks.filter { it.workStreamId == stream.id && it.execution != null && !it.status.isTerminal && com.virlin.app.domain.model.ExecutionEligibility.isLeaf(it.id, s.tasks) }
+                .map { it.id to "${it.title} · ${it.execution!!.state.name.lowercase()}" },
+            onOpenActivity = { streamControlsOpen = false; controlsTaskId = it })
+    }
+    controlsTaskId?.let { id ->
+        val task = s.tasks.firstOrNull { it.id == id }
+        if (task != null) {
+            val active = task.execution != null
+            val preview = task.executionStream()
+            val ancestry = com.virlin.app.domain.model.TaskHierarchy.ancestry(s.tasks, id).orEmpty().reversed().map { it.title }
+            WorkstreamControlsDialog(preview, projectDefault ?: EffectiveExecutionMode.HUMAN,
+                listOfNotNull(project?.title, stream.title).plus(ancestry).joinToString(" › ") +
+                    if (active) "\n${ExecutionTiming.workStream(preview, s.tasks, focusSessions.filter { it.taskId == id }.map { it.copy(workStreamId = id) }, timingNow).summary}" else "\nReady",
+                executionAllowed = com.virlin.app.domain.model.ExecutionEligibility.isLeaf(id, s.tasks),
+                onDismiss = { controlsTaskId = null; vm.workstreamIntents.dismissChooser(); vm.cancelSwitch() },
+                onMode = { vm.setTaskExecutionPreference(id, it) }, onFocus = { vm.focusWorkItem(id) },
+                currentExecution = ExecutionModeResolver.resolveTask(task, tasksById, stream, projectDefault),
+                pendingSwitch = pendingSwitch, onConfirmSwitch = vm::confirmSwitch, onCancelSwitch = vm::cancelSwitch,
+                intents = vm.workstreamIntents, taskId = id, allowSharedActivityActions = active,
+                onCompleteTask = { vm.completeTask(id) },
+                descendantCount = com.virlin.app.domain.model.TaskHierarchy.descendants(s.tasks, id).count { !it.status.isTerminal },
+                externalStartConflict = null,
+                onOpenConflictingWork = { vm.workstreamIntents.clearFeedback(); vm.workstreamIntents.dismissChooser(); controlsTaskId = stream.activeTaskId },
+                onRename = { vm.renameTask(id, it) },
+                onAddSubtask = { vm.addStreamTask(stream.id, id, it, null, ExecutionPreference.INHERIT) },
+                onDuplicate = { vm.duplicateTask(id) }, onCancelTask = { vm.cancelTask(id) },
+                aggregateState = activityState(taskScope(s.tasks.filter { it.workStreamId == stream.id }, id)),
+                responsibilitySource = executionSource(task, tasksById, stream, project),
+                childActivities = taskScope(s.tasks.filter { it.workStreamId == stream.id }, id).filter {
+                    it.id != id && it.execution != null && !it.status.isTerminal && com.virlin.app.domain.model.ExecutionEligibility.isLeaf(it.id, s.tasks)
+                }.map { it.id to "${it.title} · ${it.execution!!.state.name.lowercase()}" },
+                onOpenActivity = { controlsTaskId = it },
+                moveDestinations = listOf(null to "Stream root") + s.tasks.filter { candidate ->
+                    candidate.workStreamId == stream.id && !candidate.status.isTerminal &&
+                        com.virlin.app.domain.model.TaskHierarchy.ancestry(s.tasks, candidate.id).orEmpty().none { it.id == id }
+                }.map { it.id to it.title },
+                onMove = { vm.moveTasks(listOf(id), it, null, stream.id) })
+        }
+    }
+    pendingSwitch?.takeIf { controlsTaskId == null && !streamControlsOpen }?.let { pending ->
         SwitchFocusDialog(
             currentTitle = pending.currentTitle,
-            nextTitle = pending.target.workItem.title,
+            nextTitle = pending.nextTitle,
             onCancel = vm::cancelSwitch,
             onConfirm = vm::confirmSwitch
         )
@@ -723,7 +861,8 @@ private fun ProjectExperienceHost(
     ui: ProjectPageUi,
     projectActions: ProjectPageActions,
     vm: HierarchyViewModel,
-    navController: NavController
+    navController: NavController,
+    controlsOpen: Boolean = false
 ) {
     val entries by vm.knowledge.collectAsState()
     val activity by vm.activity.collectAsState()
@@ -771,6 +910,7 @@ private fun ProjectExperienceHost(
     val records = remember(activity.entries) { activityRecords(activity.entries) }
 
     VirlinProjectExperience(
+        controlsOpen = controlsOpen,
         data = ProjectExperienceData(
             project = ui,
             knowledge = knowledgeItems,

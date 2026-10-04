@@ -28,6 +28,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -35,6 +38,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -66,11 +70,11 @@ data class ProjectExperienceActions(
 )
 
 private enum class ExperienceTab { OVERVIEW, KNOWLEDGE, ACTIVITY }
-private val experienceInk = Color(0xFF17202C)
-private val experienceMuted = Color(0xFF647087)
-private val experienceLine = Color(0xFFE3E8EE)
-private val experienceGreen = Color(0xFF72BE36)
-private val experienceGreenInk = Color(0xFF337B1E)
+private val experienceInk: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.text) } ?: Color(0xFF17202C)
+private val experienceMuted: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.muted) } ?: Color(0xFF647087)
+private val experienceLine: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE3E8EE)
+private val experienceGreen: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.main) } ?: Color(0xFF72BE36)
+private val experienceGreenInk: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF337B1E)
 
 /** The app owns the bottom navigation outside this screen. */
 @Composable
@@ -79,16 +83,36 @@ fun VirlinProjectExperience(
     actions: ProjectExperienceActions,
     modifier: Modifier = Modifier,
     zone: ZoneId = ZoneId.systemDefault(),
+    controlsOpen: Boolean = false,
     projectIcon: @Composable () -> Unit,
     imagePreview: @Composable (mediaPath: String, modifier: Modifier) -> Unit =
         { path, m -> ActivityImage(path, m) }
 ) {
     val project = data.project
+    val palette = rememberProjectPalette(project.id)
+    CompositionLocalProvider(LocalProjectPalette provides palette) {
     var tabName by rememberSaveable(project.id) { mutableStateOf(ExperienceTab.OVERVIEW.name) }
     val tab = ExperienceTab.entries.firstOrNull { it.name == tabName } ?: ExperienceTab.OVERVIEW
     var menuOpen by remember { mutableStateOf(false) }
+    var detailsHeight by remember(project.id) { mutableFloatStateOf(0f) }
+    var detailsOffset by remember(project.id) { mutableFloatStateOf(0f) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    LaunchedEffect(tab) { if (tab != ExperienceTab.OVERVIEW) detailsOffset = 0f }
+    val scrollConnection = remember(project.id, detailsHeight, tab) {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                if (tab != ExperienceTab.OVERVIEW) return androidx.compose.ui.geometry.Offset.Zero
+                val previous = detailsOffset
+                detailsOffset = (previous + available.y).coerceIn(-detailsHeight, 0f)
+                return androidx.compose.ui.geometry.Offset(0f, detailsOffset - previous)
+            }
+        }
+    }
 
-    Column(modifier.fillMaxSize().background(Color.White).testTag(ProjectDetailTag)) {
+    // Keep the modal backdrop on the standard window dim path. RenderEffect blur can
+    // freeze/black out dialog surfaces on emulator and some device GPU backends.
+    Column(modifier.fillMaxSize()
+        .background(palette?.let { Color(it.surface) } ?: Color.White).nestedScroll(scrollConnection).testTag(ProjectDetailTag)) {
         Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = actions.project.onBack) {
@@ -128,6 +152,13 @@ fun VirlinProjectExperience(
                 Text(project.title, fontSize = 26.sp, fontWeight = FontWeight.Bold,
                     color = experienceInk, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+        }
+        Box(Modifier.fillMaxWidth().height(with(density) { (detailsHeight + detailsOffset).coerceAtLeast(0f).toDp() })
+            .clipToBounds().testTag("active_project_collapsible_details")) {
+        Column(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true, align = Alignment.Top)
+            .onSizeChanged { detailsHeight = it.height.toFloat() }
+            .offset { androidx.compose.ui.unit.IntOffset(0, detailsOffset.roundToInt()) }) {
+        if (tab == ExperienceTab.OVERVIEW) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 20.dp)
                 // The whole block opens the project's own task list — not Pulse, which has no
                 // way back to this project and is reachable from its footer item anyway.
@@ -180,6 +211,22 @@ fun VirlinProjectExperience(
                     fontSize = 13.sp, color = experienceMuted)
             }
         }
+        if (tab == ExperienceTab.OVERVIEW) Column(Modifier.padding(horizontal = 20.dp)) {
+            Spacer(Modifier.height(20.dp))
+            ExecutionLegend(project.humanActiveCount, project.externalActiveCount)
+            Spacer(Modifier.height(18.dp))
+        }
+        }
+        if (tab == ExperienceTab.OVERVIEW && detailsOffset < 0f && detailsHeight + detailsOffset > 0f) {
+            Box(Modifier.fillMaxWidth().height(14.dp).background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(LocalProjectPalette.current?.let { Color(it.surface) } ?: Color.White, Color.Transparent))))
+        }
+        }
+        if (tab == ExperienceTab.OVERVIEW) Column(Modifier.padding(horizontal = 20.dp)) {
+            ExperienceHeading("Workstreams", "+ New", actions.project.onAddWorkstream,
+                AddWorkStreamButtonTag, secondaryLabel = "Mind map",
+                onSecondary = actions.project.onOpenMap, secondaryTag = ProjectMapButtonTag)
+            Spacer(Modifier.height(10.dp))
+        }
 
         // Each tab gets the whole remaining height; Knowledge and Activity own lazy lists and
         // must never sit inside a scrolling parent.
@@ -207,6 +254,8 @@ fun VirlinProjectExperience(
     }
 }
 
+}
+
 @Composable
 private fun ProjectExperienceOverview(
     data: ProjectExperienceData,
@@ -215,27 +264,27 @@ private fun ProjectExperienceOverview(
     openKnowledge: () -> Unit
 ) {
     val project = data.project
-    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState())
-        .padding(horizontal = 20.dp, vertical = 20.dp)) {
-        ExperienceHeading("Workstreams", "+ New", actions.project.onAddWorkstream,
-            AddWorkStreamButtonTag, secondaryLabel = "Mind map",
-            onSecondary = actions.project.onOpenMap, secondaryTag = ProjectMapButtonTag)
-        Spacer(Modifier.height(10.dp))
+    androidx.compose.foundation.lazy.LazyColumn(modifier.fillMaxWidth()
+        .padding(horizontal = 20.dp).testTag("active_project_overview_scroll")) {
         if (project.workstreams.isEmpty()) {
-            Text("No workstreams yet", fontSize = 14.sp, color = experienceMuted)
+            item { Text("No workstreams yet", fontSize = 14.sp, color = experienceMuted) }
         }
-        project.workstreams.forEach { stream ->
+        items(project.workstreams.size, key = { "stream:${project.workstreams[it].id}" }) { index ->
+            val stream = project.workstreams[index]
             Surface(onClick = { actions.project.onOpenWorkstream(stream.id) },
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
                     .testTag("stream_row_${stream.id}"),
                 shape = RoundedCornerShape(12.dp), color = Color.White,
                 border = BorderStroke(1.dp, experienceLine)) {
-                Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp),
+                Row(Modifier.fillMaxWidth().heightIn(min = 76.dp).padding(horizontal = 12.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(42.dp).background(Color(0xFFFAF8F4), RoundedCornerShape(11.dp)),
-                        contentAlignment = Alignment.Center) {
-                        Text(if (stream.kind == WorkstreamKind.ASSISTANT) "✦" else "▣", color = experienceInk)
-                    }
+                    if (stream.state == WorkstreamState.COMPLETE) {
+                        Box(Modifier.size(48.dp).background(Color(0xFFE7F7F0), RoundedCornerShape(14.dp)),
+                            contentAlignment = Alignment.Center) {
+                            Text("✓", color = Color(0xFF009B72), fontSize = 28.sp,
+                                modifier = Modifier.semantics { contentDescription = "Completed workstream" })
+                        }
+                    } else ExecutionDial(stream.state, Modifier.size(48.dp), stream.activeRunCount)
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(stream.title, fontSize = 15.sp, fontWeight = FontWeight.Bold,
@@ -248,22 +297,31 @@ private fun ProjectExperienceOverview(
                             color = if (stream.state == WorkstreamState.BLOCKED) Color(0xFFD84B4B) else experienceMuted,
                             maxLines = 1, overflow = TextOverflow.Ellipsis
                         )
+                        Spacer(Modifier.height(5.dp))
+                        ExecutionBars(stream.state)
                     }
-                    if (!stream.unstructured) {
-                        val percent = if (stream.totalTasks == 0) 0 else
-                            (100f * stream.completedTasks / stream.totalTasks).roundToInt()
-                        Text("$percent%", color = experienceInk, fontSize = 13.sp)
+                    if (stream.state != WorkstreamState.COMPLETE) {
+                        Box(Modifier.width(82.dp).heightIn(min = 48.dp)
+                            .clickable(role = Role.Button, onClickLabel = "Workstream controls for ${stream.title}") {
+                                actions.project.onWorkstreamControls(stream.id)
+                            }.testTag("workstream_controls_${stream.id}"), contentAlignment = Alignment.Center) {
+                            if (stream.state == WorkstreamState.READY) Text("READY", fontSize = 10.sp, color = experienceMuted)
+                            else StatePill(stream.state)
+                        }
                     }
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = experienceInk)
                 }
             }
         }
 
+        item {
         Spacer(Modifier.height(19.dp))
         ExperienceHeading("Standalone tasks", "+ Add", actions.project.onAddTask, AddTaskButtonTag)
         Spacer(Modifier.height(8.dp))
         if (project.standaloneTasks.isEmpty()) Text("None", fontSize = 14.sp, color = experienceMuted)
-        project.standaloneTasks.forEach { task ->
+        }
+        items(project.standaloneTasks.size, key = { "task:${project.standaloneTasks[it].id}" }) { index ->
+            val task = project.standaloneTasks[index]
             Surface(onClick = { actions.project.onOpenTask(task.id) },
                 modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp).testTag(taskRowTag(task.id)),
                 shape = RoundedCornerShape(11.dp), color = Color.White,
@@ -283,6 +341,7 @@ private fun ProjectExperienceOverview(
             }
         }
 
+        item {
         Spacer(Modifier.height(20.dp))
         ExperienceHeading("Project knowledge", "+ Add", actions.knowledge.onAdd)
         Spacer(Modifier.height(8.dp))
@@ -317,6 +376,7 @@ private fun ProjectExperienceOverview(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = openKnowledge) { Text("View all →", color = experienceGreenInk) }
         }
+        }
     }
 }
 
@@ -348,14 +408,16 @@ private fun ExperienceHeading(
 
 @Composable
 private fun ExperienceRing(progress: Float, modifier: Modifier) {
+    val accent = experienceGreen
+    val track = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE7F0E1)
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val width = 7.dp.toPx()
             val inset = width / 2
             val diameter = size.minDimension - width
-            drawArc(Color(0xFFE7F0E1), -90f, 360f, false, Offset(inset, inset),
+            drawArc(track, -90f, 360f, false, Offset(inset, inset),
                 Size(diameter, diameter), style = Stroke(width, cap = StrokeCap.Round))
-            if (progress > 0f) drawArc(experienceGreen, -90f, 360f * progress.coerceIn(0f, 1f), false,
+            if (progress > 0f) drawArc(accent, -90f, 360f * progress.coerceIn(0f, 1f), false,
                 Offset(inset, inset), Size(diameter, diameter),
                 style = Stroke(width, cap = StrokeCap.Round))
         }

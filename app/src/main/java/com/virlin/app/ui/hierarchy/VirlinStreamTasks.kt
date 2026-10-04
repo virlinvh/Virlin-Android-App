@@ -14,6 +14,12 @@ package com.virlin.app.ui.hierarchy
 
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -58,6 +64,7 @@ data class StreamTaskUi(
     val progressPercent: Int? = null,
     /** Exact leaf time, or descendant roll-up for a container. */
     val focusedLabel: String? = null,
+    val activityState: WorkstreamState = WorkstreamState.READY,
 )
 data class StreamTasksUi(
     val streamId: String,
@@ -68,8 +75,16 @@ data class StreamTasksUi(
     val streamEffectiveExecution: StreamExecutionMode,
     val tasks: List<StreamTaskUi>,
     val currentTaskId: String? = null,
+    /** Read-only execution state shared with the Project dial. */
+    val visualState: WorkstreamState = WorkstreamState.READY,
     val stateSummary: String = "Ready",
     val totalFocusedLabel: String? = null,
+    val elapsedSeconds: Long? = null,
+    val sectionFocusSeconds: Map<String, Long> = emptyMap(),
+    val externalSeconds: Long? = null,
+    val externalTaskId: String? = null,
+    val sectionExternalSeconds: Map<String, Long> = emptyMap(),
+    val projectId: String? = null,
 )
 /** Implement these against the existing ViewModel/repository, including loading and error states. */
 interface StreamTaskActions {
@@ -84,19 +99,27 @@ interface StreamTaskActions {
     fun duplicate(taskId: String)
     fun delete(taskIds: List<String>)
     fun focus(taskId: String)
+    fun workControls(taskId: String) {}
+    fun streamWorkControls() {}
     fun delegate(taskId: String)
     fun openStreamWorkItem(streamId: String)
 }
-private val Ink = Color(0xFF17202C)
-private val Muted = Color(0xFF66758A)
-private val Line = Color(0xFFE4E9ED)
-private val Green = Color(0xFF65BB31)
-private val DeepGreen = Color(0xFF176B45)
+private val Ink: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.text) } ?: Color(0xFF17202C)
+private val Muted: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.muted) } ?: Color(0xFF66758A)
+private val Line: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE4E9ED)
+private val Green: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.primary) } ?: Color(0xFF65BB31)
+private val DeepGreen: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF176B45)
 private val Mint = Color(0xFFEAF7EC)
 private val Amber = Color(0xFFE5A000)
 private val AmberWash = Color(0xFFFFF5DB)
 private val Danger = Color(0xFFC73728)
 private val CardShape = RoundedCornerShape(18.dp)
+
+internal fun hierarchyElapsed(seconds: Long): String {
+    val safe = seconds.coerceAtLeast(0)
+    return if (safe < 3600) "%d:%02d".format(safe / 60, safe % 60)
+    else "%d:%02d:%02d".format(safe / 3600, safe / 60 % 60, safe % 60)
+}
 
 /** Root list: each sheet displays one level, so arbitrary depth does not crowd the viewport. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -109,6 +132,8 @@ fun VirlinStreamTasks(
     initialPath: List<String> = emptyList()
 ) {
     // Saved as plain ids: a rebuilt process reopens the same level without a live breadcrumb.
+    val palette = rememberProjectPalette(ui.projectId)
+    CompositionLocalProvider(LocalProjectPalette provides palette) {
     var pathCsv by rememberSaveable(ui.streamId) { mutableStateOf(initialPath.joinToString(",")) }
     val path = remember(pathCsv) { pathCsv.split(',').filter { it.isNotBlank() } }
     var filter by remember(ui.streamId) { mutableStateOf(TaskFilter.ALL) }
@@ -136,182 +161,90 @@ fun VirlinStreamTasks(
             while (ancestor != null && add(ancestor)) ancestor = tasksById[ancestor]?.parentId
         }
     }
-    Scaffold(
-        modifier = modifier.testTag(StreamTasksTag),
-        containerColor = Color.White,
+    val parent = parentId?.let(tasksById::get)
+    var headerHeight by remember { mutableFloatStateOf(0f) }
+    var headerOffset by remember(pathCsv) { mutableFloatStateOf(0f) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val scrollConnection = remember(pathCsv, headerHeight) {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                val previous = headerOffset
+                headerOffset = (headerOffset + available.y).coerceIn(-headerHeight, 0f)
+                return androidx.compose.ui.geometry.Offset(0f, headerOffset - previous)
+            }
+        }
+    }
+    Scaffold(modifier = modifier.testTag(StreamTasksTag), containerColor = palette?.let { Color(it.surface) } ?: Color.White,
         topBar = {
-            Column {
-                Row(Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { if (path.isEmpty()) actions.back() else pathCsv = path.dropLast(1).joinToString(",") }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Ink)
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(ui.streamName, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            if (parentId == null) "${ui.stateSummary} · ${ui.projectName}"
-                            else path.mapNotNull { tasksById[it]?.title }.joinToString(" / "),
-                            fontSize = 12.sp, color = Muted, maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    ui.streamPercent?.let { Text("$it%", color = Ink, fontWeight = FontWeight.SemiBold) }
-                    Box {
-                        IconButton(onClick = { streamMenu = true }) { Icon(Icons.Default.MoreVert, "Stream options", tint = Ink) }
-                        DropdownMenu(expanded = streamMenu, onDismissRequest = { streamMenu = false }) {
-                            DropdownMenuItem(text = { Text("Stream execution") }, onClick = { streamMenu = false; executionFor = STREAM_KEY })
-                            DropdownMenuItem(text = { Text("Organize tasks") }, onClick = { streamMenu = false; organize = true })
-                        }
-                    }
+            Row(Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { if (path.isEmpty()) actions.back() else pathCsv = path.dropLast(1).joinToString(",") }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Ink)
                 }
-                if (parentId == null) {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TaskFilter.entries.forEach { item -> FilterPill(item.name.lowercase().replaceFirstChar(Char::uppercase), filter == item, Modifier.weight(1f)) { filter = item } }
-                    }
-                } else {
-                    TextButton(onClick = { pathCsv = path.dropLast(1).joinToString(",") }, modifier = Modifier.padding(start = 20.dp)) {
-                        Text("‹  ${path.dropLast(1).lastOrNull()?.let { tasksById[it]?.title } ?: ui.streamName}", color = DeepGreen)
-                    }
-                }
+                Text(ui.streamName, Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val externalInSection = parentId == null || ui.externalTaskId == parentId ||
+                    generateSequence(ui.externalTaskId) { tasksById[it]?.parentId }
+                        .take(tasksById.size + 1).any { it == parentId }
+                RotatingHierarchyTimer(
+                    if (parentId == null) ui.elapsedSeconds ?: 0L else ui.sectionFocusSeconds[parentId] ?: 0L,
+                    if (parentId == null) ui.externalSeconds else ui.sectionExternalSeconds[parentId], parentId ?: ui.streamId, ui.projectId)
             }
         },
         bottomBar = {
-            if (organize && selected.isNotEmpty()) {
-                Row(Modifier.fillMaxWidth().background(Color.White)
-                    .padding(start = 18.dp, end = OrbClearance, top = 18.dp, bottom = 18.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("${selected.size} selected", color = Ink)
-                    TextButton(onClick = { moveFor = selected.toList() }) { Text("Move", color = DeepGreen) }
-                    TextButton(onClick = { deleteFor = selected.toList() }) { Text("Cancel tasks", color = Danger) }
-                }
-            } else if (parentId != null) {
-                Row(Modifier.fillMaxWidth().background(Color.White)
-                    .padding(start = 14.dp, end = OrbClearance, top = 14.dp, bottom = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly) {
-                    TextButton(onClick = { addFor = parentId; showAdd = true }) { Icon(Icons.Default.Add, null, tint = Green); Text("Add subtask", color = DeepGreen) }
-                    TextButton(onClick = { organize = !organize; selected = emptySet() }) { Text(if (organize) "Done" else "↕  Organize", color = DeepGreen) }
-                }
-            } else if (siblings.isNotEmpty()) {
-                // The floating Orb sits bottom-right above the app footer; the primary action
-                // stops short of it so its edge is never under the Orb.
-                Button(onClick = { addFor = null; showAdd = true },
-                    modifier = Modifier.fillMaxWidth().testTag(AddTaskButtonTag)
-                        .padding(start = 22.dp, end = OrbClearance, top = 12.dp, bottom = 12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Green),
-                    shape = RoundedCornerShape(28.dp)) {
-                    Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Task")
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = OrbClearance, top = 12.dp, bottom = 12.dp)) {
+                if (organize && selected.isNotEmpty()) {
+                    TextButton(onClick = { moveFor = selected.toList() }) { Text("Move") }
+                    TextButton(onClick = { deleteFor = selected.toList() }) { Text("Cancel tasks") }
+                } else Button(onClick = { addFor = parentId; showAdd = true }, modifier = Modifier.fillMaxWidth().testTag(AddTaskButtonTag), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = if(LocalProjectPalette.current==null) Color.White else readableOn(Green))) {
+                    Icon(Icons.Default.Add, null); Text(if (parentId == null) "Task" else "Add subtask")
                 }
             }
         }
     ) { insets ->
-        Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 20.dp)) {
-            if (parentId == null && siblings.isNotEmpty()) {
-                Row(Modifier.fillMaxWidth().padding(top = 25.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Tasks (${siblings.size})", color = Muted, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { organize = !organize; selected = emptySet() }) { Text(if (organize) "Done" else "↕  Organize", color = DeepGreen) }
-                }
-            }
-            if (parentId != null) {
-                val parent = tasksById[parentId]
-                Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(parent?.title.orEmpty(), fontSize = 28.sp, lineHeight = 34.sp,
-                        fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
-                    // The open task's own actions live here, so a leaf is not a dead end.
-                    IconButton(onClick = { menuFor = parentId }) {
-                        Icon(Icons.Default.MoreVert, "Actions for ${parent?.title.orEmpty()}", tint = Ink)
-                    }
-                    if (menuFor == parentId) TaskMenu(
-                        allowWorkActions = parent?.terminal != true,
-                        onDismiss = { menuFor = null }
-                    ) { action ->
-                        menuFor = null
-                        when (action) {
-                            "Current" -> actions.setCurrent(parentId)
-                            "Focus" -> actions.focus(parentId)
-                            "Delegate" -> actions.delegate(parentId)
-                            "Add subtask" -> { addFor = parentId; showAdd = true }
-                            "Edit name" -> renameFor = parentId
-                            "Execution" -> executionFor = parentId
-                            "Move to…" -> moveFor = listOf(parentId)
-                            "Duplicate" -> actions.duplicate(parentId)
-                            "Cancel task" -> deleteFor = listOf(parentId)
-                        }
-                    }
-                }
-                Row(Modifier.padding(top = 4.dp, bottom = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (parent?.isCurrent == true) {
-                        Text("CURRENT", color = Color(0xFF8B6100), fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.background(AmberWash, RoundedCornerShape(20.dp))
-                                .padding(horizontal = 9.dp, vertical = 4.dp))
-                        Spacer(Modifier.width(9.dp))
-                    }
-                    val children = parent?.childCount ?: siblings.size
-                    Text(
-                        if (children == 0) "No subtasks yet"
-                        else "${parent?.progressPercent?.let { "$it% · " }.orEmpty()}$children subtasks",
-                        color = Muted
-                    )
-                }
-            }
-            if (siblings.isEmpty()) {
-                EmptyStream(ui, parentId, onAdd = { addFor = parentId; showAdd = true }, onKeep = { actions.openStreamWorkItem(ui.streamId) }, modifier = Modifier.weight(1f))
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = OrbClearance)) {
-                    itemsIndexed(visible, key = { _, item -> item.id }) { index, task ->
-                        TaskRow(task, index + 1, task.id in ancestorIds, task.id in selected, organize,
-                            modifier = Modifier.testTag(taskRowTag(task.id)),
-                            // Every task opens its OWN level, whether or not it has children
-                            // yet. Child count describes a task; it is not permission to open
-                            // one, and a leaf's page is where its first subtask is added.
-                            onOpen = {
-                                if (organize) selected =
-                                    if (task.id in selected) selected - task.id else selected + task.id
-                                else pathCsv = (path + task.id).joinToString(",")
-                            },
-                            onComplete = { actions.toggleComplete(task.id) },
-                            onMenu = { menuFor = task.id },
-                            onReorder = { direction ->
-                                val from = siblings.indexOfFirst { it.id == task.id }; val to = from + direction
-                                if (from >= 0 && to in siblings.indices) {
-                                    val without = siblings.filterNot { it.id == task.id }
-                                    val afterId = without.getOrNull(to - if (to > from) 0 else 1)?.id
-                                    actions.move(listOf(task.id), parentId, afterId)
-                                }
-                            })
-                        if (menuFor == task.id) {
-                            TaskMenu(allowWorkActions = !task.terminal, onDismiss = { menuFor = null }, onAction = { action ->
-                                menuFor = null
-                                when (action) {
-                                    "Current" -> actions.setCurrent(task.id)
-                                    "Focus" -> actions.focus(task.id)
-                                    "Delegate" -> actions.delegate(task.id)
-                                    "Add subtask" -> { addFor = task.id; showAdd = true }
-                                    "Edit name" -> renameFor = task.id
-                                    "Execution" -> executionFor = task.id
-                                    "Move to…" -> moveFor = listOf(task.id)
-                                    "Duplicate" -> actions.duplicate(task.id)
-                                    "Cancel task" -> deleteFor = listOf(task.id)
-                                }
-                            })
-                        }
-                    }
-                    if (parentId == null && current != null && current.parentId != null && !organize && filter != TaskFilter.DONE) {
-                        item(key = "current") {
-                            Row(Modifier.fillMaxWidth().padding(top = 6.dp).background(AmberWash, CardShape).clickable {
-                                val chain = mutableListOf<String>(); var cursor = current.parentId
-                                while (cursor != null && cursor in tasksById) { chain.add(cursor); cursor = tasksById[cursor]?.parentId }
-                                pathCsv = chain.reversed().joinToString(",")
-                            }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                StatusMark(current = true)
-                                Spacer(Modifier.width(14.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text("Current · ${current.title}", color = Ink, fontWeight = FontWeight.Bold)
-                                    Text(pathLabel(current, tasksById), color = Muted, fontSize = 12.sp, maxLines = 1)
-                                }
-                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Muted)
+        Box(Modifier.fillMaxSize().padding(insets).nestedScroll(scrollConnection)) {
+            Column(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxWidth().height(with(density) { (headerHeight + headerOffset).coerceAtLeast(0f).toDp() }).clipToBounds()) {
+                    Column(Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).onSizeChanged { headerHeight = it.height.toFloat() }
+                        .graphicsLayer { translationY = headerOffset }.padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 8.dp)) {
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                            Text(ui.streamName, color = Muted, fontSize = 12.sp, modifier = Modifier.clickable { pathCsv = "" })
+                            path.forEachIndexed { index, id ->
+                                Text("  ›  ", color = Muted)
+                                Text(tasksById[id]?.title.orEmpty(), color = DeepGreen, fontSize = 12.sp,
+                                    modifier = Modifier.clickable { pathCsv = path.take(index + 1).joinToString(",") })
                             }
                         }
+                        Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(parent?.title ?: "Tasks", Modifier.weight(1f), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Ink)
+                            TextButton(onClick = { if (parent != null) actions.workControls(parent.id) else actions.streamWorkControls() }) { Text("Manage", color = DeepGreen) }
+                        }
+                        val counted = siblings.filterNot { it.terminal && !it.completed }
+                        val done = counted.count { it.completed }
+                        val percent = if (counted.isEmpty()) 0 else done * 100 / counted.size
+                        Text("$percent% · $done/${counted.size} complete", color = Muted, fontSize = 13.sp)
+                        Row(Modifier.padding(top = 16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TaskFilter.entries.forEach { item -> FilterPill(item.name.lowercase().replaceFirstChar(Char::uppercase), filter == item, Modifier.weight(1f)) { filter = item } }
+                        }
+                        Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (parentId == null) "Tasks" else "Subtasks", Modifier.weight(1f), color = Muted, fontWeight = FontWeight.SemiBold)
+                            TextButton(onClick = { organize = !organize; selected = emptySet() }) { Text(if (organize) "Done" else "↕ Organize", color = DeepGreen) }
+                        }
+                    }
+                    // Feather only the moving details, never the breadcrumbs at rest or list cards.
+                    if (headerOffset < 0f && headerHeight + headerOffset > 0f) {
+                        Box(Modifier.fillMaxWidth().height(14.dp).background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(LocalProjectPalette.current?.let { Color(it.surface) } ?: Color.White, Color.Transparent))))
+                    }
+                }
+                LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("hierarchy_task_list"), contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    if (visible.isEmpty()) item { Text(if (siblings.isEmpty()) "No tasks here yet" else "No matching tasks", color = Muted, modifier = Modifier.padding(20.dp)) }
+                    itemsIndexed(visible, key = { _, task -> task.id }) { index, task ->
+                        TaskRow(task, index + 1, task.id in ancestorIds, task.id in selected, organize, ui.visualState,
+                            modifier = Modifier.testTag(taskRowTag(task.id)),
+                            onOpen = { if (organize) selected = if (task.id in selected) selected - task.id else selected + task.id else pathCsv = (path + task.id).joinToString(",") },
+                            onComplete = { actions.toggleComplete(task.id) }, onWorkControls = { actions.workControls(task.id) }, onMenu = {},
+                            onReorder = { direction ->
+                                val from = siblings.indexOfFirst { it.id == task.id }; val to = from + direction
+                                if (to in siblings.indices) actions.move(listOf(task.id), parentId, siblings.filterNot { it.id == task.id }.getOrNull(to - if (to > from) 0 else 1)?.id)
+                            })
                     }
                 }
             }
@@ -366,6 +299,7 @@ fun VirlinStreamTasks(
         )
     }
 }
+}
 private const val STREAM_KEY = "__stream__"
 private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): String {
     val names = mutableListOf<String>(); var cursor = task.parentId
@@ -374,7 +308,7 @@ private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): Stri
 }
 @Composable private fun FilterPill(label: String, chosen: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Box(modifier.background(if (chosen) Green else Color(0xFFF4F5F6), RoundedCornerShape(15.dp)).clickable(onClick = onClick).padding(vertical = 13.dp), contentAlignment = Alignment.Center) {
-        Text(label, color = if (chosen) Color.White else Muted, fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium)
+        Text(label, color = if (chosen) { if(LocalProjectPalette.current==null) Color.White else readableOn(Green) } else Muted, fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium)
     }
 }
 @Composable private fun StatusMark(done: Boolean = false, current: Boolean = false) {
@@ -383,11 +317,20 @@ private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): Stri
         if (current) Box(Modifier.size(15.dp).background(Amber, CircleShape))
     }
 }
-@Composable private fun TaskRow(task: StreamTaskUi, number: Int, containsCurrent: Boolean, selected: Boolean, organize: Boolean, modifier: Modifier = Modifier, onOpen: () -> Unit, onComplete: () -> Unit, onMenu: () -> Unit, onReorder: (Int) -> Unit) {
-    val tint = if (task.isCurrent) AmberWash else if (selected || containsCurrent) Mint else Color.White
+private fun executionWash(state: WorkstreamState): Color = when (state) {
+    WorkstreamState.HUMAN_FOCUS -> Color(0xFFEAF8F1)
+    WorkstreamState.EXTERNAL_RUNNING -> Color(0xFFF1EDFF)
+    WorkstreamState.MULTI_RUN -> Color(0xFFF0EDFF)
+    WorkstreamState.NEEDS_ATTENTION -> AmberWash
+    WorkstreamState.BLOCKED -> Color(0xFFFFECE9)
+    else -> Color(0xFFF4F6F5)
+}
+@Composable internal fun TaskRow(task: StreamTaskUi, number: Int, containsCurrent: Boolean, selected: Boolean, organize: Boolean, executionState: WorkstreamState, modifier: Modifier = Modifier, onOpen: () -> Unit, onComplete: () -> Unit, onWorkControls: () -> Unit, onMenu: () -> Unit, onReorder: (Int) -> Unit) {
+    val rowState = task.activityState.takeIf { it != WorkstreamState.READY } ?: if (task.isCurrent) executionState else WorkstreamState.READY
+    val tint = if (rowState != WorkstreamState.READY) executionWash(rowState) else if (selected || containsCurrent) Mint else Color.White
     Row(modifier.fillMaxWidth().background(tint, CardShape).border(1.dp, if (selected) Green else Line, CardShape).clickable(onClick = onOpen).padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
         if (organize) {
-            Checkbox(selected, onCheckedChange = { onOpen() }, colors = CheckboxDefaults.colors(checkedColor = Green))
+            TextButton(onClick = onOpen) { Text(if (selected) "Selected" else "Select", color = DeepGreen, fontSize = 10.sp) }
             // No drag library is present in this project, so ordering is done with explicit,
             // accessible controls rather than a gesture that is not really implemented.
             Column {
@@ -398,7 +341,9 @@ private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): Stri
                     Text("▼", color = DeepGreen)
                 }
             }
-        } else Box(Modifier.size(38.dp).background(if (task.isCurrent) AmberWash else Color(0xFFF4F5F6), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) { Text("%02d".format(number), color = if (task.isCurrent) Amber else Muted, fontWeight = FontWeight.Bold) }
+        } else Box(Modifier.clickable(onClick = onWorkControls)) {
+            ExecutionDial(if (task.completed) WorkstreamState.COMPLETE else rowState, Modifier.size(38.dp))
+        }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(task.title, color = Ink, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -409,18 +354,13 @@ private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): Stri
             if (detail.isNotBlank()) Text(detail, color = Muted, fontSize = 12.sp)
         }
         if (!organize) {
-            // Completion is one-way in this domain: a finished task has no reopen action, so
-            // its mark is shown, not offered as a toggle.
-            if (task.childCount == 0) {
-                if (task.completed) StatusMark(true, false)
-                else Box(Modifier.testTag(taskCompleteTag(task.id))
-                    .clickable(onClickLabel = "Complete ${task.title}", onClick = onComplete)) {
-                    StatusMark(false, task.isCurrent)
-                }
+            if (!task.completed) Box(Modifier.width(82.dp).clickable(onClickLabel = "Work controls for ${task.title}", onClick = onWorkControls), contentAlignment = Alignment.Center) {
+                if (rowState != WorkstreamState.READY) StatePill(rowState)
+                else Text("WORK", color = Color(0xFF176B45), fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.background(Mint, RoundedCornerShape(50)).padding(12.dp))
             }
-            else Text("${task.progressPercent ?: 0}%", color = Muted, fontSize = 13.sp)
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Open ${task.title}", tint = DeepGreen)
-            Box { IconButton(onClick = onMenu, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.MoreVert, "Task actions", tint = Muted, modifier = Modifier.size(20.dp)) } }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+                tint = Ink, modifier = Modifier.size(22.dp).testTag("task_navigation_arrow_${task.id}"))
         }
     }
 }
@@ -430,8 +370,8 @@ private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): Stri
     onAction: (String) -> Unit
 ) {
     DropdownMenu(expanded = true, onDismissRequest = onDismiss) {
-        (listOf("Current") + (if (allowWorkActions) listOf("Focus", "Delegate") else emptyList()) +
-            listOf("Edit name", "Add subtask", "Execution", "Move to…", "Duplicate", "Cancel task"))
+        ((if (allowWorkActions) listOf("Work controls") else emptyList()) +
+            listOf("Edit name", "Add subtask", "Move to…", "Duplicate", "Cancel task"))
             .forEach { label ->
             DropdownMenuItem(text = { Text(label, color = if (label == "Cancel task") Danger else Ink) }, onClick = { onAction(label) })
         }
@@ -445,7 +385,7 @@ private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): Stri
             else "Add a subtask here. Every subtask can have its own subtasks.",
             color = Muted, modifier = Modifier.padding(18.dp), lineHeight = 21.sp)
         // An empty level shows this instead of the bottom bar's "+ Task"; only one is ever present.
-        Button(onClick = onAdd, colors = ButtonDefaults.buttonColors(containerColor = Green), modifier = Modifier.fillMaxWidth().testTag(AddTaskButtonTag).padding(horizontal = 20.dp)) { Icon(Icons.Default.Add, null); Text(if (parentId == null) "Add first task" else "Add subtask") }
+        Button(onClick = onAdd, colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = if(LocalProjectPalette.current==null) Color.White else readableOn(Green)), modifier = Modifier.fillMaxWidth().testTag(AddTaskButtonTag).padding(horizontal = 20.dp)) { Icon(Icons.Default.Add, null); Text(if (parentId == null) "Add first task" else "Add subtask") }
         if (parentId == null) TextButton(onClick = onKeep) { Text("Keep stream as work item", color = DeepGreen) }
     }
 }
@@ -469,7 +409,7 @@ private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): Stri
             Row { StreamExecutionMode.entries.forEach { choice -> TextButton(onClick = { mode = choice }) { Text(choice.name.lowercase().replaceFirstChar(Char::uppercase), color = if (mode == choice) DeepGreen else Muted) } } }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) }
-                Button(onClick = { onSave(title.trim(), after, mode) }, enabled = title.isNotBlank(), modifier = Modifier.testTag(AddTaskConfirmTag), colors = ButtonDefaults.buttonColors(containerColor = Green)) { Text("Add subtask") }
+                Button(onClick = { onSave(title.trim(), after, mode) }, enabled = title.isNotBlank(), modifier = Modifier.testTag(AddTaskConfirmTag), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = if(LocalProjectPalette.current==null) Color.White else readableOn(Green))) { Text("Add subtask") }
             }
             Spacer(Modifier.height(16.dp))
         }

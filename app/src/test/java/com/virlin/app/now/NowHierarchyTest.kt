@@ -62,6 +62,34 @@ class NowHierarchyTest {
     @Before fun setUp() { Dispatchers.setMain(dispatcher) }
     @After fun tearDown() { Dispatchers.resetMain() }
 
+    @Test fun taskOwnedFocus_resolvesExactNameAndNavigationAfterRename() {
+        val owner = ws("owner", "Claude · Virlin", WorkStreamState.READY, "p1")
+        val parent = Task(id = "parent", title = "Create Mode", projectId = "p1", workStreamId = "owner", createdAt = t0, updatedAt = t0)
+        val child = Task(id = "child", title = "Actual subtask", projectId = "p1", workStreamId = "owner", parentTaskId = "parent", createdAt = t0, updatedAt = t0,
+            execution = com.virlin.app.domain.model.TaskExecution(WorkStreamState.FOCUS))
+        fun project(task: Task) = NowPresentation.currentFocus(
+            listOf(Project("p1", "Virlin Development", createdAt = t0, updatedAt = t0)),
+            com.virlin.app.domain.model.executionItems(listOf(owner), listOf(parent, task)), listOf(parent, task))!!
+        val focus = project(child)
+        assertEquals("child", focus.streamId)
+        assertEquals("Actual subtask", focus.activeTaskTitle)
+        assertEquals("Claude · Virlin", focus.workStreamTitle)
+        assertEquals("owner", focus.ownerWorkStreamId)
+        assertEquals(listOf("parent", "child"), focus.taskIdPath)
+        assertNull(focus.nextHumanAction)
+        assertEquals("Renamed subtask", project(child.copy(title = "Renamed subtask")).activeTaskTitle)
+    }
+
+    @Test fun viewModel_readsTaskOwnedFocus_notRawReadyWorkstream() = runTest(dispatcher) {
+        val owner = ws("owner", "Claude · Virlin", WorkStreamState.READY, "p1")
+        val task = Task(id = "51", title = "51", projectId = "p1", workStreamId = "owner", createdAt = t0, updatedAt = t0,
+            execution = com.virlin.app.domain.model.TaskExecution(WorkStreamState.FOCUS))
+        repo = InMemoryWorkStreamRepository(seed = listOf(owner), seedTasks = listOf(task), taskExecutionEnabled = true)
+        vm = NowViewModel(DefaultVirlinActions(repo, FakeClock(t0), SequentialIdProvider()), FakeClock(t0), repo)
+        assertEquals("51", vm.currentFocus.value?.activeTaskId)
+        assertEquals("51", vm.currentFocus.value?.activeTaskTitle)
+    }
+
     // ------------------------------------------------------------------ presentation
 
     @Test fun projectBacked_activeTask_showsProject_workStream_deepestTaskOnly() {
@@ -123,10 +151,10 @@ class NowHierarchyTest {
         assertEquals(TaskStatus.DONE, repo.getTask("t_nl")!!.status)
         val s = stream("s4")
         assertNull(s.activeTaskId)                                    // cleared by the domain
-        assertEquals(WorkStreamState.FOCUS, s.state)                  // stream untouched, not DONE
+        assertEquals(WorkStreamState.READY, s.state)                  // no ghost focus, not stream DONE
         assertEquals(TaskStatus.TODO, repo.getTask("t_rem")!!.status) // parent not auto-completed
         assertNull(vm.pendingWorkStreamCompletion.value)              // no confirmation asked
-        assertNull(projection()!!.activeTaskTitle)                    // card refreshes from domain
+        assertNull(projection())                                     // completed task leaves live focus
     }
 
     // ------------------------------------------------------------------ COMPLETE without active task

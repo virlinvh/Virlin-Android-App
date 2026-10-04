@@ -111,7 +111,7 @@ class PriorityPersistenceRoomTest {
 
     @Test fun freshInstall_isV12() {
         runBlocking { assertTrue(db.priorityPreferences().all().isEmpty()) }
-        assertEquals(12, db.openHelper.readableDatabase.version)
+            assertEquals(20, db.openHelper.readableDatabase.version)
     }
 
     // ------------------------------------------------------------------ process-death recovery

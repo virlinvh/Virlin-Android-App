@@ -46,6 +46,7 @@ private enum class SettingsCategory(
     DEFAULTS("Defaults & workflow", "Execution, task state, completion and opening tab", Icons.Outlined.Tune),
     ORGANIZATION("Organization", "WorkStream icons, ordering and progress", Icons.Outlined.AccountTree),
     ATTENTION("Attention & reminders", "Alerts, overdue work and external checks", Icons.Outlined.NotificationsNone),
+    TIMERS("Timers & display", "Focused / External timer rotation across this project", Icons.Outlined.Timer),
     CONTENT("Content & appearance", "Completed work, Mind map and Page defaults", Icons.Outlined.ViewQuilt),
     STORAGE("Storage & export", "Media usage, export and duplicate project", Icons.Outlined.Storage),
     MANAGEMENT("Project management", "Complete, archive and permanent deletion", Icons.Outlined.AdminPanelSettings),
@@ -57,6 +58,7 @@ private sealed interface SettingsPage {
     data object Rename : SettingsPage
     data object Execution : SettingsPage
     data object Completed : SettingsPage
+    data object Colors : SettingsPage
 }
 
 @Composable
@@ -71,6 +73,8 @@ fun ProjectSettingsDialog(
     onCompleteProject: () -> Unit,
 ) {
     // Navigation is modal-local UI state. Keeping it out of saveable state avoids attempting to
+    val palette = rememberProjectPalette(project.id)
+    CompositionLocalProvider(LocalProjectPalette provides palette) {
     // serialize this sealed navigation contract during Activity recreation.
     var page: SettingsPage by remember(project.id) { mutableStateOf(SettingsPage.Categories) }
     var entered by remember { mutableStateOf(false) }
@@ -98,7 +102,7 @@ fun ProjectSettingsDialog(
                 SettingsHeader(project, page, onBack = {
                     page = when (page) {
                         is SettingsPage.Category, SettingsPage.Rename, SettingsPage.Execution,
-                        SettingsPage.Completed -> SettingsPage.Categories
+                        SettingsPage.Completed, SettingsPage.Colors -> SettingsPage.Categories
                         SettingsPage.Categories -> SettingsPage.Categories
                     }
                 }, onDismiss = onDismiss)
@@ -115,18 +119,20 @@ fun ProjectSettingsDialog(
                             onExecution = { page = SettingsPage.Execution },
                             onCompleted = { page = SettingsPage.Completed },
                             onCompleteProject = onCompleteProject,
+                            onColors = { page = SettingsPage.Colors },
                         )
                         SettingsPage.Rename -> RenamePage(project.title) { title -> onRename(title); page = SettingsPage.Categories }
                         SettingsPage.Execution -> ExecutionPage(project.defaultExecutionMode) { mode ->
                             onExecutionDefault(mode); page = SettingsPage.Categories
                         }
                         SettingsPage.Completed -> CompletedTasksPage(projectTasks.filter { it.status.isCompleted }, onRestoreTask)
+                        SettingsPage.Colors -> ProjectColorsEditor(project.id) { page = SettingsPage.Categories }
                     }
                     ScrollFade(Alignment.TopCenter)
                     ScrollFade(Alignment.BottomCenter)
                 }
                 HorizontalDivider(color = Color(0xFFE5ECE8))
-                Row(
+                if (page != SettingsPage.Colors) Row(
                     Modifier.fillMaxWidth().padding(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
@@ -134,13 +140,18 @@ fun ProjectSettingsDialog(
                     Button(
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087848)),
+                        colors = ButtonDefaults.buttonColors(containerColor = settingsAccent),
                     ) { Text("Save changes") }
                 }
             }
         }
     }
 }
+
+}
+
+private val settingsAccent: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF087848)
+private val settingsTint: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFEAF8F1)
 
 @Composable
 private fun SettingsHeader(project: Project, page: SettingsPage, onBack: () -> Unit, onDismiss: () -> Unit) {
@@ -150,6 +161,7 @@ private fun SettingsHeader(project: Project, page: SettingsPage, onBack: () -> U
         SettingsPage.Rename -> "Project name"
         SettingsPage.Execution -> "Default execution"
         SettingsPage.Completed -> "Completed tasks"
+        SettingsPage.Colors -> "Project colors"
     }
     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         if (page == SettingsPage.Categories) ProjectIcon(project = project, size = 42.dp, decorative = true)
@@ -188,6 +200,7 @@ private fun CategoryPage(
     onExecution: () -> Unit,
     onCompleted: () -> Unit,
     onCompleteProject: () -> Unit,
+    onColors: () -> Unit,
 ) {
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 14.dp),
@@ -198,7 +211,7 @@ private fun CategoryPage(
             SettingsCategory.IDENTITY -> {
                 item { SettingRow("Project name", project.title, onRename) }
                 item { SettingRow("Project icon", "Choose default or custom", onEditIcon) }
-                item { PlannedRow("Project color", "Applies across this project") }
+                item { SettingRow("Project colors", "24 colors, shades and custom palette", onColors) }
                 item { SettingRow("Project status", project.status.name.lowercase().replaceFirstChar { it.uppercase() }, null) }
             }
             SettingsCategory.DEFAULTS -> {
@@ -220,7 +233,18 @@ private fun CategoryPage(
                 item { PlannedRow("External-work checks", "On") }
                 item { PlannedRow("Notification intensity", "Standard") }
             }
+            SettingsCategory.TIMERS -> {
+                item {
+                    Column(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TimerDisplaySettings("project:${project.id}")
+                        Text("Applies to all workstreams, tasks and subtasks in this project. Only the display changes; running work and recorded time stay unchanged. Changes are saved immediately.",
+                            fontSize = 12.sp, color = VirlinColors.TextSecondary)
+                    }
+                }
+            }
             SettingsCategory.CONTENT -> {
+                item { SettingRow("Project colors", "Palette, text and surfaces", onColors) }
                 item { SettingRow("Completed tasks", "$completedCount available to restore", onCompleted) }
                 item { PlannedRow("Completed work visibility", "Shown") }
                 item { PlannedRow("Completed-work retention", "Keep indefinitely") }
@@ -259,7 +283,7 @@ private fun RenamePage(current: String, onApply: (String) -> Unit) {
             onClick = { onApply(value.trim()) },
             enabled = value.isNotBlank() && value.trim() != current,
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087848)),
+            colors = ButtonDefaults.buttonColors(containerColor = settingsAccent),
         ) { Text("Apply name") }
     }
 }
@@ -277,7 +301,7 @@ private fun ExecutionPage(current: EffectiveExecutionMode, onApply: (EffectiveEx
         Button(
             onClick = { onApply(selected) },
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087848)),
+            colors = ButtonDefaults.buttonColors(containerColor = settingsAccent),
         ) { Text("Apply default") }
     }
 }
@@ -312,7 +336,7 @@ private fun CompletedTasksPage(tasks: List<Task>, onRestore: (String) -> Unit) {
         Button(
             onClick = { confirming = true }, enabled = selected.isNotEmpty(),
             modifier = Modifier.fillMaxWidth().padding(14.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF087848)),
+            colors = ButtonDefaults.buttonColors(containerColor = settingsAccent),
         ) { Text("Restore selected") }
     }
     if (confirming) AlertDialog(
@@ -334,8 +358,8 @@ private fun SettingsCard(icon: ImageVector, title: String, subtitle: String, onC
             .clickable(role = Role.Button, onClick = onClick).padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(42.dp).background(Color(0xFFEAF8F1), CircleShape), contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = null, tint = Color(0xFF087848), modifier = Modifier.size(22.dp))
+        Box(Modifier.size(42.dp).background(settingsTint, CircleShape), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = settingsAccent, modifier = Modifier.size(22.dp))
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -381,8 +405,8 @@ private fun PlannedRow(title: String, value: String, danger: Boolean = false) {
 @Composable
 private fun SelectCard(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().background(if (selected) Color(0xFFEAF8F1) else Color.White, RoundedCornerShape(14.dp))
-            .border(1.dp, if (selected) Color(0xFF087848) else Color(0xFFDDE6E1), RoundedCornerShape(14.dp))
+        Modifier.fillMaxWidth().background(if (selected) settingsTint else Color.White, RoundedCornerShape(14.dp))
+            .border(1.dp, if (selected) settingsAccent else Color(0xFFDDE6E1), RoundedCornerShape(14.dp))
             .clickable(role = Role.RadioButton, onClick = onClick).padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

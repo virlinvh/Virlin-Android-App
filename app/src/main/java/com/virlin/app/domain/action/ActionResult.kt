@@ -59,6 +59,7 @@ sealed interface DomainError {
     data class DuplicateTagName(val name: String) : DomainError
     /** Task does not belong to that WorkStream. */
     data object TaskNotInWorkStream : DomainError
+    data object AnotherTaskIsExecuting : DomainError
     data object InvalidEffort : DomainError
 
     /**

@@ -116,11 +116,14 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
         return
     }
     val streams by MockData.streams.collectAsState()
+    val taskItems by nowViewModel.taskItems.collectAsState()
+    val readyFocusIds by nowViewModel.readyFocusIds.collectAsState()
     // Hierarchy (Project / WorkStream / active Task) comes from the domain, never from MockData.
     val currentFocus by nowViewModel.currentFocus.collectAsState()
     val pendingCompletion by nowViewModel.pendingWorkStreamCompletion.collectAsState()
     val completedFocus by nowViewModel.completedFocus.collectAsState()
     val attention by nowViewModel.attention.collectAsState()
+    val contextPaths by nowViewModel.contextPaths.collectAsState()
     val waitingSince by nowViewModel.waitingSince.collectAsState()
     val dueAt by nowViewModel.attentionDueAt.collectAsState()
     val needsYouQueue by nowViewModel.needsYouQueue.collectAsState()          // canonical: index + 1 = rank
@@ -129,7 +132,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val projects by nowViewModel.projects.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
 
-    val focusStream = streams.find { it.state == StreamState.FOCUS }
+    // Domain focus identity is authoritative; a stale display row must never select focus.
+    val focusStream = currentFocus?.let { focus -> streams.find { it.id == focus.streamId } }
     // Needs You order comes from the domain (`NeedsYouOrder`): explicit user rank first, then the
     // item waiting LONGEST first; it depends only on persisted fields, never on the ticking clock,
     // so the list never re-sorts on a tick. Display items unknown to the domain keep their
@@ -141,19 +145,14 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     // WORKING FOR YOU (Phase 10) is a domain projection: real actor, work item, stage and check
     // time. ONE clock value feeds every row's countdown — no per-row ticker, no stored countdown.
     val externalWork by nowViewModel.externalWork.collectAsState()
-    val externalNow by produceState(com.virlin.app.domain.VirlinGraph.clock.now()) {
-        while (true) {
-            kotlinx.coroutines.delay(1000)
-            value = com.virlin.app.domain.VirlinGraph.clock.now()
-        }
-    }
+    val externalNow by rememberSecondTicker()
     var openExternal by remember { mutableStateOf<String?>(null) }
     openExternal?.let { id ->
         externalWork.firstOrNull { it.id == id }?.let { item ->
             ExternalWorkDetailSheet(item, externalNow, nowViewModel, onDismiss = { openExternal = null })
         } ?: run { openExternal = null }
     }
-    val readyStreams = streams.filter { it.state == StreamState.READY }
+    val readyStreams = streams.filter { it.state == StreamState.READY && it.id in readyFocusIds }
 
     // Notification routing (navigation only): body tap → WorkStream Detail; CHECK → the
     // existing "What happened?" chooser for that stream. Consumed once.
@@ -239,8 +238,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                     val target = dueAt[stream.id] ?: waitingSince[stream.id]
                     NeedsYouTaskUi(
                         id = stream.id,
-                        title = stream.subtitle.ifBlank { stream.title },
-                        sourceAndContext = stream.title,
+                        title = contextPaths[stream.id]?.lastOrNull() ?: stream.subtitle.ifBlank { stream.title },
+                        sourceAndContext = contextPaths[stream.id]?.dropLast(1)?.joinToString(" › ")?.takeIf { it.isNotBlank() } ?: stream.title,
                         statusLabel = reason,
                         // `dueAt` is the temporal truth; the card renders `dueAt − now`, nothing else.
                         checkDueAtEpochMillis = (target ?: nowTick.value).toEpochMilli(),
@@ -315,14 +314,14 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
             // Priority editor (Phase 04): still the home of durable policies, opened from the sheet.
             positionPicker?.let { id ->
                 val edited = needsYouStreams.firstOrNull { it.id == id }
+                var existingPreference by remember(id) { mutableStateOf<com.virlin.app.domain.attention.PriorityPreference?>(null) }
+                LaunchedEffect(id) { existingPreference = nowViewModel.priorityPreference(id) }
                 NeedsYouPriorityEditor(
                     stream = edited,
                     currentPosition = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 },
                     queueSize = needsYouQueue.size,
                     // Read the durable policy off the main thread; null until it arrives.
-                    existing = androidx.compose.runtime.produceState<com.virlin.app.domain.attention.PriorityPreference?>(null, id) {
-                        value = nowViewModel.priorityPreference(id)
-                    }.value,
+                    existing = existingPreference,
                     onRemoveSaved = { nowViewModel.clearPriorityPreference(id) },
                     onSave = { pos, scope -> positionPicker = null; nowViewModel.setNeedsYouPriority(id, pos, scope) },
                     onDismiss = { positionPicker = null }
@@ -349,7 +348,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                         id = item.id,
                         title = item.actorName,
                         detail = listOfNotNull(
-                            item.workItemTitle ?: item.stream.title,
+                            (listOfNotNull(item.projectTitle, item.stream.title) + item.taskPath)
+                                .joinToString(" › "),
                             item.stageLabel() ?: item.instruction
                         ).joinToString(" · "),
                         checkStartedAtEpochMillis = windowStart?.toEpochMilli(),
@@ -400,7 +400,11 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                     )
                 },
                 onFocus = nowViewModel::focus,
-                onOpen = { navController.navigate(com.virlin.app.ui.hierarchy.workStreamDetail(it)) }
+                onOpen = { id ->
+                    val task = taskItems.firstOrNull { it.id == id }
+                    val path = task?.let { com.virlin.app.domain.model.TaskHierarchy.ancestry(taskItems, it.id)?.reversed()?.map { node -> node.id } }.orEmpty()
+                    navController.navigate(com.virlin.app.ui.hierarchy.workStreamDetailAt(task?.workStreamId ?: id, path))
+                }
             )
         }
 
@@ -431,16 +435,22 @@ fun FocusHeroCard(
 
     VirlinCurrentFocusCard(
         projectName = hierarchy?.projectTitle.orEmpty(),
-        headline = hierarchy?.workStreamTitle ?: stream.title,
+        headline = hierarchy?.let { listOf(it.workStreamTitle).plus(it.taskPath.dropLast(1)).joinToString(" › ") } ?: stream.title,
         taskName = hierarchy?.activeTaskTitle.orEmpty(),
+        hierarchyLabels = hierarchy?.let { listOf(it.workStreamTitle) + it.taskPath.dropLast(1) }
+            ?: listOf(stream.title),
         elapsedTime = "",                                   // the real timer comes through the slot
         investedTime = if (showInvested) FocusInvestment.formatInvested(totalInvestedSec) else "",
         nextAction = (hierarchy?.nextHumanAction ?: stream.nextAction).orEmpty(),
-        nextEstimate = "~2 min est.",
+          nextEstimate = "",
         onLeave = { onLeave(stream.id) },
         onComplete = { if (external) onHandOff(stream.id) else onComplete(stream.id) },
         primaryLabel = if (external) "HAND OFF" else "COMPLETE",
-        onContextClick = { navController.navigate(com.virlin.app.ui.hierarchy.workStreamDetail(stream.id)) },
+          onContextClick = {
+              val owner = hierarchy?.ownerWorkStreamId ?: stream.id
+              val path = hierarchy?.taskIdPath.orEmpty()
+              navController.navigate(com.virlin.app.ui.hierarchy.workStreamDetailAt(owner, path))
+          },
         timerContent = {
             // THE existing animated split-flap, unchanged: same FocusSession, same per-digit
             // animation, and the same tap into the fullscreen landscape Focus Clock.

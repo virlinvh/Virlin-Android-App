@@ -275,6 +275,7 @@ private fun ProjectDirectoryCard(
     projectIcon: @Composable (ProjectDirectoryItem) -> Unit
 ) {
     val percent = item.progressPercent?.coerceIn(0, 100)
+    val palette = com.virlin.app.ui.hierarchy.rememberProjectPalette(item.id)
     Row(
         Modifier.fillMaxWidth().heightIn(min = 82.dp)
             .clip(RoundedCornerShape(19.dp)).background(Color.White)
@@ -300,14 +301,14 @@ private fun ProjectDirectoryCard(
                 overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(6.dp))
-        ProgressRing(percent)
+        ProgressRing(percent, palette?.let { Color(it.main) } ?: directoryProgress, palette?.let { Color(it.tertiary) } ?: directoryRingTrack)
         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
             tint = Color(0xFF596276), modifier = Modifier.size(25.dp))
     }
 }
 
 @Composable
-private fun ProgressRing(percent: Int?) {
+private fun ProgressRing(percent: Int?, accent: Color = directoryProgress, track: Color = directoryRingTrack) {
     Box(
         Modifier.size(51.dp).semantics {
             contentDescription = if (percent == null) "No tasks yet" else "$percent percent complete"
@@ -316,8 +317,8 @@ private fun ProgressRing(percent: Int?) {
     ) {
         Canvas(Modifier.fillMaxSize().padding(5.dp)) {
             val width = 5.dp.toPx()
-            drawArc(directoryRingTrack, 0f, 360f, false, style = Stroke(width, cap = StrokeCap.Round))
-            if (percent != null && percent > 0) drawArc(directoryProgress, -90f, percent * 3.6f, false,
+            drawArc(track, 0f, 360f, false, style = Stroke(width, cap = StrokeCap.Round))
+            if (percent != null && percent > 0) drawArc(accent, -90f, percent * 3.6f, false,
                 style = Stroke(width, cap = StrokeCap.Round))
         }
         // A project with no tasks has no percentage; showing 0% would claim work not started

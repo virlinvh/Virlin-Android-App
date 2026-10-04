@@ -367,8 +367,8 @@ private fun InfoStrip(text: String) {
 
 @Composable
 private fun PromptContextPicker(vm: PromptEditorViewModel) {
-    val projects = VirlinGraph.repository.projects.value
-    val streams = VirlinGraph.repository.streams.value
+    val projects by VirlinGraph.repository.projects.collectAsState()
+    val streams by VirlinGraph.repository.streams.collectAsState()
     Column(Modifier.fillMaxWidth().background(White, RoundedCornerShape(14.dp)).border(1.dp, Line, RoundedCornerShape(14.dp)).padding(8.dp)) {
         Text("Global · Inbox", color = Ink, modifier = Modifier.fillMaxWidth().clickable { vm.setContext(CaptureContext.None) }.padding(10.dp))
         projects.forEach { p -> Text(p.title, color = Ink, modifier = Modifier.fillMaxWidth().clickable { vm.setContext(CaptureContext(projectId = p.id)) }.padding(10.dp)) }

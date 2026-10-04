@@ -58,6 +58,7 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
     val saved by store.all.collectAsState()
     var preview by remember { mutableStateOf<VirlinMapSnapshot?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     if (project == null) {
         Box(Modifier.fillMaxSize()) { Text("This project is no longer available") }
@@ -98,19 +99,21 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
-        runCatching {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: error("The file could not be read")
-            decodeVirlinMap(bytes)
-        }.onSuccess {
-            // A snapshot is shown, never merged: no live record is created or changed by it.
-            preview = it
-        }.onFailure { problem = it.message ?: "That file could not be read as a Virlin map" }
+        scope.launch {
+            try {
+                preview = kotlinx.coroutines.runInterruptible(kotlinx.coroutines.Dispatchers.IO) {
+                    val bytes = context.contentResolver.openInputStream(uri)?.use {
+                        com.virlin.app.domain.attachment.readBoundedImport(it)
+                    } ?: error("The file could not be read")
+                    decodeVirlinMap(bytes)
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (e: Exception) { problem = e.message ?: "That file could not be read as a Virlin map" }
+        }
     }
 
     // ---- Edit structure -------------------------------------------------------------------
     // Every button below ends in VirlinActions.placeBranch; nothing here writes a parent id.
-    val scope = rememberCoroutineScope()
     var structureMode by remember { mutableStateOf(false) }
     var selectedNode by remember { mutableStateOf<MapTopic?>(null) }
 

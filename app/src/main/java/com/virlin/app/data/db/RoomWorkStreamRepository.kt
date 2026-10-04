@@ -114,6 +114,7 @@ class RoomWorkStreamRepository private constructor(
         else db.voiceDocuments().byCaptureIds(captureItemIds).associate { it.captureItemId to it.toDomain() }
 
     override suspend fun getStream(id: String) = db.workStreams().byId(id)?.toDomain()
+    override val taskExecutionEnabled = true
     override suspend fun getActiveFocus() = db.workStreams().activeFocus()?.toDomain()
     override suspend fun getOpenFocusSession(streamId: String) = db.focusSessions().open(streamId)?.toDomain()
     override suspend fun getCurrentCycle(streamId: String) = db.cycles().current(streamId)?.toDomain()
@@ -257,6 +258,7 @@ class RoomWorkStreamRepository private constructor(
         override suspend fun getStream(id: String) = db.workStreams().byId(id)?.toDomain()
         override suspend fun getActiveFocus() = db.workStreams().activeFocus()?.toDomain()
         override suspend fun getOpenFocusSession(streamId: String) = db.focusSessions().open(streamId)?.toDomain()
+        override suspend fun getCycle(id: String) = db.cycles().byId(id)?.toDomain()
         override suspend fun getCurrentCycle(streamId: String) = db.cycles().current(streamId)?.toDomain()
         override suspend fun getLatestSnapshot(streamId: String) = db.snapshots().latest(streamId)?.toDomain()
         override suspend fun getProject(id: String) = db.projects().byId(id)?.toDomain()

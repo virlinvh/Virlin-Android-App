@@ -186,7 +186,7 @@ class NeedsYouPriorityUiTest {
                         com.virlin.app.ui.screens.NeedsYouControlSheet(
                             stream = long, project = project("p1", "Virlin Development"),
                             kind = AttentionKind.CHECK_DUE, position = 2, total = 4,
-                            dueAt = Instant.now().minusSeconds(3725), now = mutableStateOf(Instant.now()),
+                            dueAt = Instant.now().minusSeconds(3725), now = androidx.compose.runtime.remember { mutableStateOf(Instant.now()) },
                             initialTab = com.virlin.app.ui.screens.NeedsYouControlTab.PRIORITY,
                             onMoveToPosition = {}, onAction = {}, onDismiss = {}
                         )
@@ -221,7 +221,7 @@ class NeedsYouPriorityUiTest {
             CompositionLocalProvider(LocalDensity provides Density(base.density, 1.3f)) {
                 VirlinTheme {
                     Box(Modifier.width(335.dp)) {
-                        NeedsYouCard(long, 0, AttentionKind.RETURN_DUE, waitingSince = Instant.now().minusSeconds(3900), now = mutableStateOf(Instant.now()),
+                        NeedsYouCard(long, 0, AttentionKind.RETURN_DUE, waitingSince = Instant.now().minusSeconds(3900), now = androidx.compose.runtime.remember { mutableStateOf(Instant.now()) },
                             project = project("p1", "Virlin Development"), position = 7, total = 12)
                     }
                 }

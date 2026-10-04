@@ -283,7 +283,7 @@ fun VirlinOrb(
             val c = Offset(d / 2f, d / 2f)
             val spherePath = Path().apply { addOval(Rect(1f, 1f, d - 1f, d - 1f)) }
 
-            if (liquid != null && !liquidUnsupported) {
+            if (Build.VERSION.SDK_INT >= 33 && liquid != null && !liquidUnsupported) {
                 // Stitch liquid: the AGSL shader fills the sphere; then the design's glass overlays.
                 liquid.setFloatUniform("u_time", shaderTime)
                 liquid.setFloatUniform("u_resolution", d, d)

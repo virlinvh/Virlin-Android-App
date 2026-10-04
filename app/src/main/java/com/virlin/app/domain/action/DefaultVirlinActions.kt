@@ -1,4 +1,5 @@
 package com.virlin.app.domain.action
+import com.virlin.app.domain.model.ExecutionEligibility
 
 import com.virlin.app.domain.attention.InMemoryPriorityPreferences
 import com.virlin.app.domain.attention.NeedsYouOrder
@@ -18,6 +19,9 @@ import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
+import com.virlin.app.domain.activity.TaskEventDetail
+import com.virlin.app.domain.model.TaskStatus
+import com.virlin.app.domain.model.executionStream
 import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamEvent
@@ -52,6 +56,7 @@ class DefaultVirlinActions(
     private val prompts = PromptActions(repository, clock, ids, capture)
     private val attachments = AttachmentActions(repository, clock, ids, capture)
     private val voices = VoiceActions(repository, clock, ids, capture)
+    private suspend fun activityById(id: String) = repository.getTask(id)?.executionStream() ?: repository.getStream(id)
 
     // ------------------------------------------------------------------ Structure (delegated)
     override suspend fun createProject(request: CreateProject) = structure.createProject(request)
@@ -266,6 +271,12 @@ class DefaultVirlinActions(
 
     /** The focus transition itself, inside an EXISTING transaction (shared by focusStream and startFocus). */
     private suspend fun WorkStreamWriter.focusWithin(target: WorkStream): ActionResult<FocusOutcome> = run {
+        if (repository.taskExecutionEnabled && !ExecutionEligibility.isLeaf(target.id, allTasks()))
+            return@run ActionResult.Rejected(DomainError.PlacementRejected("Select a leaf task to focus; this item contains children."))
+        if (repository.taskExecutionEnabled && target.executionPreference == ExecutionPreference.EXTERNAL &&
+            target.snoozeReason != SnoozeReason.EXTERNAL_RESULT_READY)
+            return@run ActionResult.Rejected(DomainError.NotExternalExecution)
+        if (target.externalTrackingPaused) return@run ActionResult.Rejected(DomainError.NotExternalExecution)
         if (target.state == FOCUS) return@run ActionResult.Rejected(DomainError.AlreadyFocused)
         requireTransition(target, FOCUS)?.let { return@run it }
 
@@ -275,7 +286,7 @@ class DefaultVirlinActions(
         val displaced = previous?.let { prev ->
             closeOpenSession(prev.id, now)
             saveSnapshot(prev, now, reason = READY)
-            val moved = prev.copy(state = READY, updatedAt = now)
+            val moved = prev.copy(state = if (getTask(prev.id) != null) PAUSED else READY, updatedAt = now)
             persist(moved)
             event(prev, EventType.FOCUS_LEFT, now, from = FOCUS, to = READY, detail = "displaced by ${target.id}")
             moved
@@ -295,10 +306,12 @@ class DefaultVirlinActions(
             state = FOCUS,
             currentCycleId = cycle.id,
             cycleCount = maxOf(target.cycleCount, cycle.number),
+            externalTrackedSeconds = trackedExternalSeconds(target, now),
             processingStartedAt = null,
             checkAt = null,
             snoozedUntil = null,
-            snoozeReason = null,
+            snoozeReason = if (repository.taskExecutionEnabled && target.snoozeReason == SnoozeReason.EXTERNAL_RESULT_READY)
+                SnoozeReason.EXTERNAL_RESULT_READY else null,
             updatedAt = now
         )
         persist(focused)
@@ -314,19 +327,20 @@ class DefaultVirlinActions(
     // ------------------------------------------------------------------ Phase 09: focus a WORK ITEM
 
     override suspend fun resolveFocusTarget(workItemId: String): ActionResult<FocusTarget> = try {
-        repository.transaction { resolveTarget(workItemId) }
+        repository.transaction { (if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this).resolveTarget(workItemId) }
     } catch (e: Exception) { ActionResult.Failure(e) }
 
     override suspend fun startFocus(workItemId: String): ActionResult<FocusTargetOutcome> = try {
-        repository.transaction {
+        repository.transaction { with(if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this) {
             val target = when (val r = resolveTarget(workItemId)) {
                 is ActionResult.Success -> r.value
                 else -> return@transaction r as ActionResult<FocusTargetOutcome>
             }
             // The exact item first, then the stream: focusStream closes the displaced session,
             // snapshots context and enforces the single-Focus invariant in this same transaction.
-            saveStream(getStream(target.workStreamId)!!.copy(activeTaskId = target.workItem.id, updatedAt = clock.now()))
-            val stream = getStream(target.workStreamId)!!
+            if (!repository.taskExecutionEnabled) saveStream(getStream(target.workStreamId)!!.copy(
+                activeTaskId = target.workItem.id, updatedAt = clock.now()))
+            val stream = getStream(if (repository.taskExecutionEnabled) target.workItem.id else target.workStreamId)!!
             if (stream.state == FOCUS) {
                 // Already the focused stream: the exact work item changed, so the old session is
                 // committed and a NEW one starts for the new item (investment follows the item).
@@ -339,7 +353,7 @@ class DefaultVirlinActions(
                 is ActionResult.Success -> ActionResult.Success(FocusTargetOutcome(target, focus.value.focused, focus.value.displaced))
                 else -> focus as ActionResult<FocusTargetOutcome>
             }
-        }
+        } }
     } catch (e: Exception) { ActionResult.Failure(e) }
 
     override suspend fun focusNext(streamId: String): ActionResult<FocusTargetOutcome?> {
@@ -362,6 +376,8 @@ class DefaultVirlinActions(
         val item = getTask(workItemId) ?: return ActionResult.Rejected(DomainError.TaskNotFound(workItemId))
         val all = allTasks()
         val children = all.filter { it.parentTaskId == item.id }
+        if (repository.taskExecutionEnabled && children.isNotEmpty())
+            return ActionResult.Rejected(DomainError.PlacementRejected("Select the specific leaf task; containers cannot start work."))
         val resolved = if (children.isEmpty()) {
             if (item.status.isTerminal) return ActionResult.Rejected(DomainError.TaskAlreadyClosed)
             item
@@ -370,11 +386,12 @@ class DefaultVirlinActions(
         }
         val streamId = resolved.workStreamId ?: return ActionResult.Rejected(DomainError.OwnershipMismatch)
         val current = getActiveFocus()
+        val identity = if (repository.taskExecutionEnabled) resolved.id else streamId
         return ActionResult.Success(
             FocusTarget(
                 workItem = resolved, workStreamId = streamId,
-                displacedStreamId = current?.id?.takeIf { it != streamId || current.activeTaskId != resolved.id },
-                displacedWorkItemId = current?.activeTaskId?.takeIf { current.id != streamId || it != resolved.id }
+                displacedStreamId = current?.id?.takeIf { it != identity || current.activeTaskId != resolved.id },
+                displacedWorkItemId = current?.activeTaskId?.takeIf { current.id != identity || it != resolved.id }
             )
         )
     }
@@ -438,6 +455,7 @@ class DefaultVirlinActions(
     }
 
     override suspend fun checkDue(streamId: String): ActionResult<WorkStream> = run(streamId) { stream ->
+        if (stream.state == PAUSED && !stream.externalTrackingPaused) return@run ActionResult.Rejected(DomainError.NotExternalExecution)
         requireTransition(stream, CHECK)?.let { return@run it }
         val now = clock.now()
         val updated = stream.copy(state = CHECK, snoozedUntil = null, updatedAt = now)
@@ -450,6 +468,7 @@ class DefaultVirlinActions(
     }
 
     override suspend fun continueProcessing(streamId: String, checkAt: Instant): ActionResult<WorkStream> = run(streamId) { stream ->
+        if (stream.externalTrackingPaused) return@run ActionResult.Rejected(DomainError.NotExternalExecution)
         val now = clock.now()
         if (!checkAt.isAfter(now)) return@run ActionResult.Rejected(DomainError.InvalidSnoozeTime)
         when (stream.state) {
@@ -514,7 +533,7 @@ class DefaultVirlinActions(
     }
 
     override suspend fun stillRunning(streamId: String, checkAt: Instant): ActionResult<WorkStream> {
-        val stream = repository.getStream(streamId) ?: return ActionResult.NotFound(streamId)
+        val stream = activityById(streamId) ?: return ActionResult.NotFound(streamId)
         if (stream.state != PROCESSING && !(stream.state == CHECK && stream.snoozeReason == null))
             return ActionResult.Rejected(DomainError.NotAnExternalCheck)
         // continueProcessing validates the time and keeps processing continuity; no FocusSession.
@@ -522,7 +541,7 @@ class DefaultVirlinActions(
     }
 
     override suspend fun resultReadyNow(streamId: String): ActionResult<FocusOutcome> {
-        val stream = repository.getStream(streamId) ?: return ActionResult.NotFound(streamId)
+        val stream = activityById(streamId) ?: return ActionResult.NotFound(streamId)
         if (stream.state != CHECK && stream.state != PROCESSING) return ActionResult.Rejected(DomainError.NotAnExternalCheck)
         // focusStream clears processingStartedAt/checkAt, opens a FocusSession attributed to
         // the active task and applies single-Focus displacement.
@@ -543,6 +562,7 @@ class DefaultVirlinActions(
         // The external work is FINISHED: no processing fields survive. The task and context do.
         val updated = stream.copy(
             state = SNOOZED,
+            externalTrackedSeconds = trackedExternalSeconds(stream, now), externalTrackingPaused = false,
             processingStartedAt = null,
             checkAt = returnAt,
             snoozedUntil = returnAt,
@@ -577,7 +597,9 @@ class DefaultVirlinActions(
         val now = clock.now()
         closeOpenSession(stream.id, now)
         val updated = stream.copy(
-            state = READY, processingStartedAt = null, checkAt = null, snoozedUntil = null, updatedAt = now
+            state = READY, processingStartedAt = null, externalTrackingPaused = false, checkAt = null, snoozedUntil = null,
+            snoozeReason = null, externalTrackedSeconds = stream.externalTrackedSeconds +
+                (stream.processingStartedAt?.let { Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0), updatedAt = now
         )
         saveSnapshot(updated, now, reason = READY)
         persist(updated)
@@ -586,6 +608,7 @@ class DefaultVirlinActions(
     }
 
     override suspend fun pauseStream(streamId: String): ActionResult<WorkStream> = run(streamId) { stream ->
+        if (stream.processingStartedAt != null) return@run ActionResult.Rejected(DomainError.NotExternalExecution)
         requireTransition(stream, PAUSED)?.let { return@run it }
         val now = clock.now()
         closeOpenSession(stream.id, now)
@@ -596,12 +619,45 @@ class DefaultVirlinActions(
         ActionResult.Success(updated)
     }
 
+    override suspend fun pauseExternalTracking(streamId: String, returnAt: Instant?): ActionResult<WorkStream> = run(streamId) { stream ->
+        val alreadyPaused = stream.externalTrackingPaused && stream.state in setOf(PAUSED, CHECK, SNOOZED)
+        if (!alreadyPaused && (stream.state !in setOf(PROCESSING, CHECK) || stream.processingStartedAt == null))
+            return@run ActionResult.Rejected(DomainError.NotExternalExecution)
+        if (stream.state != PAUSED) requireTransition(stream, PAUSED)?.let { return@run it }
+        val now = clock.now()
+        if (returnAt != null && !returnAt.isAfter(now)) return@run ActionResult.Rejected(DomainError.NotExternalExecution)
+        // One transaction closes the active segment and cancels the old check. No human session changes.
+        val seconds = stream.processingStartedAt?.let { Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0L
+        val updated = stream.copy(state = PAUSED, processingStartedAt = null,
+            externalTrackedSeconds = stream.externalTrackedSeconds + seconds, externalTrackingPaused = true,
+            checkAt = returnAt, snoozedUntil = null, snoozeReason = SnoozeReason.HUMAN_RETURN, updatedAt = now)
+        saveSnapshot(updated, now, reason = PAUSED)
+        persist(updated)
+        event(stream, EventType.PAUSED, now, from = stream.state, to = PAUSED, detail = "External tracking paused")
+        ActionResult.Success(updated)
+    }
+
+    override suspend fun resumeExternalTracking(streamId: String, checkAt: Instant?): ActionResult<WorkStream> = run(streamId) { stream ->
+        if (!stream.externalTrackingPaused || stream.state !in setOf(PAUSED, CHECK, SNOOZED))
+            return@run ActionResult.Rejected(DomainError.NotExternalExecution)
+        requireTransition(stream, PROCESSING)?.let { return@run it }
+        val now = clock.now()
+        if (checkAt != null && !checkAt.isAfter(now)) return@run ActionResult.Rejected(DomainError.NotExternalExecution)
+        val updated = stream.copy(state = PROCESSING, processingStartedAt = now, externalTrackingPaused = false,
+            checkAt = checkAt, snoozedUntil = null, snoozeReason = null, updatedAt = now)
+        saveSnapshot(updated, now, reason = PROCESSING)
+        persist(updated)
+        event(stream, EventType.PROCESSING_STARTED, now, from = stream.state, to = PROCESSING, detail = "External tracking resumed")
+        ActionResult.Success(updated)
+    }
+
     override suspend fun blockStream(streamId: String, reason: String?): ActionResult<WorkStream> = run(streamId) { stream ->
         requireTransition(stream, BLOCKED)?.let { return@run it }
         val now = clock.now()
         closeOpenSession(stream.id, now)
         val updated = stream.copy(
-            state = BLOCKED, blockerReason = reason ?: stream.blockerReason,
+            state = BLOCKED, blockerReason = reason ?: stream.blockerReason, externalTrackingPaused = false,
+            externalTrackedSeconds = trackedExternalSeconds(stream, now),
             processingStartedAt = null, checkAt = null, snoozedUntil = null, snoozeReason = null, updatedAt = now
         )
         saveSnapshot(updated, now, reason = BLOCKED)
@@ -621,14 +677,32 @@ class DefaultVirlinActions(
 
     // ------------------------------------------------------------------ Complete
 
-    override suspend fun completeStream(streamId: String): ActionResult<WorkStream> = run(streamId) { stream ->
+    override suspend fun completeStream(streamId: String): ActionResult<WorkStream> = run(streamId, allowContainer = true) { stream ->
         requireTransition(stream, DONE)?.let { return@run it }
         val now = clock.now()
+        // A real workstream completion closes its entire owned hierarchy atomically.
+        // Exact task ids keep unrelated workstreams and historical attribution intact.
+        if (getTask(stream.id) == null) {
+            allTasks().filter { it.workStreamId == stream.id && !it.status.isTerminal }.forEach { task ->
+                val activity = task.executionStream()
+                closeOpenSession(task.id, now)
+                task.execution?.currentCycleId?.let { getCycle(it) }?.let { saveCycle(it.copy(endedAt = now)) }
+                saveTask(task.copy(status = TaskStatus.DONE, completedAt = now, updatedAt = now,
+                    execution = task.execution?.copy(state = DONE,
+                        externalTrackedSeconds = trackedExternalSeconds(activity, now),
+                        processingStartedAt = null, externalTrackingPaused = false,
+                        checkAt = null, snoozeReason = null, blockerReason = null, currentCycleId = null)))
+                event(activity.copy(id = stream.id), EventType.TASK_COMPLETED, now,
+                    detail = TaskEventDetail.encode(task.id, task.title, task.status, TaskStatus.DONE))
+            }
+        }
         closeOpenSession(stream.id, now)
         getCurrentCycle(stream.id)?.let { saveCycle(it.copy(endedAt = now)) }
         val updated = stream.copy(
-            state = DONE, completedAt = now,
-            processingStartedAt = null, checkAt = null, snoozedUntil = null, updatedAt = now
+            state = DONE, completedAt = now, externalTrackingPaused = false,
+            externalTrackedSeconds = trackedExternalSeconds(stream, now),
+            processingStartedAt = null, checkAt = null, snoozedUntil = null, snoozeReason = null,
+            activeTaskId = null, currentCycleId = null, updatedAt = now
         )
         saveSnapshot(updated, now, reason = DONE)
         persist(updated)
@@ -638,13 +712,23 @@ class DefaultVirlinActions(
 
     // ------------------------------------------------------------------ Context / notes
 
-    override suspend fun updateContext(streamId: String, update: ContextUpdate): ActionResult<WorkStream> = run(streamId) { stream ->
+    override suspend fun updateContext(streamId: String, update: ContextUpdate): ActionResult<WorkStream> = run(streamId, allowContainer = true) { stream ->
+        if (update.title != Field.Keep && update.title.applyTo(stream.title).isNullOrBlank())
+            return@run ActionResult.Rejected(DomainError.EmptyTitle)
+        if (update.title != Field.Keep && update.copy(title = Field.Keep).isEmpty) {
+            val renamed = stream.copy(title = update.title.applyTo(stream.title)!!.trim())
+            saveStream(renamed)
+            return@run ActionResult.Success(renamed)
+        }
         if (stream.state.isTerminal) return@run ActionResult.Rejected(DomainError.StreamAlreadyDone)
+        if (update.blockerReason != Field.Keep && stream.state != BLOCKED) return@run ActionResult.Rejected(DomainError.NotBlocked)
         val now = clock.now()
         val updated = stream.copy(
+            title = update.title.applyTo(stream.title)?.trim() ?: stream.title,
             lastHumanAction = update.lastHumanAction.applyTo(stream.lastHumanAction),
             waitingFor = update.waitingFor.applyTo(stream.waitingFor),
             nextHumanAction = update.nextHumanAction.applyTo(stream.nextHumanAction),
+            blockerReason = update.blockerReason.applyTo(stream.blockerReason),
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = updated.state, note = update.note)
@@ -654,7 +738,7 @@ class DefaultVirlinActions(
         ActionResult.Success(updated)
     }
 
-    override suspend fun addNote(streamId: String, text: String): ActionResult<WorkStream> = run(streamId) { stream ->
+    override suspend fun addNote(streamId: String, text: String): ActionResult<WorkStream> = run(streamId, allowContainer = true) { stream ->
         if (text.isBlank()) return@run ActionResult.Rejected(DomainError.EmptyNote)
         if (stream.state.isTerminal) return@run ActionResult.Rejected(DomainError.StreamAlreadyDone)
         val now = clock.now()
@@ -711,16 +795,27 @@ class DefaultVirlinActions(
     // ================================================================ External work (Phase 10)
 
     override suspend fun startExternalWork(request: StartExternalWork): ActionResult<WorkStream> =
-        run(request.workStreamId) { stream ->
+        run(if (repository.taskExecutionEnabled) request.workItemId ?: request.workStreamId else request.workStreamId) { stream ->
+            if (repository.taskExecutionEnabled && ExecutionModeResolver.resolveCurrent(stream, allTasks().associateBy { it.id },
+                    stream.projectId?.let { getProject(it)?.defaultExecutionMode }) != EffectiveExecutionMode.EXTERNAL)
+                return@run ActionResult.Rejected(DomainError.NotExternalExecution)
             if (stream.state.isTerminal) return@run ActionResult.Rejected(DomainError.StreamAlreadyDone)
             if (stream.state != PROCESSING) requireTransition(stream, PROCESSING)?.let { return@run it }
             val now = clock.now()
 
             // The work item is identified by a stable id and must belong to this stream.
             val workItemId = request.workItemId
+            if (workItemId != null && stream.activeTaskId != null && workItemId != stream.activeTaskId &&
+                stream.state !in setOf(READY, DONE)) return@run ActionResult.Rejected(DomainError.AnotherTaskIsExecuting)
             if (workItemId != null) {
                 val task = getTask(workItemId) ?: return@run ActionResult.Rejected(DomainError.TaskNotFound(workItemId))
-                if (task.workStreamId != stream.id) return@run ActionResult.Rejected(DomainError.TaskNotInWorkStream)
+                if (task.workStreamId != request.workStreamId && task.id != request.workStreamId)
+                    return@run ActionResult.Rejected(DomainError.TaskNotInWorkStream)
+                if (task.status.isTerminal) return@run ActionResult.Rejected(DomainError.TaskAlreadyClosed)
+                val owner = task.workStreamId?.let { getStream(it) } ?: return@run ActionResult.Rejected(DomainError.OwnershipMismatch)
+                if (repository.taskExecutionEnabled && ExecutionModeResolver.resolveTask(task, allTasks().associateBy { it.id }, owner,
+                        task.projectId?.let { getProject(it)?.defaultExecutionMode }) != EffectiveExecutionMode.EXTERNAL)
+                    return@run ActionResult.Rejected(DomainError.NotExternalExecution)
             }
             if (request.stages.any { it.title.isBlank() }) return@run ActionResult.Rejected(DomainError.EmptyTitle)
 
@@ -789,10 +884,11 @@ class DefaultVirlinActions(
         }
         val updated = stream.copy(
             state = CHECK,
+            externalTrackedSeconds = trackedExternalSeconds(stream, now), externalTrackingPaused = false,
             processingStartedAt = null,
             checkAt = stream.checkAt ?: now,      // keep the due moment so the overdue timer stays honest
             snoozedUntil = null,
-            snoozeReason = null,
+            snoozeReason = SnoozeReason.EXTERNAL_RESULT_READY,
             updatedAt = now
         )
         saveSnapshot(updated, now, reason = CHECK)
@@ -802,7 +898,7 @@ class DefaultVirlinActions(
     }
 
     override suspend fun focusExternalResult(streamId: String): ActionResult<WorkStream> {
-        val stream = repository.getStream(streamId) ?: return ActionResult.NotFound(streamId)
+        val stream = activityById(streamId) ?: return ActionResult.NotFound(streamId)
         val workItemId = stream.activeTaskId
         // Same work item, same Phase 09 focus rules - no second task, no second switching system.
         return if (workItemId != null) {
@@ -877,11 +973,17 @@ class DefaultVirlinActions(
     /** Load → run inside one transaction → map unexpected throwables to [ActionResult.Failure]. */
     private suspend fun <T> run(
         streamId: String,
+        allowContainer: Boolean = false,
         block: suspend WorkStreamWriter.(WorkStream) -> ActionResult<T>
     ): ActionResult<T> = try {
         repository.transaction {
-            val stream = getStream(streamId) ?: return@transaction ActionResult.NotFound(streamId)
-            block(stream)
+            val writer = if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this
+            val stream = writer.getStream(streamId) ?: return@transaction ActionResult.NotFound(streamId)
+            if (repository.taskExecutionEnabled && getTask(streamId)?.let { it.workStreamId == null } == true)
+                return@transaction ActionResult.Rejected(DomainError.OwnershipMismatch)
+            if (repository.taskExecutionEnabled && !allowContainer && !ExecutionEligibility.isLeaf(streamId, writer.allTasks()))
+                return@transaction ActionResult.Rejected(DomainError.PlacementRejected("This item contains children. Select a leaf task to manage execution."))
+            writer.block(stream)
         }
     } catch (e: Exception) {
         ActionResult.Failure(e)
@@ -924,6 +1026,11 @@ class DefaultVirlinActions(
             )
         )
     }
+
+    private fun trackedExternalSeconds(stream: WorkStream, now: Instant): Long =
+        stream.externalTrackedSeconds + (stream.processingStartedAt?.let {
+            Duration.between(it, now).seconds.coerceAtLeast(0L)
+        } ?: 0L)
 
     private suspend fun WorkStreamWriter.event(
         stream: WorkStream, type: EventType, now: Instant,

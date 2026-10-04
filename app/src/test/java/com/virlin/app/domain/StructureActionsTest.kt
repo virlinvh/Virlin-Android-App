@@ -159,16 +159,16 @@ class StructureActionsTest {
         assertTrue(EventType.TASK_COMPLETED in repo.getEvents("agent").map { it.type })
     }
 
-    @Test fun completeParent_doesNotMutateChildren_progressIsDerived() = runTest {
+    @Test fun completeParent_closesItsSubtree_progressIsDerived() = runTest {
         seedTree()
         a.completeTask("rc") // parent closed explicitly
-        assertEquals(TaskStatus.TODO, repo.getTask("nl")!!.status)           // children untouched
+        assertEquals(TaskStatus.DONE, repo.getTask("nl")!!.status)           // subtree closed atomically
         // Parent status is never auto-mutated the other way either:
         a.completeTask("tc"); a.completeTask("wc")
         assertEquals(TaskStatus.TODO, repo.getTask("create")!!.status)
         // …but its derived progress is what matters.
         val p = ProgressCalculator.ofTask(tasks(), "create") as ProgressResult.Structured
-        assertEquals(2, p.completedLeaves); assertEquals(5, p.totalLeaves)
+        assertEquals(5, p.completedLeaves); assertEquals(5, p.totalLeaves)
     }
 
     // ================================================================ Active task

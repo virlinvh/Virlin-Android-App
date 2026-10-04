@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,6 +38,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -54,6 +57,7 @@ private val Mint = Color(0xFFE4FAE9)
  * the fallback renders the same four-tile visual using `elapsedTime`.
  */
 @Composable
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 fun VirlinCurrentFocusCard(
     projectName: String,
     /** The big line. Defaults to [projectName] so the supplied call shape still works. */
@@ -73,6 +77,7 @@ fun VirlinCurrentFocusCard(
     motto: String? = null,
     onContextClick: (() -> Unit)? = null,
     timerContent: (@Composable () -> Unit)? = null,
+    hierarchyLabels: List<String> = listOf(headline),
 ) {
     val cardShape = RoundedCornerShape(28.dp)
     Box(
@@ -132,14 +137,29 @@ fun VirlinCurrentFocusCard(
                     .then(if (onContextClick != null) Modifier.clickable(onClickLabel = "Open WorkStream") { onContextClick() } else Modifier)
             ) {
                 if (projectName.isNotBlank()) {
-                    Text(projectName, color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag(FocusProjectTag))
+                    Text(projectName, color = Ink, fontSize = 27.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag(FocusProjectTag))
                 }
-                Text(headline, color = Ink, fontSize = 30.sp, lineHeight = 35.sp,
-                    fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val ancestors = hierarchyLabels.filter { it.isNotBlank() }
+                if (ancestors.isNotEmpty()) {
+                    Spacer(Modifier.height(3.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(1.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("focus_hierarchy")) {
+                        ancestors.forEachIndexed { index, fullName ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (index > 0) Text("›  ", color = Muted, fontSize = 12.sp)
+                                Text(compactFocusHierarchyLabel(fullName), color = Muted,
+                                    fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
+                                    maxLines = 1, modifier = Modifier.semantics { contentDescription = fullName })
+                            }
+                        }
+                    }
+                }
                 if (taskName.isNotBlank()) {
-                    Text(taskName, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Medium,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag(FocusTaskTag))
+                    Spacer(Modifier.height(4.dp))
+                    Text(taskName, color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.testTag(FocusTaskTag))
                 }
             }
 

@@ -9,7 +9,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -92,13 +95,14 @@ fun ProjectIcon(
     val custom = ProjectIdentity.hasCustomIcon(iconPath)
 
     // Decode off the main thread, once per (path, mtime, size); the result is remembered by key.
-    val image by produceState<ImageBitmap?>(initialValue = null, iconPath, targetPx) {
-        if (!custom) { value = null; return@produceState }
+    var image by remember(iconPath, targetPx) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(iconPath, targetPx) {
+        if (!custom) { image = null; return@LaunchedEffect }
         val path = iconPath!!
         val file = ProjectIconStore.resolve(context, path)
         val key = "$path|${file.lastModified()}|$targetPx"
-        ProjectIconCache.get(key)?.let { value = it; return@produceState }
-        value = withContext(Dispatchers.IO) {
+        ProjectIconCache.get(key)?.let { image = it; return@LaunchedEffect }
+        image = withContext(Dispatchers.IO) {
             ProjectIconStore.decodeForDisplay(context, path, targetPx)?.asImageBitmap()?.also { ProjectIconCache.put(key, it) }
         }
     }

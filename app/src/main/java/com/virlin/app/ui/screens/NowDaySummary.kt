@@ -50,14 +50,14 @@ import java.util.Locale
  */
 data class NowDaySummaryValues(
     /** "42m" — time the user did not have to spend. */
-    val timeSaved: String = "42m",
-    val tasksAdvanced: String = "8",
+    val timeSaved: String = "—",
+    val tasksAdvanced: String = "—",
     val tasksAdvancedUnit: String = "tasks",
-    val projectsMoved: String = "3",
+    val projectsMoved: String = "—",
     val projectsMovedUnit: String = "projects",
     /** "22h 18m" — real human attention invested. */
-    val timeFocused: String = "22h 18m",
-    val greetingName: String = "Maya"
+    val timeFocused: String = "—",
+    val greetingName: String = ""
 )
 
 private val SummaryGreen = Color(0xFF16A34A)
@@ -74,7 +74,7 @@ private val DatePillInk = Color(0xFF14532D)
 // hairline and a soft shadow — enough to read as ONE floating summary, never as a coloured panel.
 
 /** "Tue, 23 Sep 2025" — the device's own date, formatted for display. */
-private val DateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault())
+private val DateFormat: DateTimeFormatter get() = DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault())
 
 @Composable
 fun NowDaySummary(
@@ -102,7 +102,7 @@ fun NowDaySummary(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Hi, ${values.greetingName} 👋",
+                        if (values.greetingName.isBlank()) "Hi 👋" else "Hi, ${values.greetingName} 👋",
                         fontSize = 22.sp, fontWeight = FontWeight.Black, color = Charcoal,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )

@@ -119,7 +119,7 @@ fun TaskTreeRow(
             Box(
                 modifier = Modifier.size(40.dp)
                     .testTag(taskToggleTag(row.id))
-                    .clickable(interactionSource = MutableInteractionSource(), indication = null, role = Role.Button) { onToggle(row.id) }
+                    .clickable(interactionSource = androidx.compose.runtime.remember { MutableInteractionSource() }, indication = null, role = Role.Button) { onToggle(row.id) }
                     .semantics { contentDescription = if (row.expanded) "Collapse ${row.task.title}" else "Expand ${row.task.title}" },
                 contentAlignment = Alignment.Center
             ) { Text(if (row.expanded) "▼" else "▶", fontSize = 11.sp, color = VirlinColors.TextTertiary) }
@@ -138,7 +138,7 @@ private fun StatusMarker(row: TaskRow, onComplete: (String) -> Unit) {
     Box(
         modifier = Modifier.size(40.dp)
             .testTag(taskCompleteTag(row.id))
-            .clickable(enabled = !terminal, interactionSource = MutableInteractionSource(), indication = null, role = Role.Button) { onComplete(row.id) }
+            .clickable(enabled = !terminal, interactionSource = androidx.compose.runtime.remember { MutableInteractionSource() }, indication = null, role = Role.Button) { onComplete(row.id) }
             .semantics { contentDescription = desc },
         contentAlignment = Alignment.Center
     ) {

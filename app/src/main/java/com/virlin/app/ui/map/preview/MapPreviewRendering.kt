@@ -26,7 +26,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -91,8 +94,9 @@ fun annotatedDescription(description: FormattedText): AnnotatedString = buildAnn
 @Composable
 fun MapPreviewImageView(image: MapPreviewImage, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val bitmap by produceState<ImageBitmap?>(initialValue = null, image.relativePath) {
-        value = withContext(Dispatchers.IO) {
+    var bitmap by remember(image.relativePath) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(image.relativePath) {
+        bitmap = withContext(Dispatchers.IO) {
             runCatching {
                 val file = MapPreviewImageStore.resolve(context, image.relativePath)
                 if (!file.isFile || file.length() <= 0L) return@runCatching null

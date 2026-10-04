@@ -112,9 +112,10 @@ data class ActivityActions(
 )
 
 private object AColor {
-    val ink = Color(0xFF17202C)
-    val muted = Color(0xFF647087)
-    val line = Color(0xFFE6EAF0)
+    val ink: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.text) } ?: Color(0xFF17202C)
+    val muted: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.muted) } ?: Color(0xFF647087)
+    val line: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE6EAF0)
+    // Event-kind colors below remain semantic, not project accents.
     val green = Color(0xFF54AF26)
     val greenWash = Color(0xFFF2FAEC)
     val amber = Color(0xFFBD7900)
@@ -127,7 +128,7 @@ private object AColor {
 private fun ActivityKind.color() = when (this) {
     ActivityKind.PROMPT, ActivityKind.NOTE -> AColor.amber
     ActivityKind.LINK -> AColor.blue
-    ActivityKind.IMAGE, ActivityKind.FILE -> AColor.muted
+    ActivityKind.IMAGE, ActivityKind.FILE -> Color(0xFF647087)
     ActivityKind.AUDIO -> AColor.blue
     ActivityKind.TASK -> AColor.green
     ActivityKind.CHECKLIST -> AColor.amber
@@ -198,7 +199,7 @@ fun VirlinProjectActivity(
     if (openRecord != null) {
         ActivityDetail(openRecord, zone, actions, imagePreview) { selectedRecord = null }
     } else {
-        Column(modifier.fillMaxSize().background(Color.White)) {
+        Column(modifier.fillMaxSize().background(LocalProjectPalette.current?.let { Color(it.surface) } ?: Color.White)) {
             Text("Project activity", fontWeight = FontWeight.Bold, fontSize = 20.sp,
                 color = AColor.ink, modifier = Modifier.padding(start = 20.dp, top = 16.dp))
             Text("Everything that happened in this project.", color = AColor.muted, fontSize = 13.sp,

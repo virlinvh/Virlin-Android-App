@@ -41,12 +41,18 @@ object ExecutionTiming {
         val current = open?.let { safeSeconds(it, now) } ?: 0L
         val total = mine.sumOf { safeSeconds(it, now) }
         val activeTitle = stream.activeTaskId?.let { id -> streamTasks.firstOrNull { it.id == id }?.title }
-        val stateName = when (stream.state) {
+        val stateName = if (stream.externalTrackingPaused) {
+            if (stream.state == WorkStreamState.CHECK) "Resume due" else "Tracking paused"
+        } else when (stream.state) {
             WorkStreamState.FOCUS -> "Focusing"
             WorkStreamState.PROCESSING -> "Running"
-            WorkStreamState.CHECK -> "Needs you"
+            WorkStreamState.CHECK -> when (stream.snoozeReason) {
+                SnoozeReason.EXTERNAL_RESULT_READY -> "Result ready"
+                SnoozeReason.HUMAN_RETURN -> "Return due"
+                null -> "Check due"
+            }
             WorkStreamState.READY -> "Ready"
-            WorkStreamState.SNOOZED -> "Waiting"
+            WorkStreamState.SNOOZED -> if (stream.snoozeReason == SnoozeReason.EXTERNAL_RESULT_READY) "Review reminder" else "Waiting"
             WorkStreamState.BLOCKED -> "Blocked"
             WorkStreamState.PAUSED -> "Paused"
             WorkStreamState.DONE -> "Complete"
@@ -54,7 +60,7 @@ object ExecutionTiming {
         val timing = when (stream.state) {
             WorkStreamState.FOCUS -> formatClock(current)
             WorkStreamState.PROCESSING -> stream.processingStartedAt?.let { elapsedSeconds(it, now) }
-                ?.let { "${FocusInvestment.formatCompact(it)} running" }
+                ?.let { "${FocusInvestment.formatCompact(it + stream.externalTrackedSeconds)} tracked" }
             WorkStreamState.SNOOZED -> stream.checkAt?.let { Duration.between(now, it).seconds.coerceAtLeast(0L) }
                 ?.let { "${FocusInvestment.formatCompact(it)} left" }
             WorkStreamState.DONE -> total.takeIf { it > 0L }

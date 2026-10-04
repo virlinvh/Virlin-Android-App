@@ -126,12 +126,12 @@ data class KnowledgeActions(
 )
 
 private object KColor {
-    val ink = Color(0xFF17202C)
-    val muted = Color(0xFF697588)
-    val line = Color(0xFFE5E9ED)
-    val green = Color(0xFF68B63B)
-    val greenInk = Color(0xFF2C771F)
-    val greenWash = Color(0xFFF0F8EC)
+    val ink: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.text) } ?: Color(0xFF17202C)
+    val muted: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.muted) } ?: Color(0xFF697588)
+    val line: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE5E9ED)
+    val green: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.primary) } ?: Color(0xFF68B63B)
+    val greenInk: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF2C771F)
+    val greenWash: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFF0F8EC)
     val amber = Color(0xFFAB7108)
     val amberWash = Color(0xFFFFF7E7)
     val grayWash = Color(0xFFF6F7F8)
@@ -255,7 +255,7 @@ fun VirlinProjectKnowledgeLibrary(
         } }
     }
 
-    Column(modifier.fillMaxSize().background(Color.White)) {
+    Column(modifier.fillMaxSize().background(LocalProjectPalette.current?.let { Color(it.surface) } ?: Color.White)) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Text(if (selecting) "${selected.size} selected" else "Project knowledge", fontSize = 20.sp, fontWeight = FontWeight.Bold,
@@ -558,7 +558,7 @@ private fun KnowledgeGalleryCard(item: KnowledgeItem, zone: ZoneId,
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(if (selected) "✓" else "○", fontSize = 17.sp,
-                            color = if (selected) Color.White else KColor.ink)
+                            color = if (selected) readableOn(KColor.green) else KColor.ink)
                     }
                 } else KnowledgeMoreMenu(item, actions, onMove, onDelete, onPlaceTask,
                     Modifier.align(Alignment.TopEnd).padding(5.dp))

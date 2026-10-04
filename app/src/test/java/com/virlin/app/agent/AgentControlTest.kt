@@ -113,11 +113,11 @@ class AgentControlTest {
 
     @Test fun agentComplete_taskOnly_thenWholeStreamNeedsConfirmation() = runTest {
         vm.act("s1", ControlAction.COMPLETE); advanceUntilIdle()
-        assertEquals(TaskStatus.DONE, repo.getTask("p_q17")!!.status); assertNull(s("s1").activeTaskId); assertEquals(FOCUS, s("s1").state)
+        assertEquals(TaskStatus.DONE, repo.getTask("p_q17")!!.status); assertNull(s("s1").activeTaskId); assertEquals(READY, s("s1").state)
         assertNull(vm.intents.pendingWorkStreamCompletion.value)
         vm.act("s1", ControlAction.COMPLETE); advanceUntilIdle()
-        assertEquals("s1", vm.intents.pendingWorkStreamCompletion.value); assertEquals(FOCUS, s("s1").state)
-        vm.intents.dismissWorkStreamCompletion(); assertEquals(FOCUS, s("s1").state)
+        assertEquals("s1", vm.intents.pendingWorkStreamCompletion.value); assertEquals(READY, s("s1").state)
+        vm.intents.dismissWorkStreamCompletion(); assertEquals(READY, s("s1").state)
         vm.act("s1", ControlAction.COMPLETE); advanceUntilIdle(); vm.intents.confirmCompleteWorkStream(); advanceUntilIdle()
         assertEquals(DONE, s("s1").state)
     }
