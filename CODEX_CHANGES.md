@@ -432,3 +432,306 @@ screen. No content was entered during verification.
   Pulse continue reading the same FocusSessions; no second timer system was introduced.
 - Added `EXECUTION_TIMING_FOUNDATION.md` and focused coverage for roll-ups, live summaries,
   Project isolation and mid-focus task switching. No Room or managed-file migration.
+
+## 2026-10-02 - Project execution dials
+
+- Replaced ambiguous Project WorkStream icons and amber row highlighting with internal execution
+  dials: green Focus, violet external Running, amber Needs-you Review, and static grey inactive
+  states. Card borders remain neutral and existing navigation is unchanged.
+- Added a Project execution summary using exact `FOCUS` and `PROCESSING` WorkStream counts, plus
+  redundant state bars and text pills so meaning does not depend on colour alone.
+- Refined active dials with restrained two-tone orbital motion and shimmer accents, and carried the
+  same canonical dial into the exact current Task/current-path card in the WorkStream hierarchy.
+- Replaced the shared spinner grammar with distinct approved motion: breathing emerald Focus with
+  traveling glint, cobalt comet Running, stationary heartbeat Review crescents, and squared static
+  Blocked. Multi remains reserved until a real concurrent-active domain projection exists.
+- Increased motion legibility after emulator review: Focus gaps now migrate visibly at quarter
+  speed, Running retains its faster comet flow, and Review crescents visibly open and close.
+- Made all active-state motion unmistakable: Focus rotates clockwise, Running uses the faster cobalt
+  flow, and Review rotates counter-clockwise while pulsing. Inactive states remain deliberately static.
+- Replaced the rejected circle-only treatment with the approved signal language: breathing Focus
+  brackets, flowing cobalt Running waves, a traveling Review zigzag, a static broken Blocked bridge,
+  and floating Waiting curves. The multicolor circle remains reserved exclusively for truthful Multi.
+- Kept the presentation honest to the current model: parallel external activity is represented by
+  multiple processing WorkStreams; no fake multi-task state is inferred inside a WorkStream, whose
+  canonical pointer remains `activeTaskId`.
+- Documented the mapping and extension boundary in `docs/EXECUTION_DIALS_UI.md`.
+- Verified JVM tests, Android-test compilation, APK assembly, data-preserving emulator install,
+  Project navigation, animated rendering, and a clean AndroidRuntime crash check. No schema,
+  navigation, action, timing, data, or golden-baseline change.
+
+## 2026-10-03 - Execution signal icon refinement
+
+- Replaced the Focus arcs with the approved four-corner emerald aperture and pulsing teal diamond.
+- Replaced the Review zigzag with open saffron inspection ribbons and a scanning gold diamond.
+- Animated Blocked segments horizontally toward a fixed coral lock while keeping the status and
+  domain behavior unchanged; the blocks cannot cross the locked center gap.
+- Updated the authoritative execution-signal specification. No route, action, timing, schema,
+  persisted data, task ordering, or golden baseline changed.
+
+## 2026-10-03 - Multi Run visual contract
+
+- Added the production-ready `MULTI_RUN` presentation state with a single-line `MULTI RUN` pill,
+  exact active-item count, four color-coded state bars, and independently orbiting execution ribbons.
+- Added an instrumentation-only Project fixture that renders the real production component and
+  verifies the label and accessible active count on an emulator.
+- Left Waiting unchanged and kept Multi Run dormant in production until the canonical domain can
+  report multiple active task IDs inside one WorkStream. No fake inference, schema change, or data
+  mutation was introduced.
+
+## 2026-10-03 - Workstream execution controls
+
+- Project Overview status tags now have aligned 82dp clickable targets; removed per-workstream
+  percentages while retaining project progress and task counts. Completed rows replace the left
+  animation with a static mint-square check and remove the right status badge.
+- Added centered, scrollable Workstream controls with background blur, expandable segmented
+  execution preference, separate completion checkbox and explicit confirmation. Controls use
+  existing attention intents/choosers and hierarchy focus-switch confirmation, not new timers.
+- Preserved CHECK/Result-ready reason distinctions and guarded existing legal transitions.
+  CHECK/SNOOZED completion requires resolving or ending the reminder first. Archive remains
+  disabled; task/subtask controls and domain rules remain unchanged.
+- Owned changes: HierarchyScreens.kt, HierarchyViewModel.kt, VirlinProjectExperience.kt,
+  VirlinProjectPage.kt, new WorkstreamControlsDialog.kt, WorkstreamControlsUiTest.kt,
+  docs/EXECUTION_DIALS_UI.md and this log. Fixed the pre-existing MultiRunSignalUiTest reference
+  to its existing DebugMultiRunShowcaseActivity so instrumentation compilation succeeds.
+- Verification: full JVM suite 1,160 tests, zero failures/errors; Android-test Kotlin compilation
+  passed; debug APK built and installed data-preservingly on Pixel_8 API 35. Four new UI tests cover
+  collapse/expand, completion confirmation/cancel, terminal controls, and check-due controls.
+- No Room migration, route change, golden recording, commit or push. Graphify invocation failed
+  with uv trampoline canonicalization; used targeted source reads and did not claim graph refresh.
+
+## 2026-10-03 - Unified Workstream controls visual correction
+
+- Replaced the mismatched outlined-button stack with navy text, muted supporting labels, soft
+  neutral action rows, restrained emerald primary actions and equal-width Inherit/Human/External
+  segments. Completion is a separated low-emphasis checkbox row, not part of the heading.
+- Completion, pause/return timing, handoff checks, check outcomes, review reminders and human-focus
+  switch confirmation now replace the body of one centered Dialog. A stable scrollable viewport,
+  crossfade transitions, fixed header, Back and Close keep steps visually consistent. Feedback is
+  inline; no Project-level NowChooserDialog or stacked AlertDialog remains for this flow.
+- Preserved all domain actions, transition guards, preset durations, contextual notification
+  permission and single-focus protection. Timing chips select first; Confirm executes. Archive
+  remains unsupported and is omitted rather than presenting a misleading disabled action.
+- Added Back/custom-time regression coverage. Compose input measurement failed the idle test;
+  replaced only this numeric field with a styled platform EditText inside AndroidView. The five
+  focused popup tests now pass, including custom entry and non-mutating Back/Cancel.
+- Emulator inspection verified main controls, inline pause/custom and inline completion confirmation
+  without pausing/completing the real stream. No schema, route, task/subtask menu, Now-screen visual,
+  golden, commit or push change. Owned files: WorkstreamControlsDialog.kt, HierarchyScreens.kt,
+  WorkstreamControlsUiTest.kt, docs/EXECUTION_DIALS_UI.md and this log.
+- Final verification: 1,161 JVM tests, zero failures/errors; Android-test compilation passed;
+  data-preserving install passed. Final emulator captures: C:/tmp/controls-final.png,
+  C:/tmp/controls-pause.png and C:/tmp/controls-completion.png. Golden comparison was not rerun
+  and no reference image was changed.
+# 2026-10-03 — Category-relevant workstream controls
+
+- Removed the completion checkbox; text action opens confirmation inside the same modal.
+- Added Ready external start, paused Resume later, blocked Unblock/Edit reason, and inline external result confirmation.
+- Preserved external-result readiness separately from check expiry, including review reminders.
+- Verification: 1,168 tests passed, instrumentation Kotlin compiled, debug APK installed on Pixel 8.
+- Scope remains workstream-level. Task-ledger concurrency, archive/reopen, migration and per-task Now wiring are not implemented; see docs/EXECUTION_DIALS_UI.md.
+
+## External progress controls deduplication
+
+- Removed Result ready and Block workstream shortcuts from Running and ordinary Check due main controls. Their single entry point is Check progress, with all three outcomes inside the same modal.
+- Retained Mark as complete as a distinct workstream completion action; output readiness does not imply workstream completion.
+- Eight WorkstreamControlsUiTest tests passed, including outcome placement and non-mutating Back navigation. Updated debug build installed on the emulator. No timing or domain transitions changed.
+
+## External tracking pause/resume — 2026-10-03
+
+- Added Pause tracking with preset/custom return times or indefinite pause, Resume external tracking and Change return reminder in the existing single popup.
+- Persisted accumulated active seconds and the external-paused marker through additive Room 18->19 migration. Paused wall time is excluded; reminder expiry requests attention without restarting tracking.
+- Existing human focus remains untouched. Now and notification Resume intents resume external tracking instead of opening human focus for paused external work.
+- Verification: 1,171 unit/UI tests passed. Real 18->19 migration/persistence instrumentation test passed on Pixel 8. Latest APK installed, Project popup and timing chooser inspected without changing real work; no AndroidRuntime crash logged.
+- Work remains workstream-level; concurrent task-ledger execution is still outside this change.
+
+## Human workstream controls correction
+
+- Fixed workstream IDs incorrectly sent to task-only focus resolution. Resolve active/next task, or use explicit taskless compatibility focus, with global-switch confirmation in either case.
+- Human check-due work offers Focus now and Remind later, not external progress outcomes. Existing human timed/indefinite pause and resume now reach the corrected focus path.
+- Clearing paused external responsibility to Human clears the external-paused marker, preserving saved external time. Active external intervals must first be paused; failures are visible inline.
+- Verified 1,175 tests passed. Installed build inspected on emulator: Human Focus now opens the global switch warning with current and target names; Cancel preserves current focus. No crashes logged. No commit created.
+
+## Task/subtask execution audit — 2026-10-04
+
+- Added task-scoped Work controls and ancestry context; selected external starts retain task identity.
+- Completion closes exact active activity/reminders instead of leaving ghost focus/runs. Updated old
+  tests that expected that obsolete behavior and added cleanup/overwrite/callback regression tests.
+- Guarded other-task external-run overwrites. Now shows task paths and category-correct attention.
+- Verified 1,178 unit/UI tests, instrumentation compilation and debug installation. Full task-ledger
+  concurrency is NOT implemented; documented limitations in docs/TASK_EXECUTION_AUDIT.md.
+
+## Popup rendering inspection — 2026-10-04
+
+- Reproduced divergent semantics and pixels: UI hierarchy changed while emulator screencap returned
+  an identical older frame, even after app force-stop. Reboot recovered compositor rendering.
+- Removed Project RenderEffect backdrop blur as a GPU compatibility safeguard; no proof that blur
+  alone caused the frozen emulator. Standard modal dimming and internal transitions remain.
+- Fixed the actual Now Working For You section to display project/workstream/task ancestry, not
+  only the separate detail card. Verified active Build appears there, with check-due items above
+  in attention. Current Build has no activeTaskId, so its context correctly ends at the stream.
+- Rebuilt/installed; 1,178 tests passed. Visually inspected Focus and Running Project popups after
+  reboot; both show the correct controls. AndroidRuntime log empty. No real task state changed.
+
+## External start conflict and recursive controls — 2026-10-04
+
+- Explain another active task before asking for a timer; View active work opens that exact task's
+  controls without replacing its activity. Previously the rejected start returned Ready and invited
+  repeated timer selection. Task-specific transient mode/start state now resets on task identity.
+- Added aligned clickable Work/status tags to task rows and nested task headings using the shared
+  popup. Child progress remains in subtitle instead of occupying the action slot.
+- 1,179 tests passed, including conflict preflight UI regression. Installed and checked actual
+  Waited Test 02 -> View active work -> BUild controls on emulator without mutating tasks.
+- Independent simultaneous runs and inactive-task state persistence remain outstanding.
+
+## Unified task card redesign — 2026-10-04
+
+- Removed task row overflow, arrow, numbered tile and direct completion circle. Shared execution
+  icons and clickable status tags remain; completed items use a left check. Nested headings match.
+- Integrated Rename, Add subtask, Move, Duplicate and confirmed Cancel inside Work controls. Move
+  choices exclude self/descendants. Workstream Rename preserves execution timestamps and state.
+- Emulator card layout and inline management navigation inspected without modifying real tasks.
+- Verification is NOT clean: latest full run had 1,180 passing tests and one new rename UI test
+  failing with Robolectric AppNotIdleException. Domain rename regression passed. Editor layout
+  simplified; focused regression remains under investigation. Do not report this as release-ready.
+
+## Approved recursive scroll header — 2026-10-04
+
+- Task pages now have pinned title/adaptive global-focus elapsed text, stable-ID breadcrumbs,
+  static local sibling completion counts, and All/Active/Done plus Organize at every depth.
+- Secondary header consumes scroll delta and clips beneath a white feathered mask; upward scroll
+  hides it, downward scroll reveals it. Bottom actions stay fixed. Project Overview is unchanged.
+- Build/install succeeded and targeted elapsed-format test passed. Emulator inspection confirmed
+  collapsed header retains title/time while removing progress/filters/Organize, and reverse scroll
+  restores content. No real task mutations. Full suite not rerun; prior rename UI idle failure remains.
+# Header feather and elapsed color correction
+
+- Confined the feather overlay to partially collapsed header details; expanded breadcrumbs and task cards no longer sit beneath it.
+- Added 8 dp breathing room above breadcrumbs and list cards; changed elapsed digits and underline to slate gray.
+- Verified debug build, HierarchyElapsedTest, debug APK installation, and expanded/collapsed emulator screenshots. Shared recursive layout applies the correction at every task depth. No execution data or project overview changes.
+- Full suite not rerun; previously recorded rename UI test issue remains unresolved.
+# Green rolling hierarchy timer
+
+- Replaced the labeled slate timer with green, monospace rolling digits; removed ELAPSED and decorative underline.
+- Only changed digit slots animate with a 280 ms vertical slide/fade. Timestamp-driven focus timing, recursive header placement, and conditional hour formatting remain unchanged. Accessibility exposes one complete time description rather than each animated digit.
+- Debug build and HierarchyElapsedTest passed; APK installed on emulator. Added HierarchyTimerUiTest for hour rollover, label removal, and no-focus semantics. Full suite not rerun.
+# Compact feathered timer refinement
+
+- Changed timer to layout lime green, bold 20 sp tabular sans-serif digits with tighter font-scaled slots (12 sp digits / 5 sp separators).
+- Smoothed transitions to 420 ms eased vertical motion with 340 ms fades and a digit-local alpha feather; no overlay touches hierarchy details or cards.
+- Debug build, HierarchyElapsedTest, and HierarchyTimerUiTest passed; APK installed on emulator. Full suite not rerun.
+# Scoped rotating timing and workstream Manage
+
+- Top-right timer rotates Focused/External at six-second intervals, without task counts. Focus is accumulated section/descendant session time rather than the unrelated global open session.
+- External display uses the current timestamp-backed interval only, shown for its owning task or ancestor section. Legacy workstream-level accumulated external time is deliberately not attributed to individual tasks; historical external roll-ups and concurrent independent same-stream runs remain outside this change.
+- Added Manage at stream root, opening the existing workstream controls with responsibility, focus-switch confirmation, reminder actions, and rename; task/subtask Manage retains exact task controls.
+- Timer formatting and new six-second category rotation UI tests passed; debug build passed. Full suite not rerun; prior rename test issue remains.
+
+# Independent task execution and visible timer controls
+
+- Added Room v20 task execution persistence and exact legacy activity migration without rewriting focus-session history.
+- Enabled concurrent external siblings alongside one global human focus, task-specific reminders and Now presentation, recursive Focused/External totals, and mixed-mode MULTI RUN icons.
+- Separated responsibility inheritance from live state; changing effective responsibility ends incompatible activity safely, preserves tracked time, and does not automatically start new work.
+- Moved Timer display into the visible controls list; scoped rotation settings offer 5, 6, or 7 seconds.
+- On-device migration test passed. Last full suite: 1187 tests, one existing rename-dialog idle failure. Targeted tests and debug assembly are checked separately.
+- Instrumentation runner removed the emulator installation; the pre-test database archive was restored and existing tasks verified. No user task activity was started or completed during manual UI inspection.
+
+# Now focus identity correction
+
+- Removed display rows absent from the live execution projection instead of retaining stale demo Focus cards. Persisted titles and next actions now overwrite cached display text, including clearing missing next actions.
+- Now selects its hero by the domain focus identity, not the first cached FOCUS row. Exact task/subtask names and ancestry remain domain-derived; context navigation opens the owning workstream at the exact task path.
+- Removed the invented two-minute next-action estimate. Added nested task-owned focus/rename/navigation regression coverage.
+- Debug assembly and NowHierarchyTest / TaskExecutionFoundationTest passed; updated APK installed without clearing app data. Full suite not rerun for this correction.
+
+# Now live execution audit (codex/now-live-execution-audit)
+
+- Corrected constructor-parameter shadowing: Now ViewModel projections explicitly read the task execution repository, not raw workstreams. Added ViewModel regression coverage for focused task 51 under a READY owner.
+- Ready focus cards now use exact task titles and ancestor context; navigation targets their actual owning stream and task path. Recommendations exclude external work, terminal tasks and non-executable parent nodes.
+- Disconnected the demo counter ticker from MainActivity. Display bridge redraws from persisted sessions/check timestamps once per second instead of incrementing cached demo counters.
+- Removed invented summary numbers and demo greeting identity, retaining the existing summary layout with unavailable-value markers. Persisted projects/tasks, including demo-named ones, were not deleted.
+- Debug assembly and targeted Now/task-execution tests passed. Updated APK installed without clearing data. On-device Now hierarchy inspection confirmed Virlin Development → Claude · Virlin → 51 → sb 1 as the actual focused leaf; no fake Psychology hero appeared. Full suite not rerun.
+- Work remains uncommitted on the dedicated branch; existing unrelated worktree changes were preserved. Demo implementation files remain available for recovery but the demo ticker is no longer started by the app.
+
+# Compact Focus card context segment
+
+- Changed only the Focus card title segment: main project heading, responsive one-word ancestor breadcrumb, then the full focused task name. Breadcrumbs wrap at available width; long first words receive display-only ellipsis. Full ancestor names remain in accessibility descriptions.
+- Caller passes ancestor labels separately, excluding the focused leaf to avoid repetition. Persisted titles/IDs, context navigation, timers, actions and the rest of the screen remain unchanged.
+- Debug build and 28 targeted tests passed, including ten-level narrow-width Compose rendering, context/completion callbacks, label formatting and existing Now focus/exit logic. Updated APK installed without clearing app data; full suite not rerun.
+
+# Leaf-only execution system audit
+
+- Added one structural eligibility rule: only tasks without children and empty workstreams execute. Parent controls retain management, summaries and timer-display settings but hide responsibility/execution controls. API guards prevent starting an arbitrary child through a parent.
+- Fixed paused Human-to-External mode changes to become READY for external start, never Resume focus. Startup repairs incompatible old leaf/container activity, preserving history/totals without starting another item. Explicit external-result review is marked separately.
+- Adding children to active leaves and reparenting active branches are refused until activity ends; sibling reordering remains available. End activity accumulates current external seconds and clears reminders.
+- Preserved legacy repository adapter compatibility while production uses independent leaf records. Now queues and alarms use leaf projections.
+- Full-suite run: 1201 tests, one known rename-dialog idle failure after other regressions were corrected. Final targeted execution, parent-controls, completion and Now checks passed. Debug assembly passed and APK installed without clearing data.
+- Emulator inspection confirmed parent popup execution controls absent; original management UI retained. Pre-install database/files/preferences backup: C:/tmp/virlin-before-leaf-only-audit.tar. No tasks were started/completed during manual checks; startup reconciliation may end invalid container/incompatible activity as described above.
+
+# Compact container workstream settings
+
+- Container workstream controls now show only Edit name and Mark as complete in a content-sized popup, without duplicate activity lists, timer settings, or container guidance. Leaf task and empty-workstream execution controls remain unchanged.
+- Completion is enabled for containers and explicitly confirms completing all remaining owned tasks/subtasks. One transaction closes focus sessions and external tracking, clears pending reminders/cycles, preserves recorded time/history, and leaves cancelled tasks and other workstreams unchanged.
+- Debug assembly and 72 targeted domain/UI tests passed, including nested mixed-mode completion, unrelated workstream isolation, repeat-completion rejection, popup visibility, and confirmation/cancellation. Full suite was not rerun; the previously documented rename idle test remains unresolved.
+- Updated debug APK installed without clearing app data. Pre-install recovery archive: C:/tmp/virlin-before-compact-workstream-controls.tar. No real tasks were completed for testing.
+
+# Project timer display management
+
+- Added Project settings > Timers & display with persisted 5/6/7-second Focused/External rotation selection. Explains immediate saving and display-only behavior; no activity controls or timing data are changed.
+- Passed actual project identity to hierarchy timers. A saved project preference applies across all its sections and overrides older section rotation preferences; other projects retain their settings.
+- Four targeted timer/settings UI tests and debug assembly passed. Updated APK installed without clearing app data; no schema changes. Backup: C:/tmp/virlin-before-project-timer-settings.tar.
+
+# Task and subtask navigation arrows
+
+- Added the same auto-mirrored 22dp trailing chevron used by workstreams to the shared task card, including completed cards and every hierarchy depth. Organization-mode selection/reordering remains unchanged; arrows are decorative and reuse the existing card navigation.
+- Debug assembly and 16 targeted tests passed, including arrow presence across task/subtask/deeper/completed rows and unchanged navigation/work-control callbacks. Updated APK installed with data preserved.
+
+# Parent task controls cleanup
+
+- Removed the Activity in this section list from shared work controls at every hierarchy depth. Parent task/subtask popups also omit timer-display settings and redundant container guidance, while preserving rename/add/move/duplicate/cancel/completion management.
+- Leaf execution controls and empty-workstream controls are unchanged; project timer display management remains available. Targeted parent/leaf UI and execution-foundation checks plus debug assembly passed. Installed updated APK without clearing user data.
+
+# Project overview feathered collapse
+
+- Pinned project identity and Workstreams heading; upward overview scroll collapses progress, tabs and execution signals beneath a feathered edge. Downward scrolling reveals details before scrolling the body. Cards never receive the fade. Knowledge/Activity keep bounded content and reset collapse on entry.
+- No domain data, mutations or action callbacks changed. Debug assembly and 16 targeted tests passed, including bidirectional collapse, pinned headings and Knowledge/Activity access.
+- Pre-change source copy: C:/tmp/virlin-project-scroll-rollback/VirlinProjectPage.kt. To roll back this layout, restore that copy to app/src/main/java/com/virlin/app/ui/hierarchy/VirlinProjectPage.kt, remove ProjectCollapseUiTest.kt, then rebuild/install. No database migration or data rollback is needed.
+
+# Active project screen collapse correction
+
+- Audit identified that ProjectExperienceHost renders VirlinProjectExperience, not the secondary VirlinProjectPage component changed previously. Restored that secondary component and applied collapse to the live screen.
+- Live Overview pins project identity and Workstreams/Mind map/New heading; progress, tabs, message and execution signals collapse/reveal together. Cards remain outside the feather. Knowledge/Activity remain bounded and reset the overview offset on entry.
+- Updated ProjectCollapseUiTest to instantiate the actual production component. Sixteen targeted tests and debug assembly passed. Installed APK and emulator inspection confirmed collapsed headings with details hidden, then tabs/signals restored on downward swipe. No task mutations were performed.
+- Actual-screen rollback source: C:/tmp/virlin-project-scroll-rollback/VirlinProjectExperience.kt. Restore that file and remove the collapse-specific test, rebuild/install; no database changes are involved. Earlier rollback instructions targeted the secondary component only and are superseded by this correction.
+
+# Project appearance palette
+
+- Added Content & appearance > Project colors (also reachable from Identity) with 23 named presets, six lighter/darker shades, hue/saturation wheel, brightness slider, hex input, live miniature preview, five palette roles and two text roles. Save/Discard are pinned; Reset is draft-only until saved.
+- Local per-project SharedPreferences persistence and reactive listeners preserve settings across restart without schema migration. Missing/corrupt preference falls back to the original look. Preferences are device-local and not part of existing domain project-export/duplication payloads; do not claim cross-device palette transfer.
+- Connected static accents on the real project experience, directory rings, project settings and recursive task screens. Semantic execution washes/dials/pills/timer digits, destructive colors, custom images and global navigation are not themed. Neutral surfaces/library details retain some existing defaults; no domain activity data changes.
+- Contrast validation covers custom text against page/white/status-card surfaces and secondary links against page/white; filled task buttons choose readable foregrounds. All 23 presets satisfy validation. Labels describe warm/cool/neutral families without psychological guarantees.
+- Debug assembly and 19 targeted tests passed: palette serialization/fallback, all preset contrast, draft/save/discard/reset, scope isolation, unreadable custom text, live-page scrolling, task navigation, timer settings and execution foundation. Full suite not rerun. Final APK installed with data preserved; pre-install recovery archive C:/tmp/virlin-before-project-colors.tar.
+- User-facing rollback: Project colors > Reset to original > Save palette restores the original static appearance without touching execution data.
+
+## 24th preset
+
+- Added Sand (#C2A878), completing the six-row/four-column preset grid. Updated displayed counts and count assertion to 24. All preset contrast validation and five appearance tests passed; debug assembly and data-preserving APK update succeeded.
+
+## 2026-10-04 — Development checkpoint and premium-readiness audit
+
+- Added `docs/PREMIUM_READINESS_AUDIT_2026-10-04.md` and linked it from `docs/PROJECT_DOCUMENTATION_INDEX.md`. Documents recent execution, hierarchy, Now, controls, timers and 24-color appearance work, findings and proposed release gates.
+- Full unit/UI suite: 1,213 executed, 1,212 passed, rename-dialog idle timeout failed. Debug lint: 19 errors and 122 warnings. Independent release assembly passed and produced an unsigned APK; release manifest excludes debug showcase.
+- Identified bounded-import parsing, parent-task completion consistency, production demo seeding, target/signing readiness, backup/privacy, palette coverage and scale-validation concerns. Suggestions only; no application behavior changed.
+- No commit/staging, install, data reset or connected instrumentation run. Current user-data emulator preserved. Owner decides checkpoint commit and follow-up fixes after reviewing the report.
+
+## 2026-10-04 — Authorized audit remediation
+
+- Bounded attachment parsing and remote images: new `ImportBudget.kt`, `OoxmlReaders.kt`, `UniversalFileViewer.kt`, `ProjectMapScreen.kt`, `LinkEditorScreen.kt`; added import-budget regressions.
+- Transactional subtree completion/cancellation, history-safe restore and explicit container confirmations: `StructureActions.kt`, `HierarchyScreens.kt`, `WorkstreamControlsDialog.kt`; updated structure regressions and added `HierarchySafetyTest.kt`.
+- Release demo seed guard: `VirlinGraph.kt`. Backup transport rules: `res/xml/backup_rules.xml`, `res/xml-v28/backup_rules.xml`, `res/xml/data_extraction_rules.xml`; added `BackupPolicyTest.kt` and security/privacy contract.
+- SDK 36 / AGP 8.9.1 / Gradle 8.11.1, verified wrapper checksum, optional secure-environment release signing and native-test fork/heap bounds: root/app build scripts and wrapper properties. Added owned adaptive launcher resources and manifest icon.
+- Iterative hierarchy and batched progress: `TaskHierarchy.kt`, `HierarchyPresentation.kt`, `ProgressCalculator.kt`, `ExecutionSummary.kt`; lazy overview/static palette surfaces in project experience/knowledge/activity/task screens. Lifecycle-aware clocks in `NowScreen.kt` and `WaitingTime.kt`.
+- Lint state/API fixes in mind-map rendering, context pickers, composer/sheet interactions, hierarchy components, ProjectIcon and MapPreviewRendering; locale fixes in AttachmentKindResolver and NowDaySummary. No blanket baseline added.
+- Standalone execution owner guard in `DefaultVirlinActions.kt`. Android regression coverage in new `WorkControlSafetyUiTest.kt`; native Robolectric rename test relocated to this real Android test after persistent idle incompatibility. Room/migration instrumentation fixtures now assert schema 20 and canonical leaf execution.
+- Local suite: 1,228 passed / 0 failed / 0 skipped. Lint: 0 errors, 127 warnings, 12 notices. Debug/test/release assembly succeeded. Isolated Android device regression results and release gates are recorded in `docs/AUDIT_REMEDIATION_2026-10-04.md`.
+- No staging, commit, push or user-emulator installation/reset. All Android instrumentation used disposable emulator-5556; the populated emulator-5554 was untouched.
+- Final Android pass: 40/40 passed, covering migrations through schema 20, durable persistence/reload, priority/rank recovery and rename/completion confirmation. Final lint rerun and CRLF-aware whitespace check also passed.

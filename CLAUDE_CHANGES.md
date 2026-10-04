@@ -911,3 +911,57 @@ manual. Reflow was exercised only in the tree layouts. Limitations are listed in
 instrumented tests share the real database and `DemoStateRule` restores the demo fixture). This
 cleared 3 captures / 3 Page blocks / 3 attachments during this work; they were restored from a
 snapshot at the user's direction, and the user confirmed connected tests may be run freely.
+
+## 2026-10-04 — Execution/appearance/audit checkpoint reviewed and published
+
+Claude acted as reviewer and publisher for this checkpoint. **The feature and remediation work in
+it is Codex's**, recorded in `CODEX_CHANGES.md` and `docs/AUDIT_REMEDIATION_2026-10-04.md`; this
+entry records only the review, verification and publication.
+
+**Checkout and branch.** Verified that `C:\tmp\virlin-execution-timing` — a worktree of the main
+repository on `codex/now-live-execution-audit` — holds the latest work. The original checkout at
+`C:\Users\tre21\Documents\Android Apps\Virlin` is stale (`feature/attachment-workspace`, clean) and
+was not modified. The branch was 5 ahead / 0 behind `origin/main` (`a30d676`), so it fast-forwards.
+
+**Reviewed, not blindly staged.** 83 tracked modifications (+2,096 / −575) and 40 untracked files
+were inventoried individually. All 40 untracked files are source, exported schema, tests, docs or
+resources; no APK, database, log, keystore or SDK download was staged. A secret-shaped scan over all
+124 files found nothing, and `.gitignore` already covers APKs, keystores and build outputs.
+
+**Claims traced to implementation rather than taken from documentation.** Leaf-only execution is
+enforced in the action layer (`ExecutionEligibility` used from `DefaultVirlinActions` and
+`StructureActions`), not only in UI, and a workstream with no tasks correctly reads as a leaf so it
+can run itself. `DemoSeed.applyIfEmpty` is gated behind `BuildConfig.DEBUG`, so production durable
+startup cannot insert sample data; the unconditional `DemoSeed.build` feeds only the in-memory
+fallback repository. Ownerless standalone execution is rejected before any cycle/session write.
+Schema is v20 with 19 registered migrations; 18→19 and 19→20 are additive `ADD COLUMN` plus a
+backfill, and there is no `fallbackToDestructiveMigration` anywhere in `app/src/main`. Release
+signing requires all four `VIRLIN_*` variables or none, so a partial configuration fails clearly and
+no credentials exist in the repository. The 24 appearance presets with `Sand` as the 24th are pinned
+by `assertEquals(24, projectColorChoices.size)`.
+
+**Verification rerun rather than quoted.** The first run reported 127 of 129 tasks up-to-date, so its
+results were Codex's, not a fresh check. A `--rerun-tasks` attempt then failed with an out-of-memory
+error in `:app:compileReleaseKotlin` (`org.gradle.jvmargs=-Xmx2048m`) before reaching the tests — an
+environment limit, not a code defect. The checks were therefore rerun in stages, each genuinely
+executed:
+
+- `testDebugUnitTest`: **1,228 passed, 0 failures / 0 errors / 0 skipped** (task executed, results
+  rewritten).
+- `lintDebug`: **0 errors, 127 warnings, 12 informational** (reports deleted first and regenerated).
+- `assembleDebug`, `assembleDebugAndroidTest`, `assembleRelease`: all succeeded. Release output is
+  `app-release-unsigned.apk` (14,102,958 bytes) — correctly unsigned without owner credentials.
+- Instrumentation: **40 passed, 0 failures**, pinned with `ANDROID_SERIAL=emulator-5556` to the
+  disposable `Virlin_Audit_20261004`.
+
+**Device safety.** The serial-to-AVD mapping was re-verified immediately before any device work:
+`emulator-5554` → `Pixel_8` (the user's data) and `emulator-5556` → `Virlin_Audit_20261004`. Nothing
+was installed on, tested against, cleared or reset on `emulator-5554`; its `lastUpdateTime` remained
+`2026-10-04 16:44:30`, before this session, and its databases were untouched.
+
+**Observations left for follow-up, not changed here.** `gradle/libs.versions.toml` still declares
+`agp = "8.6.1"`, which is unreferenced — the build applies 8.9.1 from the root `build.gradle.kts`,
+so it is a stale value that misleads a reader rather than a build problem. The remediation report
+states `core.autocrlf=false` / `core.whitespace=cr-at-eol`, but this checkout has
+`core.autocrlf=true` and no `core.whitespace`; `git diff --check` is clean either way. Neither was
+modified, to keep unrelated changes out of the checkpoint.

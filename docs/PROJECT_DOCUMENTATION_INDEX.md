@@ -27,6 +27,10 @@ shared extension foundation needed by future Plus-menu features.
 
 ## Read first
 
+Current checkpoint: `PREMIUM_READINESS_AUDIT_2026-10-04.md` — recent feature history,
+safety/stability findings, 1,213-test results, lint/release evidence and proposed fix order.
+This dated audit supersedes older test totals, but does not replace feature contracts.
+
 1. `ARCHITECTURE.md` — system boundaries and dependency direction.
 2. `DATA_AND_STORAGE.md` — Room schema, repositories, managed files and migration rules.
 3. `NAVIGATION_AND_FEATURES.md` — routes, canonical screens, compatibility routes and feature state.
@@ -43,6 +47,7 @@ shared extension foundation needed by future Plus-menu features.
 - `PROJECT_SETTINGS_FOUNDATION.md`
 - `TASK_HIERARCHY_CLEANUP.md`
 - `EXECUTION_TIMING_FOUNDATION.md` — canonical state, Current/Focus switching and time roll-ups
+- `EXECUTION_DIALS_UI.md` — Project Overview execution indicators and canonical state mapping
 - `NOTE_SYSTEM_CLEANUP.md`
 - `PDF_FEATURE_FOUNDATION.md`
 - `PROMPT_FEATURE.md`
@@ -75,6 +80,11 @@ relevant contract rather than restating it differently.
 - `CODEX_CHANGES.md`, `CLAUDE_CHANGES.md` — append-only agent work logs, not architecture specs.
 
 ## Documentation rule
+
+- `AUDIT_REMEDIATION_2026-10-04.md` — fixes, verification and remaining release gates following the readiness audit.
+- `SECURITY_AND_PRIVACY.md` — local storage, backup transport and untrusted-input boundaries.
+
+- `TASK_EXECUTION_AUDIT.md` — task/subtask control fixes, Now routing and remaining ledger gaps.
 
 Code is the final source of truth. If code and documentation disagree, stop feature work, record the
 conflict, verify intended behavior, and update the authoritative document in the same change as the

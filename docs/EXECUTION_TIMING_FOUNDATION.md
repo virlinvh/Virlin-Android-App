@@ -15,7 +15,12 @@ record what truly happened. Reordering, renaming and changing parents never rewr
 - **Position:** `WorkStream.activeTaskId` is the exact current Task. Its ancestor path is derived.
 - **History:** `FocusSession(startedAt, endedAt, workStreamId, taskId)` records human attention.
 
-No elapsed counter or parent total is persisted. Timestamps are the source of truth.
+Human sessions use timestamps; no parent total is persisted. External tracking additionally
+persists accumulated active seconds so paused intervals are excluded.
+
+Completing/cancelling the exact active task closes its activity and clears its live reminder,
+returning the stream to Ready without automatically starting another task. See
+TASK_EXECUTION_AUDIT.md for current task controls and the outstanding task-ledger foundation.
 
 ## State presentation
 
