@@ -1,5 +1,122 @@
 # Codex Change Log
 
+## 2026-10-05 — Workstream/task/subtask permanent deletion
+
+- Extended the atomic deletion/cleanup receipt to branch roots, preserving their project, parent/siblings, shared tags, palette/icon and project notes. Existing project receipts remain backward-compatible.
+- Added exact-name confirmation and destructive control rows for workstreams, tasks and nested/terminal subtasks; project overview and standalone menus are wired. Existing cancellation is unchanged.
+- Iterative cycle-safe traversal removes arbitrary-depth descendants. Clears surviving active-task pointers, stops legacy tracking tied to deleted work, removes task events on parent streams and prunes map-color overrides without wiping project appearance.
+- Added a 5,000-level regression, Room branch ownership/rollback/recovery checks and controls UI regressions. Documented in `docs/HIERARCHY_DELETION_2026-10-05.md`. No real user item deleted, data reset, migration, commit or push.
+- Verification: full regression suite passed 1,301 tests. After the final retained-conversion-reference safeguard, debug assembly and all 30 focused deletion/control checks passed; whitespace check passed. Retained source knowledge is kept, with only its stale deleted-task pointer cleared.
+
+## 2026-10-05 — Permanent project deletion
+
+- Audited every owned Room table and managed-storage root; replaced the Project management deletion placeholder with a separate typed-name permanent-deletion confirmation.
+- Deletes hierarchy, captures/documents, tags, rich notes, map previews, execution history and preferences in one database transaction. Durable cleanup receipts protect interrupted file/platform cleanup and retry at startup; unrelated projects and original/exported external files remain untouched.
+- Cleans exact managed attachment, voice, icon and preview directories, alarms/notifications and appearance/timer settings. Serialized map appearance and delayed-autosave fences prevent resurrection.
+- Added isolated in-memory, Room cascade/rollback/retry/path-safety and Compose confirmation regressions. See `docs/PROJECT_DELETION_2026-10-05.md` for ownership and legacy-export boundaries. No existing user project was deleted for testing; no migration/reset/commit/push.
+- Verification: full regression run passed 1,296 tests with zero failures/errors/skips. Final debug assembly and all seven deletion-focused tests passed after the timer-key correction and destructive-row styling; CRLF-aware diff check passed.
+
+## 2026-10-05 — Circular clearance across project navigation
+
+- Replaced rectangular project-row reservations with full-width card surfaces and local circular orb cutouts. Directory/filter cards, overview workstreams/knowledge previews/disclosures, shared task/subtask cards and task-index rows use protected inner content bands; Activity uses circle-aware content clearance.
+- Knowledge retains individual text/menu/selection clearance and equal-width grid columns. Existing footer/Add Task reservations, callbacks and data remain unchanged. Mind map and unrelated app screens remain excluded.
+
+## 2026-10-05 — Local circular Knowledge orb clearance
+
+- Restored equal-width Knowledge gallery pairs. Cards keep their full measurement and use a local circular cutout around the orb plus 8dp, rather than shrinking the whole row.
+- Individual text bands and menu/selection controls reserve circle-chord clearance only on intersection. Other project screens retain existing protection; storage and callbacks are unchanged.
+- Added circle geometry and equal-width/menu interaction regression tests.
+
+## 2026-10-05 — Project navigation orb coverage
+
+- Extended dynamic orb clearance to project directory cards and filtered results, shared workstream/task/subtask rows (including standalone tasks), project task index, Knowledge gallery rows and Activity timeline rows.
+- Preserved bottom Add Task/Subtask clearance, footer, existing controls and data. Mind map and unrelated app screens intentionally excluded. Coverage details: `docs/PROJECT_ORB_COVERAGE_2026-10-05.md`.
+
+## 2026-10-05 — Dynamic project-page orb clearance
+
+- Published the real shell orb slot bounds to page content. Project overview rows reserve end clearance plus an 8dp gap only while intersecting the orb; rows above or below it keep full width.
+- Applied clearance to workstream/standalone cards, disclosure headers, knowledge previews, empty labels and View all actions. Header labels can wrap to two lines rather than crowding the Add/arrow targets.
+- No orb repositioning, data changes or task-control changes. Existing footer and Add Task reservations remain intact. Added geometry and measured-layout regression checks.
+
+## 2026-10-05 — Project overview section disclosures
+
+- Standalone tasks and Project knowledge start collapsed with separate Add buttons and accessible right-arrow disclosures. Each section opens independently; existing task cards and latest-knowledge/View all actions are preserved.
+- Header icon and background shades derive from the live project appearance palette. Execution status colors, workstreams, footer and storage are unchanged.
+- Added disclosure callback/color regression checks and updated the existing project scrolling regression to expand the standalone list explicitly.
+
+## 2026-10-05 — Mind-map Add menu cleanup
+
+- Removed the unsupported Sticker and Illustration choices and their obsolete dimmed-options message from the shared mind-map Add palette. The eight supported choices, their routes, selection behavior and close action are unchanged; no storage or map-data changes.
+- Added a UI regression check for option removal and all remaining choice callbacks.
+
+## 2026-10-05 — Standalone task parity
+
+- Standalone project tasks reuse workstream TaskRow visuals, nested-task navigation and shared work controls. The add form exposes execution inheritance and sibling placement.
+- Existing IDs, null workstream ownership, sessions and descendants are preserved. Moves use validated project branch placement, not a synthetic workstream mutation.
+- Full regression suite: 1,260 tests passed; final targeted navigation/projection checks also passed. See `docs/STANDALONE_TASK_PARITY_2026-10-05.md`.
+
+## 2026-10-05 — Popup system-navigation/device compatibility
+
+- Audited custom dialogs, Material alerts/sheets and anchored options after the Galaxy S21 report. Added `docs/POPUP_DEVICE_COMPATIBILITY_AUDIT_2026-10-05.md` with cause, coverage, fixes and physical-device acceptance steps.
+- Added `SafeDialog.kt` and routed all direct custom UI dialog windows through it. Platform-constrained measurement plus native/Compose safe inset union avoids the configuration-height overflow reproduced on a compact three-button emulator. Keyboard resize, Back/outside policies and existing callbacks preserved.
+- Settings minimum height removed; actions remain separate from scrolling categories. Long custom forms, task execution/move sheets, activity date selection and block transfer choices are scrollable. No database/engine changes or data clearing.
+- Added `PopupViewportUiTest.kt`: API 28/34 compact, large-font, landscape and long-form scroll checks. Final full debug unit/Compose suite passed: 1,258 tests, zero failures/errors. Work-controls execution disclosure avoids size animation to prevent repeated window measurement; options/callbacks retained.
+- Live compact three-button settings check passed after the platform-measurement fix; Back/Home/Recents remained available. Native display/density and gesture navigation restored. Latest APK installed with `-r` without clearing data; Samsung physical retest remains required. `assembleDebug` and `lintDebug` passed; lint retains 127 existing warnings and 12 informational issues, no errors. Whitespace check passed. No commit or push.
+
+## 2026-10-05 — Approved minimal task creation styling
+
+- New `TaskCreationCard.kt`: reusable text-first form, quiet medium-weight 16sp heading, small project-accent add emblem, muted parent name, soft 18sp name input, compact optional-control slot, close/cancel and validated trimmed creation. No automatic execution.
+- `VirlinStreamTasks.kt`: placement and execution become compact dropdown selectors; correct Add task/Add subtask wording. Existing in-content centered responsive overlay and data callbacks retained.
+- `HierarchyComponents.kt` / `HierarchyScreens.kt`: standalone project task creation uses the same card in a footer-safe in-content overlay. Existing optional effort estimate remains behind a compact disclosure; only supported options are offered.
+- `MapStructureEditor.kt` / `ProjectMapScreen.kt`: mind-map child creation uses the shared card with project palette and original inherited/appended placement semantics. Existing map dialog hosting is retained.
+- `WorkstreamControlsDialog.kt`: add-child step uses the shared form while rename/other controls remain unchanged. Existing parent-inherited child creation callback retained.
+- `AddTaskDialogUiTest.kt`: added selection-menu regression for explicit external mode and at-beginning placement, preserving existing compact layout/blank validation/cancel checks. Full verification recorded after completion; no data clearing, engine changes or remote writes.
+- Verification: full debug unit/Compose suite passed (1,252 tests, zero failures/errors); `lintDebug` and `assembleDebug` succeeded; whitespace check passed. APK installed in place without clearing data. Live emulator check confirmed the quiet heading, name-first layout, compact selectors and visible footer on the workstream task form; no test task was saved. Existing map/control dialog hosting remains unchanged, so this is not a claim of universal device/keyboard certification.
+
+## 2026-10-05 — Centered responsive task creation
+
+- `VirlinStreamTasks.kt`: task/subtask creation uses a centered, width-bounded, scrollable in-content overlay rather than a bottom-sheet window. The viewport excludes the real app footer. Back/scrim/cancel dismiss, title validation and existing placement/execution/save callbacks are preserved. Draft fields use saved state. No creation-engine changes.
+- `VirlinApp.kt`: root Scaffold respects IME padding so the actual navigation footer remains above the keyboard. Child IME padding consumes inherited insets, avoiding double application. System navigation insets remain managed by the existing shell.
+- `AddTaskDialogUiTest.kt`: compact viewport footer separation, blank validation, trimmed save with original defaults and cancel-without-save checks. These tests and task/subtask scroll regressions passed (four tests); final shell build verification follows. No reset, commit or push.
+
+## 2026-10-05 — Project-colored hierarchy timer
+
+- `HierarchyTimer.kt`: digit color reads the live LocalProjectPalette main accent, keeping existing green only when no custom palette exists. Applies to task/subtask header focused and external display without changing timing, rotation, animation, labels or semantic execution colors.
+- `HierarchyTimerUiTest.kt`: verifies gold-to-blue palette updates with unchanged elapsed time. Color regression uses the exact render color exposed in timer semantics because Robolectric window capture timed out. Existing hour-boundary and category-rotation tests remain.
+- Verification: all three timer Compose tests and debug APK assembly passed; whitespace check passed. Emulator updated in place without clearing data. No commit or push.
+
+## 2026-10-05 — Task/subtask list-first header reveal
+
+- `VirlinStreamTasks.kt`: recursive task lists now use the same ProjectHeaderScrollConnection as project overview. Downward gestures scroll children back to the beginning before revealing hidden details. Existing upward collapse, feather gradient, timers, filters, buttons and navigation remain unchanged. Added a details test tag only.
+- `ProjectHeaderScrollConnection.kt`: documentation now reflects use at all hierarchy levels; behavior unchanged.
+- New `TaskListCollapseUiTest.kt`: root and two-level-nested lists with 30 entries verify collapse, list-first reverse scrolling and eventual header reveal. Project scroll regressions also rerun. No data or execution-engine changes; rollback is limited to the task-page connection wiring.
+- Verification: five targeted unit/Compose tests and debug assembly passed; whitespace check passed. Pixel_8 updated with data-preserving APK installation. No commit or push.
+
+## 2026-10-05 — Project list-first header reveal
+
+- `VirlinProjectExperience.kt` and new `ProjectHeaderScrollConnection.kt`: collapse the details before upward list scrolling, but allow the overview list to consume downward movement first. Reveal hidden details only from remaining downward movement after the list reaches its top. Pinned project title/Workstreams heading and existing feather gradient remain unchanged. Other tabs and task/subtask scrolling are untouched.
+- `ProjectHeaderScrollConnectionTest.kt`: tests bounded collapse, list-consumed downward movement, partial leftover reveal, fully expanded boundary, disabled tabs and zero-height behavior.
+- `ProjectCollapseUiTest.kt`: updated the UI journey to verify header stays collapsed away from list top and reveals after returning to the beginning. No migration, execution changes, reset, commit or push. Rollback is limited to this connection and its project-page wiring.
+- Verification: all three targeted scroll/unit/Compose tests and debug assembly passed. Zero-height consumption explicitly returns Offset.Zero. Whitespace diff check passed; Pixel_8 updated in place without clearing user data.
+
+## 2026-10-05 — Execution legend mockup visual correction
+
+- `VirlinProjectPage.kt`: restored the mockup's mint circular pulse emblem and compact four semantic chips with distinct circular count badges, reduced chip typography/padding, and violet Multi-run. Retains user-requested right-facing arrow, arrow-only disclosure, wrapping at larger font sizes, and all original summary counts.
+- `ExecutionDisclosureTest.kt`: checks pulse presence and accessible combined chip descriptions alongside expand/collapse and inert-label behavior. Targeted Compose test and debug assembly passed; whitespace check passed. In-place emulator update preserves data. No engine/parent UI changes or remote writes.
+
+## 2026-10-05 — Compact execution disclosure
+
+- `VirlinProjectPage.kt`: replaced the tall Execution signals legend and tagline with a 44dp compact Execution row, existing live active count, and right-facing arrow button. Only the arrow expands/collapses read-only Focus/Running/Multi-run/Review chips. FlowRow handles narrow widths; expansion is saved per project. Active totals remain human + external, never double-counting multi-run summaries.
+- `VirlinProjectExperience.kt`: supplies existing workstream-derived Multi-run and Review summary counts to the shared legend. No parent page, execution engine, filters or persistence changes.
+- `ExecutionDisclosureTest.kt`: verifies initial collapsed state, absence of tagline, inert label tap, all four counts after arrow click and collapse after second click.
+- Debug build and targeted Compose regression passed; whitespace diff check passed. APK installed in place on Pixel_8 without clearing data. No commit or push.
+
+## 2026-10-05 — Correct selected-tag styling to approved mockup
+
+- `FilteredProjectTasks.kt`: replaced default purple Material filter chips and outlined cards with the approved full-width mint/gray segmented control, white borderless rounded cards, compact inline semantic status badges, explicit directory typography and muted ancestry/timing. Project icon/count/down-chevron headers enclose the first result; subsequent results remain separately virtualized cards. Active overdue external work is labelled RUNNING, not mistaken for stopped review work.
+- All directory styling, filtering projection, stored data, task navigation and execution behavior remain unchanged. Group collapse and toggle semantics retained.
+- Targeted regression/Compose tests (eight) and debug APK assembly passed after the final group layout change. Installed as an in-place update without clearing emulator data. No commit/push.
+
 This is the append-only handoff log for changes made by Codex in this working tree.
 It exists so Claude, Codex, and the human developer can see what Codex changed without
 having to infer intent from a large, shared diff.
@@ -735,3 +852,39 @@ screen. No content was entered during verification.
 - Local suite: 1,228 passed / 0 failed / 0 skipped. Lint: 0 errors, 127 warnings, 12 notices. Debug/test/release assembly succeeded. Isolated Android device regression results and release gates are recorded in `docs/AUDIT_REMEDIATION_2026-10-04.md`.
 - No staging, commit, push or user-emulator installation/reset. All Android instrumentation used disposable emulator-5556; the populated emulator-5554 was untouched.
 - Final Android pass: 40/40 passed, covering migrations through schema 20, durable persistence/reload, priority/rank recovery and rename/completion confirmation. Final lint rerun and CRLF-aware whitespace check also passed.
+
+## 2026-10-04 — Main checkout integration and Working for you repair
+
+- Fast-forwarded the clean Documents checkout's `feature/attachment-workspace` to the reviewed latest checkpoint. Preserved old HEAD as `codex/attachment-before-latest-20261004`; verified debug assembly from the requested location. No remote push or user data changes.
+- `ExternalWork.kt`: exact work-item display title and live external-run projection that retains overdue processing and actively tracking CHECK items. Paused/stopped/result-ready items remain excluded.
+- `NowScreen.kt`: Working for you title uses task identity, not actor fallback. `NowViewModel.kt`: corrected contract comment; due reminders remain in Needs You without hiding ongoing work.
+- `ExternalWorkTest.kt`: concurrent same-workstream leaf identity, overdue visibility, rename/fallback and stopped-state regressions; updated existing due-boundary expectation. Added `docs/WORKING_FOR_YOU_FIX_2026-10-04.md` explaining causes and contract.
+- Verification: full local suite 1,230 passed with zero failures/errors, lintDebug and assembleDebug passed. Documentation index links the fix. No device install/reset, commit or push.
+
+## 2026-10-04 — When you're free icon consistency
+
+- `ProjectIdentity.kt`: added cycle-safe exact work-item project resolution through task ownership/ancestry and workstream. Returns the actual project object, retaining its custom/built-in icon metadata; never borrows an unrelated project.
+- `NowViewModel.kt`: exposes canonical owner workstreams for identity lookup. `NowScreen.kt`: all When you're free cards render an icon; project-backed tasks/subtasks use their project icon, genuinely projectless items use the existing deterministic icon fallback.
+- `ProjectIdentityTest.kt`: regressions for nested tasks with missing direct project IDs, owning workstream/custom icon preservation, missing projects and cyclic/projectless ancestry. Focus actions, ordering and stored task data unchanged.
+- Verification: project-identity regression tests and debug APK assembly passed; CRLF-aware diff check passed. No commit/push or data reset.
+
+## 2026-10-04 — Approved When you're free card layout
+
+
+- Removed the optional estimate pill from `VirlinWhenFreeCards.kt`; rendered muted accumulated focused time separately beneath the single-line hierarchy. Original estimates remain stored and untouched.
+- New read-only `WhenFreePresentation.kt` resolves ancestry nearest-parent first, then workstream and project, without repeating the current title. Long paths use one-line ellipsis in the card. Focus totals use recorded sessions with duplicate-ID protection, zero as 0m and no invented estimates.
+- `NowViewModel.kt` refreshes focus history labels on task/workstream changes; `NowScreen.kt` supplies hierarchy and focused labels while retaining icon/action wiring.
+- Added `WhenFreePresentationTest.kt` for reverse ancestry, task-less hierarchy, zero focus, sibling exclusion and duplicate-session protection. No execution/data migration or remote push.
+
+## 2026-10-04 — Projects search bar cleanup
+
+- `VirlinProjectDirectory.kt`: removed trailing green filter glyph, divider and click target from the search bar. Search input and status chips remain unchanged. Debug assembly passed; updated emulator through data-preserving APK installation.
+
+## 2026-10-05 — Status-filtered Projects / Tasks directory
+
+- `DirectoryWorkProjection.kt`: read-only leaf execution projection, consistent status matching, exact names, ancestry search, recorded timing and project ownership. Overdue running work intentionally also matches Needs You. Paused external work is not Ready.
+- `StreamsScreen.kt`: All remains the original project directory. Status selections default to grouped Tasks with a Projects / Tasks switch; navigation uses stable task IDs and ancestry paths. Lifecycle-aware ticking updates due classifications and timing.
+- `FilteredProjectTasks.kt`: collapsible project groups, projectless group, project icons, single-line reverse ancestry, timing, status labels and navigation chevrons. Controls never start execution.
+- `VirlinProjectDirectory.kt`: finite status chips; clearer labels and Paused filter; edge fades only when scrolling is possible.
+- Added six projection regressions and two Compose interaction regressions. Documented behavior/rollback in `docs/PROJECT_DIRECTORY_FILTERS_2026-10-05.md` and linked the documentation index. No migration, reset, commit or push.
+- Verification: 1,243 tests passed; debug assembly and lint passed (zero errors, 127 warnings); whitespace diff check passed. APK installed with `adb install -r` on Pixel_8; live UI verified All and Running/Tasks with exact nested task results. Test fixture corrected to use domain `checkAt`; a transient overlapping-build file lock was resolved by rerunning verification.

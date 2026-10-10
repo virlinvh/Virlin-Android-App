@@ -965,3 +965,80 @@ so it is a stale value that misleads a reader rather than a build problem. The r
 states `core.autocrlf=false` / `core.whitespace=cr-at-eol`, but this checkout has
 `core.autocrlf=true` and no `core.whitespace`; `git diff --check` is clean either way. Neither was
 modified, to keep unrelated changes out of the checkpoint.
+
+## 2026-10-10 — Multi-session checkpoint audited and committed
+
+Audit and commit of work accumulated across several sessions in the main checkout
+(`C:\Users\tre21\Documents\Android Apps\Virlin`), reviewed from the files and the diff rather than
+from chat summaries.
+
+**State found.** The branch `feature/attachment-workspace` sat at `d77d8cd`, identical to
+`origin/codex/now-live-execution-audit`, with **no upstream** and **no unpushed commits** — all the
+new work was uncommitted: 80 modified, 2 deleted, 109 untracked. All 109 untracked files were
+source (31), tests (57) or documentation (21); no APK, database, log, keystore, build output or
+machine-specific file was present, nothing exceeded 300 KB, and a secret-shaped scan over all 188
+files found nothing.
+
+**Claims checked against the implementation.** `DailySavings` is completion-based estimated effort
+minus recorded human focus for leaf tasks completed today, floored at zero — its own comment says
+"not external wall-clock time" — and it degrades honestly rather than inventing a figure. There is
+no live "external time today" aggregate anywhere, matching the statement that it is not
+implemented. `DailyFocus` clamps sessions to the day, de-duplicates and never counts future time,
+keeping human and external separate. Schema stays at **v20** with no entity change; the only
+database additions are two queries over the existing `meta` table, so no migration is required.
+Subtree deletion runs inside one Room transaction against an explicitly computed scope and writes a
+recovery receipt to `meta` before deleting, so interrupted file cleanup is resumable. The Orb's
+route predicate was separated from the bottom bar's and popups suppress it. The FOCUSING NOW pulse
+is gated on `ValueAnimator.areAnimatorsEnabled()`, so it honours reduced-motion.
+
+**The stalled dialog tests — diagnosed, not worked around.** The stall reproduces. A full-suite run
+produced one test XML and then nothing for 15 minutes; a thread dump showed the worker parked in
+`RobolectricIdlingStrategy.runUntilIdle` → `ComposeIdlingResource.isIdleNow`, with
+`com.virlin.app.now.InlineLeaveUiTest.customStaysInLeaveDialogAndSavesExactMinutes` on the stack.
+Running that class alone produced no result in 7 minutes. It is **not** environmental: the
+pre-existing Compose test `AgentEntryLayoutTest` runs 5 tests in 33 seconds on the same machine.
+
+**Correction to the commit message of `ca3a44b`:** that message attributes the stall to
+`SafeDialog`. Further bisection **disproved** this, and the attribution should be read as withdrawn.
+
+The cause is **not** `SafeDialog`, not text input and not the activity-result launcher. Each was
+probed in isolation inside a dialog and each idles normally: a plain Compose `Dialog` (31 s), a
+`SafeDialog` with static content (63 s), a `SafeDialog` containing a `BasicTextField` driven by
+`performTextInput` (46 s), a `SafeDialog` containing `rememberLauncherForActivityResult` (17 s), and
+the real `NowChooserDialog` composed and asserted without interaction (16 s). Disabling
+`SafeDialog`'s `OnGlobalLayoutListener` outright did **not** stop the hang, so the inset feedback
+loop originally suspected is ruled out as well.
+
+What is established is the precise trigger: the hang begins when the dialog's content **changes
+size**. A probe that renders the real `NowChooserDialog` and only clicks `chooser_custom` — revealing
+the inline `InlineLeaveMinutes` input, with no text entered — hangs reproducibly, while the identical
+probe without that click passes in 16 seconds. Every static probe passed; only the one that grows the
+dialog's content stalls. The root cause within that growth path is **not yet identified**, so no fix
+is claimed.
+
+No fix was attempted beyond diagnosis. The remaining candidate is a measure/idle loop when a
+scrolling, constrained dialog's content grows, which sits in `SafeDialog`'s layout contract — a
+component carrying documented OEM and Android 15 rationale. Changing it is a product decision rather
+than an obvious repair, so it is raised rather than guessed at.
+
+Reproducer for whoever picks this up: render `NowChooserDialog(NowViewModel.Chooser.Leave("task"), …)`
+under `createComposeRule()` with `@GraphicsMode(NATIVE)`, click `chooser_custom`, and assert
+`chooser_custom_minutes` exists. It never returns.
+
+**Verification actually performed.**
+
+- Non-dialog packages (`domain`, `command`, `agent`, `mappreview`, `map`, `image`, `pdf`, `orb`,
+  `pulse`, `project`, `streams`, `ui.components`): **103 classes, 1,115 tests, 0 failures, 0
+  errors, 0 skipped**.
+- `com.virlin.app.now.*` and `com.virlin.app.screenshot.*`: **hang** — 0 classes completed within a
+  15-minute budget (`timeout` exit 124).
+- `com.virlin.app.hierarchy.*`: **not run**; it holds the dialog and popup tests and is expected to
+  stall for the same reason.
+- `:app:assembleDebug` and `:app:compileDebugAndroidTestKotlin`: pass (APK 23,417,043 bytes).
+- `git diff --check`: clean.
+
+The full suite therefore has **not** been shown green, and no claim is made that it is.
+
+**Not done.** No instrumentation run, no Roborazzi verification (its package is inside the stalling
+group), and no push — the destination was ambiguous because the current branch is named for
+attachment work, carries the execution-audit checkpoint and has no upstream.
