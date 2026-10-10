@@ -32,7 +32,60 @@ class NowViewModel(
     private val clock: VirlinClock = VirlinGraph.clock,
     repository: WorkStreamRepository = VirlinGraph.repository
 ) : ViewModel(), AttentionIntents {
+    /** Refresh history on execution changes; periodic refresh covers startup and independent writes.
+     * No persisted counters or writes are introduced. Collection stops when Now is not observed. */
+    val daySummary: StateFlow<NowDaySummaryValues> = kotlinx.coroutines.flow.flow {
+        while (true) {
+            emit(Unit)
+            kotlinx.coroutines.delay(15_000)
+        }
+    }.combine(combine(repository.streams, repository.tasks) { streams, tasks -> streams to tasks }) { _, state -> state.second }
+        .map { tasks ->
+            try { tasks to repository.allFocusSessions() }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        }.combine(kotlinx.coroutines.flow.flow {
+            while (true) { emit(clock.now()); kotlinx.coroutines.delay(1_000) }
+        }) { data, now ->
+            if (data == null) NowDaySummaryValues(timeSaved = "Unavailable") else {
+                val zone = java.time.ZoneId.systemDefault()
+                val savings = com.virlin.app.domain.model.DailySavings.calculate(data.first, data.second, now, zone)
+                NowDaySummaryValues(
+                    timeFocused = com.virlin.app.domain.model.DailyFocus.label(
+                        com.virlin.app.domain.model.DailyFocus.seconds(data.second, now, zone)),
+                    timeSaved = savings.displayValue,
+                    savedUnit = savings.displayUnit
+                )
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(0), NowDaySummaryValues(timeSaved = "Loading"))
+
     private val executionRepository = com.virlin.app.domain.repository.ExecutionViewRepository(repository, viewModelScope)
+    val timersRunning: StateFlow<Boolean> = combine(repository.streams, repository.tasks) { streams, tasks ->
+        streams.any { !it.state.isTerminal && (it.state == com.virlin.app.domain.model.WorkStreamState.FOCUS || it.processingStartedAt != null) } ||
+            tasks.any { !it.status.isTerminal && it.execution?.let { e ->
+                e.state == com.virlin.app.domain.model.WorkStreamState.FOCUS || e.processingStartedAt != null
+            } == true }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    private val _masterPauseMessage = MutableStateFlow<String?>(null)
+    val masterPauseMessage = _masterPauseMessage.asStateFlow()
+    private val _pausingTimers = MutableStateFlow(false)
+    val pausingTimers = _pausingTimers.asStateFlow()
+
+    fun pauseAllTimers() {
+        if (_pausingTimers.value) return
+        val resume = !timersRunning.value
+        _pausingTimers.value = true
+        viewModelScope.launch {
+            try {
+                _masterPauseMessage.value = when (val result = if (resume) actions.resumeAllTimers() else actions.pauseAllTimers()) {
+                    is ActionResult.Success -> if (resume) {
+                        if (result.value > 0) "Tasks resumed · Time preserved" else "No master-paused tasks to resume"
+                    } else "All tasks paused · Time saved"
+                    else -> { log("toggleAllTimers", result); "Could not change timers. Please try again." }
+                }
+            } finally { _pausingTimers.value = false }
+        }
+    }
 
     /**
      * Hierarchy shown on the Current Focus card, derived from the domain on every change.
@@ -59,6 +112,13 @@ class NowViewModel(
     /** Projects (identity source for Needs You cards): the same repository flow, no copy of icon data anywhere else. */
     val projects: StateFlow<List<com.virlin.app.domain.model.Project>> = executionRepository.projects
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), executionRepository.projects.value)
+    val ownerStreams: StateFlow<List<com.virlin.app.domain.model.WorkStream>> = repository.streams
+    val readyFocusedLabels: StateFlow<Map<String, String>> = combine(repository.streams, repository.tasks) { streams, tasks ->
+        val sessions = repository.allFocusSessions()
+        (streams.map { it.id } + tasks.map { it.id }).associateWith {
+            WhenFreePresentation.focusedLabel(it, tasks, sessions, clock.now())
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /** When each Needs You stream started waiting (domain timestamp) — drives the live timer and ordering. */
     val waitingSince: StateFlow<Map<String, java.time.Instant>> = executionRepository.streams
@@ -101,8 +161,8 @@ class NowViewModel(
 
     /**
      * WORKING FOR YOU (Phase 10): the external runs projected from the domain — soonest check
-     * first. The same WorkStream leaves this list and appears in Needs You when its check time
-     * arrives; nothing is duplicated, and no countdown is stored anywhere.
+     * first. Due checks appear only in Needs You; their external run remains tracked.
+     * No execution is duplicated, and no countdown is stored anywhere.
      */
     val externalWork: StateFlow<List<com.virlin.app.domain.external.ExternalWorkItem>> =
         combine(executionRepository.streams, executionRepository.stages, executionRepository.projects, executionRepository.tasks) { s, st, p, t ->

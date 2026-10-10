@@ -25,6 +25,10 @@ import java.time.Instant
  * There is deliberately no `setState(id, state)`.
  */
 interface VirlinActions {
+    suspend fun deleteWorkStream(id: String): ActionResult<ProjectDeletion> = ActionResult.Rejected(DomainError.PlacementRejected("Workstream deletion unavailable"))
+    suspend fun deleteTask(id: String): ActionResult<ProjectDeletion> = ActionResult.Rejected(DomainError.PlacementRejected("Task deletion unavailable"))
+    suspend fun deleteProject(projectId: String): ActionResult<ProjectDeletion> =
+        ActionResult.Rejected(DomainError.PlacementRejected("Project deletion is unavailable."))
 
     /**
      * Human attention moves to this stream. Enforces the single-Focus invariant: any stream
@@ -172,6 +176,9 @@ interface VirlinActions {
 
     /** "I am choosing not to work on this now." No wake time. */
     suspend fun pauseStream(streamId: String): ActionResult<WorkStream>
+    /** Pause every live human/external timer atomically, preserving recorded history. */
+    suspend fun pauseAllTimers(projectId: String? = null): ActionResult<Int>
+    suspend fun resumeAllTimers(projectId: String? = null): ActionResult<Int>
     suspend fun pauseExternalTracking(streamId: String, returnAt: Instant? = null): ActionResult<WorkStream>
     suspend fun resumeExternalTracking(streamId: String, checkAt: Instant? = null): ActionResult<WorkStream>
 
@@ -220,6 +227,10 @@ interface VirlinActions {
     // ================================================================ Structure: Project
 
     suspend fun createProject(request: CreateProject): ActionResult<Project>
+    suspend fun bulkCreateNames(json: String, projectId: String?): ActionResult<Int> =
+        ActionResult.Rejected(DomainError.PlacementRejected("Bulk creation is unavailable."))
+    suspend fun bulkCreateTasks(json: String, destination: CreateTask): ActionResult<Int> =
+        ActionResult.Rejected(DomainError.PlacementRejected("Task bulk creation is unavailable."))
     suspend fun updateProject(projectId: String, update: ProjectUpdate): ActionResult<Project>
     suspend fun completeProject(projectId: String): ActionResult<Project>
 
@@ -488,6 +499,7 @@ interface VirlinActions {
     suspend fun setMapNodePreviewExpanded(ownerId: String, expanded: Boolean): ActionResult<Unit>
 
     suspend fun loadNoteDoc(ownerKey: String): com.virlin.app.domain.notedoc.VirlinNoteDoc?
+    suspend fun duplicateCaptureNote(captureId: String, title: String): ActionResult<com.virlin.app.domain.model.CaptureItem>
 
     /** Writes the whole Notes-page document. Idempotent: identical content is not re-written. */
     suspend fun saveNoteDoc(

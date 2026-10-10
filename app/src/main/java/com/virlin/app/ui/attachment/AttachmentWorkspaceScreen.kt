@@ -59,9 +59,10 @@ private val Canvas = Color(0xFFFCFBF8)
 fun AttachmentWorkspaceScreen(
     navController: NavController,
     taskId: String,
+    projectId: String? = null,
     vm: AttachmentWorkspaceViewModel = viewModel(
-        key = "attachments-$taskId",
-        factory = AttachmentWorkspaceViewModel.factory(taskId, LocalContext.current),
+        key = "attachments-$taskId-${projectId.orEmpty()}",
+        factory = AttachmentWorkspaceViewModel.factory(taskId, LocalContext.current, projectId),
     ),
 ) {
     val state by vm.state.collectAsState()

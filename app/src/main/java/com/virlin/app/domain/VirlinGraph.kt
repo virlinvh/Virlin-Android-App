@@ -41,6 +41,7 @@ object VirlinGraph {
     val ids: IdProvider = UuidIdProvider
 
     @Volatile private var database: VirlinDatabase? = null
+    @Volatile private var appContext: Context? = null
     @Volatile private var platformScheduler: AttentionScheduler? = null
 
     private val bootstrap = BootstrappingWorkStreamRepository()
@@ -70,6 +71,7 @@ object VirlinGraph {
 
     /** Idempotent. Call before [startAsync] / [ensureReady] (MainActivity, receivers). */
     fun init(context: Context) {
+        appContext = context.applicationContext
         if (database == null) synchronized(this) {
             if (database == null) {
                 platformScheduler = AndroidAttentionScheduler(context.applicationContext)
@@ -147,6 +149,10 @@ object VirlinGraph {
             }
         }
         bootstrap.bind(ready, scope)
+        appContext?.let { context ->
+            runCatching { com.virlin.app.data.project.ProjectDeletionCleanup.flush(context, ready, scheduler) }
+                .onFailure { Log.e(TAG, "Project deletion cleanup pending; will retry", it) }
+        }
         com.virlin.app.domain.action.reconcileContainerExecution(ready, clock.now())
         val dt = android.os.SystemClock.elapsedRealtime() - t0
         VirlinStartup.mark(
@@ -203,6 +209,29 @@ object VirlinGraph {
     }
 
     val actions: VirlinActions by lazy { DefaultVirlinActions(repository, clock, ids, priorityPreferences) }
+    /** Process-scoped deletion: screen navigation cannot cancel a committed cleanup. */
+    fun deleteProject(projectId: String, onResult: (com.virlin.app.domain.action.ActionResult<com.virlin.app.domain.action.ProjectDeletion>) -> Unit) {
+        deleteHierarchy(projectId, "project", onResult)
+    }
+    fun deleteHierarchy(id: String, kind: String, onResult: (com.virlin.app.domain.action.ActionResult<com.virlin.app.domain.action.ProjectDeletion>) -> Unit) {
+        scope.launch(Dispatchers.IO) {
+            val result = try {
+                ensureReady()
+                val deleted = when (kind) {
+                    "project" -> actions.deleteProject(id)
+                    "workstream" -> actions.deleteWorkStream(id)
+                    "task" -> actions.deleteTask(id)
+                    else -> error("Unknown deletion kind.")
+                }
+                if (deleted is com.virlin.app.domain.action.ActionResult.Success) {
+                    deleted.value.ownerIds.forEach { priorityPreferences.remove(it) }
+                    appContext?.let { com.virlin.app.data.project.ProjectDeletionCleanup.flush(it, repository, scheduler) }
+                }
+                deleted
+            } catch (e: Exception) { com.virlin.app.domain.action.ActionResult.Failure(e) }
+            kotlinx.coroutines.withContext(Dispatchers.Main) { onResult(result) }
+        }
+    }
     val commands: com.virlin.app.domain.command.CommandEngine by lazy {
         com.virlin.app.domain.command.CommandEngine(actions, repository, clock, zone)
     }

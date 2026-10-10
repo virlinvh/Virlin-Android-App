@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
  * `withTransaction` later without changing any action.
  */
 interface WorkStreamRepository : CaptureRepository {
+    suspend fun pendingProjectDeletions(): List<com.virlin.app.domain.action.ProjectDeletion> = emptyList()
     /** Schema-v20 independent execution; legacy adapters can continue stream-only operation. */
     val taskExecutionEnabled: Boolean get() = false
     /** Observable current state of every stream. UI observes this; it never writes to it. */
@@ -103,6 +104,10 @@ interface WorkStreamRepository : CaptureRepository {
 
 /** Write surface available only inside a [WorkStreamRepository.transaction]. */
 interface WorkStreamWriter : CaptureWriter {
+    suspend fun deleteProjectTree(projectId: String): com.virlin.app.domain.action.ProjectDeletion = error("Project deletion is not supported by this repository.")
+    suspend fun deleteWorkStreamTree(id: String): com.virlin.app.domain.action.ProjectDeletion = error("Workstream deletion is not supported.")
+    suspend fun deleteTaskTree(id: String): com.virlin.app.domain.action.ProjectDeletion = error("Task deletion is not supported.")
+    suspend fun acknowledgeProjectDeletion(projectId: String) { error("Cleanup acknowledgement is not supported.") }
     suspend fun getCycle(id: String): Cycle? = null
     suspend fun getStream(id: String): WorkStream?
     suspend fun getActiveFocus(): WorkStream?
@@ -126,6 +131,8 @@ interface WorkStreamWriter : CaptureWriter {
     suspend fun stagesOf(workStreamId: String): List<ExternalStage>
     suspend fun saveStage(stage: ExternalStage)
     suspend fun appendEvent(event: WorkStreamEvent)
+    /** Transaction-consistent history for restoring a master-paused execution. */
+    suspend fun executionEvents(streamId: String): List<WorkStreamEvent> = emptyList()
 
     // ---- Tags and task steps, inside the same transaction as everything else.
     suspend fun allTags(): List<ProjectTag>

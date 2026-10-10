@@ -153,6 +153,8 @@ interface TaskStepDao {
 
 @Dao
 interface MetaDao {
+    @Query("SELECT * FROM meta WHERE `key` LIKE 'project-delete:%'") suspend fun pendingProjectDeletions(): List<MetaEntity>
+    @Query("DELETE FROM meta WHERE `key` = :key") suspend fun delete(key: String)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun put(m: MetaEntity)
     @Query("SELECT value FROM meta WHERE `key` = :key") suspend fun get(key: String): String?
 }

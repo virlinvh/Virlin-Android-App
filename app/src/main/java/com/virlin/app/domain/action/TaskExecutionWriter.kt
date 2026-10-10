@@ -54,4 +54,11 @@ internal class TaskExecutionWriter(private val delegate: WorkStreamWriter) : Wor
         delegate.appendEvent(if (task == null) event else event.copy(workStreamId = requireNotNull(task.workStreamId),
             detail = listOfNotNull("task:${task.id}", event.detail).joinToString(" · ")))
     }
+    override suspend fun executionEvents(streamId: String): List<WorkStreamEvent> {
+        val task = delegate.getTask(streamId)
+        return if (task == null) delegate.executionEvents(streamId).filter { it.detail?.startsWith("task:") != true }
+        else delegate.executionEvents(task.workStreamId ?: return emptyList()).filter {
+            it.detail == "task:${task.id}" || it.detail?.startsWith("task:${task.id} · ") == true
+        }
+    }
 }

@@ -24,7 +24,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.virlin.app.ui.components.SafeDialog as Dialog
 import com.virlin.app.domain.model.TaskStatus
 import com.virlin.app.ui.theme.VirlinColors
 import java.time.Duration
@@ -178,7 +178,7 @@ fun AddButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier,
  */
 @Composable
 fun SwitchFocusDialog(currentTitle: String, nextTitle: String, onCancel: () -> Unit, onConfirm: () -> Unit) {
-    Dialog(onDismissRequest = onCancel) {
+    Dialog(onDismissRequest = onCancel, scrollContent = true) {
         Column(
             Modifier.fillMaxWidth().background(VirlinColors.Background, RoundedCornerShape(20.dp)).padding(20.dp)
                 .testTag(SwitchFocusTag)
@@ -215,7 +215,7 @@ fun SwitchFocusDialog(currentTitle: String, nextTitle: String, onCancel: () -> U
 @Composable
 fun AddNameDialog(title: String, placeholder: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(onDismissRequest = onDismiss, scrollContent = true) {
         Column(Modifier.fillMaxWidth().background(VirlinColors.Background, RoundedCornerShape(20.dp)).padding(20.dp)) {
             Text(title, fontSize = 16.sp, fontWeight = FontWeight.Black, color = VirlinColors.TextPrimary)
             Spacer(Modifier.height(14.dp))
@@ -240,29 +240,22 @@ fun AddNameDialog(title: String, placeholder: String, onDismiss: () -> Unit, onC
 
 @Composable
 fun AddTaskDialog(title: String, onDismiss: () -> Unit, onConfirm: (String, Duration?) -> Unit) {
-    var text by remember { mutableStateOf("") }
     var minutes by remember { mutableStateOf("") }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.fillMaxWidth().background(VirlinColors.Background, RoundedCornerShape(20.dp)).padding(20.dp)
-        ) {
-            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Black, color = VirlinColors.TextPrimary)
-            Spacer(Modifier.height(14.dp))
-            Field(text, { text = it }, "Title", AddTaskTitleTag, VirlinColors.TextPrimary)
-            Spacer(Modifier.height(10.dp))
-            Field(minutes, { minutes = it.filter(Char::isDigit) }, "Estimate (minutes, optional)", "add_task_minutes", VirlinColors.TextPrimary)
-            Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                Text("Cancel", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = VirlinColors.TextSecondary,
-                    modifier = Modifier.clickable(role = Role.Button, onClick = onDismiss).padding(12.dp))
-                Spacer(Modifier.width(8.dp))
-                val ok = text.isNotBlank()
-                Text("ADD", fontSize = 12.sp, fontWeight = FontWeight.Black, color = Color.White,
-                    modifier = Modifier
-                        .background(if (ok) VirlinColors.TextPrimary else VirlinColors.TextPrimary.copy(alpha = 0.3f), RoundedCornerShape(50))
-                        .testTag(AddTaskConfirmTag)
-                        .clickable(enabled = ok, role = Role.Button) { onConfirm(text.trim(), minutes.toLongOrNull()?.takeIf { it > 0 }?.let(Duration::ofMinutes)) }
-                        .padding(horizontal = 18.dp, vertical = 12.dp))
+    var estimateOpen by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(onBack = onDismiss)
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .32f))) {
+        Box(Modifier.matchParentSize().clickable(onClick = onDismiss))
+        Box(Modifier.fillMaxSize().imePadding().padding(16.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+            androidx.compose.material3.Surface(Modifier.widthIn(max = 480.dp).fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp), color = Color.White, shadowElevation = 8.dp) {
+                TaskCreationCard(title, "Add task", onDismiss, { name ->
+                    onConfirm(name, minutes.toLongOrNull()?.takeIf { it > 0 && it <= Long.MAX_VALUE / 60 }?.let(Duration::ofMinutes))
+                }) {
+                    androidx.compose.material3.TextButton(onClick = { estimateOpen = !estimateOpen }) {
+                        Text("Estimate (optional) ›", color = VirlinColors.TextSecondary, fontSize = 12.sp)
+                    }
+                    if (estimateOpen) Field(minutes, { minutes = it.filter(Char::isDigit) }, "Minutes", "add_task_minutes", VirlinColors.TextPrimary)
+                }
             }
         }
     }

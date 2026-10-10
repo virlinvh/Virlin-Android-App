@@ -26,7 +26,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.virlin.app.ui.components.SafeDialog as Dialog
 import com.virlin.app.domain.model.*
 import com.virlin.app.ui.screens.AttentionIntentController
 import com.virlin.app.ui.screens.NowViewModel.Chooser
@@ -56,7 +56,8 @@ internal fun WorkstreamControlsDialog(
     executionAllowed: Boolean = true,
     aggregateState: WorkstreamState? = null,
     responsibilitySource: String? = null,
-    descendantCount: Int = 0
+    descendantCount: Int = 0,
+    onDelete: (() -> Unit)? = null,
 ) {
     var expanded by remember(stream.id, taskId) { mutableStateOf(false) }
     var managing by remember(stream.id, taskId) { mutableStateOf<String?>(null) }
@@ -124,7 +125,14 @@ internal fun WorkstreamControlsDialog(
                                 Hint("This section and its descendants only. Display settings never start or stop work.")
                                 TimerDisplaySettings(stream.id)
                             }
-                            "rename", "add" -> {
+                            "add" -> {
+                                TaskCreationCard(stream.title, "Add subtask", back, {
+                                    onAddSubtask?.invoke(it); managing = null
+                                }, titleTag = "work_name_input") {
+                                    Text("Use parent · At end", color = ControlMuted, fontSize = 12.sp)
+                                }
+                            }
+                            "rename" -> {
                                 StepTitle(if (shownPage == "rename") "Edit name" else "Add subtask")
                                 Hint("Name")
                                 OutlinedTextField(editText, { editText = it }, singleLine = true,
@@ -180,10 +188,12 @@ internal fun WorkstreamControlsDialog(
                                     ActionRow(if (terminal) "Completed" else "Mark as complete",
                                         if (terminal) "Time and history preserved" else "Complete this workstream and its remaining tasks",
                                         enabled = canComplete, tag = "workstream_complete") { completing = true }
+                                    onDelete?.let { TextButton(onClick = it) { Text("Delete workstream", color = MaterialTheme.colorScheme.error) } }
                                 } else {
                                 if (executionAllowed) ActionRow("Who does this?", "$mode" + if (stream.executionPreference == ExecutionPreference.INHERIT) " · inherited" else "",
                                     enabled = !terminal, tag = "workstream_mode_expand", onClick = { expanded = !expanded })
-                                AnimatedVisibility(expanded && executionAllowed) {
+                                // Disclosure changes content, not the dialog window's animated size.
+                                if (expanded && executionAllowed) {
                                     Column(Modifier.background(ControlWash, RoundedCornerShape(12.dp)).padding(8.dp)) {
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                             listOf(ExecutionPreference.INHERIT, ExecutionPreference.HUMAN, ExecutionPreference.EXTERNAL).forEach { value ->
@@ -282,6 +292,7 @@ internal fun WorkstreamControlsDialog(
                                     onDuplicate?.let { ActionRow("Duplicate", onClick = it) }
                                     if (!terminal) onCancelTask?.let { ActionRow("Cancel task") { managing = "cancelTask" } }
                                 }
+                                onDelete?.let { TextButton(onClick = it) { Text(if (taskId == null) "Delete workstream" else "Delete task", color = MaterialTheme.colorScheme.error) } }
                                 }
                             }
                             else -> chooser?.let { InlineTimingStep(it, intents, onFocus, startingExternal, schedulingResume, pausingExternal, taskId,

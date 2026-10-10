@@ -27,15 +27,23 @@ object ExecutionTiming {
         sessions: Collection<FocusSession>,
         now: Instant
     ): WorkStreamExecutionTiming {
-        val mine = sessions.filter { it.workStreamId == stream.id }
+        val mine = sessions.distinctBy { it.id }.filter { it.workStreamId == stream.id }
         val exact = mine.mapNotNull { session ->
             session.taskId?.let { it to safeSeconds(session, now) }
         }.groupingBy { it.first }.fold(0L) { total, pair -> total + pair.second }
 
         val streamTasks = tasks.filter { it.workStreamId == stream.id }
-        val children = streamTasks.groupBy { it.parentTaskId }
-        val inclusive = streamTasks.associate { task ->
-            task.id to descendantFocus(task.id, children, exact, mutableSetOf())
+        val byId = streamTasks.associateBy { it.id }
+        val inclusive = byId.keys.associateWith { 0L }.toMutableMap()
+        // Walk ancestors iteratively: arbitrary nesting cannot overflow the call stack.
+        // Each exact task's sessions contribute once to itself and each ancestor.
+        exact.forEach { (id, seconds) ->
+            var ancestor: String? = id
+            val visited = mutableSetOf<String>()
+            while (ancestor != null && ancestor in byId && visited.add(ancestor)) {
+                inclusive[ancestor] = inclusive.getValue(ancestor) + seconds
+                ancestor = byId.getValue(ancestor).parentTaskId
+            }
         }
         val open = mine.lastOrNull { it.isOpen }
         val current = open?.let { safeSeconds(it, now) } ?: 0L
@@ -78,7 +86,7 @@ object ExecutionTiming {
         now: Instant
     ): Long {
         val ids = streams.asSequence().filter { it.projectId == projectId }.map { it.id }.toSet()
-        return sessions.asSequence().filter { it.workStreamId in ids }.sumOf { safeSeconds(it, now) }
+        return sessions.distinctBy { it.id }.asSequence().filter { it.workStreamId in ids }.sumOf { safeSeconds(it, now) }
     }
 
     fun formatClock(seconds: Long): String {
@@ -88,19 +96,6 @@ object ExecutionTiming {
         val secs = safe % 60L
         return if (hours > 0L) "%d:%02d:%02d".format(hours, minutes, secs)
         else "%02d:%02d".format(minutes, secs)
-    }
-
-    private fun descendantFocus(
-        taskId: String,
-        children: Map<String?, List<Task>>,
-        exact: Map<String, Long>,
-        visiting: MutableSet<String>
-    ): Long {
-        if (!visiting.add(taskId)) return 0L
-        val total = exact.getOrDefault(taskId, 0L) + children[taskId].orEmpty()
-            .sumOf { descendantFocus(it.id, children, exact, visiting) }
-        visiting.remove(taskId)
-        return total
     }
 
     private fun elapsedSeconds(start: Instant, now: Instant): Long =

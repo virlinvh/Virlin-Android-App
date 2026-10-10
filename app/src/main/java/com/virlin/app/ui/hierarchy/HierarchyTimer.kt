@@ -33,6 +33,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
 
+internal val HierarchyTimerAccent = androidx.compose.ui.semantics.SemanticsPropertyKey<Color>("Timer accent")
+
 /** One compact block at the original top-right location; rotation never affects timers. */
 @Composable
 internal fun RotatingHierarchyTimer(focused: Long, external: Long?, scopeId: String = "default", projectId: String? = null) {
@@ -63,7 +65,9 @@ internal fun RotatingHierarchyTimer(focused: Long, external: Long?, scopeId: Str
 internal fun HierarchyTimer(seconds: Long?, modifier: Modifier = Modifier, category: String = "Elapsed focus time") {
     val time = seconds?.let(::hierarchyElapsed) ?: "—"
     val density = LocalDensity.current
+    val timerColor = LocalProjectPalette.current?.let { Color(it.main) } ?: Color(0xFF65B82E)
     Row(modifier.testTag("hierarchy_elapsed").clearAndSetSemantics {
+        this[HierarchyTimerAccent] = timerColor
         contentDescription = if (seconds == null) "No active focus" else "$category $time"
     }) {
         time.forEachIndexed { index, character ->
@@ -87,7 +91,7 @@ internal fun HierarchyTimer(seconds: Long?, modifier: Modifier = Modifier, categ
                     },
                     label = "Focus timer digit",
                 ) { digit ->
-                    Text(digit.toString(), color = Color(0xFF65B82E), fontSize = 20.sp,
+                    Text(digit.toString(), color = timerColor, fontSize = 20.sp,
                         fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold,
                         style = TextStyle(fontFeatureSettings = "tnum"))
                 }

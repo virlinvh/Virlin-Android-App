@@ -309,30 +309,14 @@ fun MapAddSubtaskDialog(
     onDismiss: () -> Unit,
     onSave: (String) -> Unit,
 ) {
-    var text by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Add subtask") },
-        text = {
-            Column {
-                Text("Under \"" + parentTitle + "\"", fontSize = 13.sp, color = MapMuted)
-                Spacer(Modifier.height(10.dp))
-                androidx.compose.material3.OutlinedTextField(
-                    value = text, onValueChange = { text = it },
-                    label = { Text("Subtask name") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag(MapAddSubtaskFieldTag)
-                )
+    com.virlin.app.ui.components.SafeDialog(onDismissRequest = onDismiss) {
+        androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp), color = Color.White) {
+            com.virlin.app.ui.hierarchy.TaskCreationCard(parentTitle, "Add subtask", onDismiss, onSave,
+                titleTag = MapAddSubtaskFieldTag, confirmTag = MapAddSubtaskSaveTag) {
+                Text("Use parent · At end", fontSize = 12.sp, color = MapMuted)
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSave(text.trim()) },
-                enabled = text.isNotBlank(),
-                modifier = Modifier.testTag(MapAddSubtaskSaveTag)
-            ) { Text("Add") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
+        }
+    }
 }
 
 /** One short piece of text confirmed before anything is written. */

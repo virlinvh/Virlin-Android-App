@@ -15,6 +15,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.BasicTextField
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.material3.*
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -57,7 +66,7 @@ import java.time.Instant
  * Both halves of the card's `[ #n | CHECK → ]` pill open THIS sheet; they differ only in which tab
  * is selected on entry. Inside, the user moves freely between:
  *
- *  - **Priority** — the queue positions, applied immediately through the existing
+ *  - **Priority** — draft queue positions, applied on confirmation through the existing
  *    `reorderNeedsYou` path. The sheet deliberately stays open afterwards so a priority change and
  *    a check decision are one visit. Durable policies (Phase 04/07) remain available through the
  *    existing priority editor, one row below the positions.
@@ -97,31 +106,49 @@ fun NeedsYouControlSheet(
     dueAt: Instant? = null,
     now: State<Instant>? = null,
     initialTab: NeedsYouControlTab,
-    /** Immediate move through the existing queue path; the sheet stays open. */
+    /** Confirmed move through the existing queue path. */
     onMoveToPosition: (Int) -> Unit,
     /** Opens the existing priority editor for durable policies (Always / this term / until…). */
     onOpenPriorityPolicy: () -> Unit = {},
     onAction: (NeedsYouControlAction) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // Transient UI state: which tab is showing. Survives recomposition, not a new open.
     var tab by rememberSaveable(stream?.id, initialTab) { mutableStateOf(initialTab) }
+    var draftPosition by rememberSaveable(stream?.id) { mutableStateOf(position) }
     val v = NeedsYouPriority.visualsFor(position)
+    val entrance = remember { androidx.compose.animation.core.Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        entrance.animateTo(1f, androidx.compose.animation.core.tween(280,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing))
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val owner = Any()
+        com.virlin.app.ui.hierarchy.KnowledgeOrbVisibility.enter(owner)
+        onDispose { com.virlin.app.ui.hierarchy.KnowledgeOrbVisibility.leave(owner) }
+    }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = Color.White,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        modifier = Modifier.testTag(NeedsYouControlSheetTag)
-    ) {
+    BackHandler(onBack = onDismiss)
+    // Draw within the app's content slot: the shell already reserves footer and IME space.
+    // A separate ModalBottomSheet window would cover that real navigation footer.
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .28f * entrance.value))
+        .pointerInput(onDismiss) { detectTapGestures { onDismiss() } }, contentAlignment = Alignment.BottomCenter) {
+    Surface(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).widthIn(max = 560.dp).fillMaxWidth()
+        .height(minOf(520.dp, (maxHeight - 16.dp).coerceAtLeast(48.dp)))
+        .then(Modifier.graphicsLayer {
+            alpha = entrance.value
+            translationY = (1f - entrance.value) * 24.dp.toPx()
+        }).testTag(NeedsYouControlSheetTag)
+        .pointerInput(Unit) { detectTapGestures { } },
+        color = Color.White, shape = RoundedCornerShape(24.dp)) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight()) {
         Column(
             Modifier
                 .fillMaxWidth()
+                .weight(1f)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 26.dp)
+                .padding(top = 20.dp, bottom = 16.dp)
         ) {
             if (stream == null) {
                 Text("This activity is no longer waiting", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Charcoal)
@@ -155,16 +182,6 @@ fun NeedsYouControlSheet(
                     )
                     Text(stream.title, fontSize = 11.5.sp, color = CharcoalMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    AttentionTiming.format(dueAt, now?.value ?: dueAt ?: Instant.EPOCH, adaptive = true),
-                    style = TextStyle(fontFamily = FontFamily.Monospace, fontFeatureSettings = "tnum"),
-                    fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                    color = NeedsYouPriority.readableInk(v), maxLines = 1, softWrap = false,
-                    modifier = Modifier
-                        .testTag(NeedsYouControlTimerTag)
-                        .semantics { contentDescription = AttentionTiming.describe(dueAt, now?.value ?: dueAt ?: Instant.EPOCH) }
-                )
                 Spacer(Modifier.width(8.dp))
                 Text(
                     "✕", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = CharcoalMuted,
@@ -176,6 +193,17 @@ fun NeedsYouControlSheet(
                         .padding(horizontal = 6.dp, vertical = 13.dp)
                 )
             }
+
+            Spacer(Modifier.height(8.dp))
+                Text(
+                    AttentionTiming.format(dueAt, now?.value ?: dueAt ?: Instant.EPOCH, adaptive = true),
+                    style = TextStyle(fontFamily = FontFamily.Monospace, fontFeatureSettings = "tnum"),
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    color = NeedsYouPriority.readableInk(v), maxLines = 1, softWrap = false,
+                    modifier = Modifier
+                        .testTag(NeedsYouControlTimerTag)
+                        .semantics { contentDescription = AttentionTiming.describe(dueAt, now?.value ?: dueAt ?: Instant.EPOCH) }
+                )
 
             // ── the two tabs. Switching is presentation only: nothing is written.
             Spacer(Modifier.height(14.dp))
@@ -197,15 +225,28 @@ fun NeedsYouControlSheet(
             Spacer(Modifier.height(14.dp))
             Crossfade(targetState = tab, label = "ny_control_tab") { current ->
                 when (current) {
-                    NeedsYouControlTab.PRIORITY -> PriorityTab(position, total, v, onMoveToPosition, onOpenPriorityPolicy)
+                    NeedsYouControlTab.PRIORITY -> PriorityTab(draftPosition, total, v, { draftPosition = it }, onOpenPriorityPolicy)
                     NeedsYouControlTab.CHECK -> CheckTab(kind, onAction)
                 }
             }
         }
+        if (stream != null && tab == NeedsYouControlTab.PRIORITY) {
+            HorizontalDivider()
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = onDismiss, colors = ButtonDefaults.outlinedButtonColors(contentColor = CharcoalMuted), modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Cancel") }
+                Button(onClick = { draftPosition?.let(onMoveToPosition); onDismiss() },
+                    enabled = (draftPosition ?: 0) > 0 && draftPosition != position && position != null,
+                    colors = ButtonDefaults.buttonColors(containerColor = v.accent, contentColor = v.onAccent),
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("needs_you_apply_position")) { Text("Apply position") }
+            }
+        }
+        }
+        }
     }
 }
 
-/** POSITION list: every live Needs You position, applied immediately through the existing path. */
+/** Seven quick positions plus validated custom input; callbacks update only the sheet draft. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PriorityTab(
     position: Int?,
@@ -214,58 +255,70 @@ private fun PriorityTab(
     onMoveToPosition: (Int) -> Unit,
     onOpenPriorityPolicy: () -> Unit
 ) {
+    var selectionMade by rememberSaveable { mutableStateOf(false) }
+    var custom by rememberSaveable { mutableStateOf((position ?: 1) > 8) }
+    var customText by rememberSaveable { mutableStateOf(if ((position ?: 1) > 8) position.toString() else "") }
     Column {
-        Text("Choose the position for this task.", fontSize = 12.5.sp, color = CharcoalMuted)
+        Text("Choose position", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Charcoal)
+        Text("Set where this task appears in Needs You.", fontSize = 12.5.sp, color = CharcoalMuted)
         Spacer(Modifier.height(10.dp))
-        val count = total.coerceAtLeast(position ?: 1)
-        (1..count).forEach { p ->
-            val current = p == position
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val tileWidth = (maxWidth - 16.dp) / 3 - 1.dp
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        (1..8).forEach { p ->
+            val current = p == position && !custom
             val rank = NeedsYouPriority.visualsFor(p)
-            Row(
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .padding(vertical = 3.dp)
+                    .width(tileWidth)
+                    .height(48.dp)
                     .background(if (current) v.surface else Color.White, RoundedCornerShape(12.dp))
                     .border(1.dp, if (current) v.border else Color(0xFFECEEF1), RoundedCornerShape(12.dp))
                     .testTag(priorityPositionTag(p))
-                    .clickable(role = Role.RadioButton, enabled = !current) { onMoveToPosition(p) }
+                    .clickable(role = Role.RadioButton) { selectionMade = true; custom = false; onMoveToPosition(p) }
                     .semantics {
                         selected = current
                         contentDescription =
                             if (current) "Current position $p, ${ordinal(p)}." else "Move to position $p, ${ordinal(p)}."
                     }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+                , verticalArrangement = Arrangement.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .background(if (rank.neutral) Color.White else rank.accent, CircleShape)
-                        .border(1.dp, if (rank.neutral) Charcoal.copy(alpha = 0.22f) else rank.accent, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "$p", fontSize = if (p >= 10) 11.sp else 12.5.sp, fontWeight = FontWeight.Black,
-                        color = if (rank.neutral) Charcoal else rank.onAccent
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(ordinal(p), fontSize = 13.5.sp, fontWeight = FontWeight.Bold, color = Charcoal)
-                    // Never colour alone: the state is written out.
-                    Text(
-                        if (current) "Currently at this position" else "Move to position $p",
-                        fontSize = 11.5.sp, color = CharcoalMuted
-                    )
-                }
-                if (current) {
-                    Text("✓", fontSize = 15.sp, fontWeight = FontWeight.Black, color = v.accent)
-                }
+                Text("$p · ${ordinal(p)}", fontSize = 12.sp, fontWeight = if (current) FontWeight.Bold else FontWeight.Medium,
+                    color = if (current) NeedsYouPriority.readableInk(v) else Charcoal)
+
             }
         }
+        Column(Modifier.width(tileWidth).height(60.dp)
+            .background(if (custom) v.surface else Color.White, RoundedCornerShape(12.dp))
+            .border(1.dp, if (custom) v.border else Color(0xFFECEEF1), RoundedCornerShape(12.dp))
+            .testTag("needs_you_custom_position").clickable(role = Role.RadioButton) {
+                selectionMade = true; custom = true; onMoveToPosition(validPriorityPosition(customText) ?: 0)
+            }.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            if (!custom) Text("Custom", fontSize = 12.sp, color = Charcoal)
+            else {
+            BasicTextField(customText, { input ->
+                customText = input
+                onMoveToPosition(validPriorityPosition(input) ?: 0)
+            }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                textStyle = TextStyle(color = Charcoal, fontSize = 20.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                decorationBox = { inner -> Box(contentAlignment = Alignment.Center) {
+                    inner()
+                } },
+                modifier = Modifier.fillMaxWidth().height(28.dp).testTag("needs_you_custom_position_input")
+                    .semantics { contentDescription = "Custom position, positive whole number" })
+            }
+        }
+        }
+        }
+        if (custom && customText.isNotEmpty() && validPriorityPosition(customText) == null) {
+            Text("Enter a valid positive whole number.",
+                fontSize = 11.sp, color = CharcoalMuted, modifier = Modifier.padding(top = 8.dp))
+        }
         Spacer(Modifier.height(8.dp))
-        Text(
+        if (selectionMade && (position ?: 0) > 0) Text(
             "Remember this priority…", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CharcoalMuted,
             modifier = Modifier
                 .heightIn(min = 44.dp)
@@ -312,7 +365,7 @@ private fun CheckTab(kind: AttentionKind?, onAction: (NeedsYouControlAction) -> 
                 expanded = timed is NeedsYouControlAction.StillRunning
             ) { timed = if (timed is NeedsYouControlAction.StillRunning) null else NeedsYouControlAction.StillRunning(0) }
             if (timed is NeedsYouControlAction.StillRunning) {
-                MinutePresets(NeedsYouControlStillRunningTag) { onAction(NeedsYouControlAction.StillRunning(it)) }
+                MinutePresets(NeedsYouControlStillRunningTag, allowCustom = true) { onAction(NeedsYouControlAction.StillRunning(it)) }
             }
         } else {
             ActionRow(
@@ -348,7 +401,10 @@ private fun CheckTab(kind: AttentionKind?, onAction: (NeedsYouControlAction) -> 
 
 /** The existing CHECK AGAIN presets (3 · 5 · 10 minutes) — one source, no second snooze system. */
 @Composable
-private fun MinutePresets(parentTag: String, onPick: (Long) -> Unit) {
+internal fun MinutePresets(parentTag: String, allowCustom: Boolean = false, onPick: (Long) -> Unit) {
+    var custom by remember { mutableStateOf(false) }
+    var text by remember { mutableStateOf("") }
+    Column {
     Row(
         Modifier.fillMaxWidth().padding(start = 46.dp, top = 2.dp, bottom = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -366,6 +422,32 @@ private fun MinutePresets(parentTag: String, onPick: (Long) -> Unit) {
                     .padding(horizontal = 14.dp, vertical = 13.dp)
             )
         }
+        if (allowCustom) Text("Custom", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Charcoal,
+            modifier = Modifier.heightIn(min = 44.dp)
+                .background(Color.White, RoundedCornerShape(50))
+                .border(1.dp, Charcoal.copy(alpha = 0.18f), RoundedCornerShape(50))
+                .testTag("${parentTag}_custom")
+                .clickable(role = Role.Button) { custom = !custom }
+                .padding(horizontal = 12.dp, vertical = 13.dp))
+    }
+    if (custom) Row(Modifier.fillMaxWidth().padding(start = 46.dp, top = 2.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        BasicTextField(value = text, onValueChange = { text = it.filter(Char::isDigit).take(8) },
+            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle = TextStyle(fontSize = 16.sp, color = Charcoal),
+            modifier = Modifier.width(68.dp).heightIn(min = 44.dp)
+                .background(Color.White, RoundedCornerShape(12.dp))
+                .border(1.dp, Charcoal.copy(alpha = .18f), RoundedCornerShape(12.dp))
+                .semantics { contentDescription = "Minutes from now" }
+                .testTag("${parentTag}_custom_minutes").padding(12.dp))
+        Text("min", color = CharcoalMuted, fontSize = 12.sp)
+        val minutes = text.toLongOrNull()?.takeIf { it > 0 }
+        Text("Save", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.background(Charcoal.copy(alpha = if (minutes != null) 1f else .35f), RoundedCornerShape(12.dp))
+                .testTag("${parentTag}_custom_save")
+                .clickable(enabled = minutes != null, role = Role.Button) { minutes?.let(onPick) }
+                .padding(horizontal = 18.dp, vertical = 14.dp))
+    }
     }
 }
 
@@ -450,6 +532,9 @@ private fun ordinal(position: Int): String = when (position) {
     6 -> "Sixth"; 7 -> "Seventh"; 8 -> "Eighth"; 9 -> "Ninth"; 10 -> "Tenth"
     else -> "Position $position"
 }
+
+internal fun validPriorityPosition(input: String): Int? =
+    input.takeIf { it.isNotEmpty() && it.all { c -> c in '0'..'9' } }?.toIntOrNull()?.takeIf { it > 0 }
 
 const val NeedsYouControlSheetTag = "needs_you_control_sheet"
 const val NeedsYouControlPriorityTabTag = "needs_you_control_tab_priority"

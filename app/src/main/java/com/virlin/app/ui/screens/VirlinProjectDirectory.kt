@@ -1,12 +1,13 @@
 package com.virlin.app.ui.screens
+import com.virlin.app.ui.components.avoidOrbCircle
+import com.virlin.app.ui.components.circularOrbCutout
 
 // Supplied drop-in projects directory. Adapted where the app already decides the meaning:
-//  - a project matches a status when one of ITS WORKSTREAMS is in that state, read from the
-//    domain's own `effectiveAttentionState` — nothing is inferred from a progress percentage,
+//  - status matching comes from the host's exact leaf execution projection; it is never
+//    inferred from a project's progress percentage,
 //  - progress may be absent (a project with no tasks is "Unstructured", not 0%), so the ring
 //    shows a dash rather than claiming nothing has been done,
-//  - the trailing filter control opens the same finite status list as a list, because the app
-//    has no separate advanced-filter behaviour to call,
+//  - search is text-only; the status rail below owns the visible filter controls,
 //  - the app's real ProjectIcon is passed in; the footer and Orb stay outside, drawn by the shell.
 
 import androidx.compose.foundation.Canvas
@@ -52,8 +53,8 @@ import androidx.compose.ui.unit.sp
  * project navigation, project creation, footer, and ORB.
  */
 enum class ProjectDirectoryFilter(val label: String) {
-    ALL("All"), NEED_YOU("Need You"), PROCESSING("Processing"), READY("Ready"),
-    FREE_FOCUS("Free Focus"), SNOOZED("Snoozed"), BLOCKED("Blocked")
+    ALL("All"), NEED_YOU("Needs You"), PROCESSING("Running"), READY("Ready"),
+    FREE_FOCUS("Focused"), PAUSED("Paused"), SNOOZED("Scheduled"), BLOCKED("Blocked")
 }
 
 data class ProjectDirectoryItem(
@@ -98,17 +99,22 @@ fun VirlinProjectDirectory(
     state: ProjectDirectoryState,
     actions: ProjectDirectoryActions,
     modifier: Modifier = Modifier,
+    viewControls: @Composable () -> Unit = {},
+    taskContent: (@Composable () -> Unit)? = null,
     projectIcon: @Composable (ProjectDirectoryItem) -> Unit = { item ->
         Text(item.title.take(1), fontWeight = FontWeight.Bold, fontSize = 19.sp, color = item.iconTint)
     }
 ) {
     Column(modifier.fillMaxSize().background(directoryBackground)) {
         ProjectDirectoryHeader(state.totalCount, actions.onCreateProject)
-        DirectorySearch(state.searchQuery, actions.onSearchChanged, actions.onAdvancedFilter)
+        DirectorySearch(state.searchQuery, actions.onSearchChanged)
         Spacer(Modifier.height(14.dp))
-        CyclicStatusRail(state.selectedFilter, actions.onFilterChanged)
+        DirectoryStatusRail(state.selectedFilter, actions.onFilterChanged)
         Spacer(Modifier.height(14.dp))
-
+        viewControls()
+        if (taskContent != null) {
+            Box(Modifier.weight(1f)) { taskContent() }
+        } else {
         LazyColumn(
             modifier = Modifier.fillMaxWidth().weight(1f).testTag(StreamsListTag),
             // The Orb floats above the footer in the bottom-right; the last card clears it.
@@ -124,6 +130,7 @@ fun VirlinProjectDirectory(
                     ProjectDirectoryCard(project, actions.onOpenProject, projectIcon)
                 }
             }
+        }
         }
     }
 }
@@ -163,7 +170,7 @@ private fun ProjectDirectoryHeader(totalCount: Int, onCreate: () -> Unit) {
 }
 
 @Composable
-private fun DirectorySearch(query: String, onQuery: (String) -> Unit, onAdvancedFilter: () -> Unit) {
+private fun DirectorySearch(query: String, onQuery: (String) -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp)
             .height(58.dp).clip(RoundedCornerShape(18.dp)).background(Color.White)
@@ -185,44 +192,16 @@ private fun DirectorySearch(query: String, onQuery: (String) -> Unit, onAdvanced
                 }
             }
         )
-        Box(Modifier.width(1.dp).height(28.dp).background(Color(0xFFE4E9E8)))
-        Box(
-            Modifier.size(44.dp).clip(CircleShape)
-                .clickable(role = Role.Button, onClick = onAdvancedFilter)
-                .semantics { contentDescription = "More filters" },
-            contentAlignment = Alignment.Center
-        ) {
-            DirectoryFilterGlyph()
-        }
-    }
-}
-
-@Composable
-private fun DirectoryFilterGlyph() {
-    Canvas(Modifier.size(23.dp)) {
-        val stroke = 1.8.dp.toPx()
-        val ys = listOf(size.height * .22f, size.height * .50f, size.height * .78f)
-        val knobs = listOf(.34f, .70f, .45f)
-        ys.forEachIndexed { index, y ->
-            drawLine(directoryMintInk, Offset(0f, y), Offset(size.width, y),
-                strokeWidth = stroke, cap = StrokeCap.Round)
-            drawCircle(Color.White, radius = 3.4.dp.toPx(), center = Offset(size.width * knobs[index], y))
-            drawCircle(directoryMintInk, radius = 3.4.dp.toPx(), center = Offset(size.width * knobs[index], y),
-                style = Stroke(width = stroke))
-        }
     }
 }
 
 /**
- * All is fixed. A large virtual LazyRow repeats the finite status list, so
- * swiping can continue in either direction without a visible terminal edge.
- * The status value itself is unique and filtering is performed only once.
+ * All is fixed; each status occurs once in a finite horizontal list.
  */
 @Composable
-private fun CyclicStatusRail(selected: ProjectDirectoryFilter, onSelected: (ProjectDirectoryFilter) -> Unit) {
+private fun DirectoryStatusRail(selected: ProjectDirectoryFilter, onSelected: (ProjectDirectoryFilter) -> Unit) {
     val filters = remember { ProjectDirectoryFilter.values().filterNot { it == ProjectDirectoryFilter.ALL } }
-    val middle = remember(filters.size) { 1_000_000 - (1_000_000 % filters.size) }
-    val rowState = rememberLazyListState(initialFirstVisibleItemIndex = middle)
+    val rowState = rememberLazyListState()
     Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
         StatusChip(ProjectDirectoryFilter.ALL, selected == ProjectDirectoryFilter.ALL, onSelected)
         Spacer(Modifier.width(9.dp))
@@ -235,15 +214,14 @@ private fun CyclicStatusRail(selected: ProjectDirectoryFilter, onSelected: (Proj
                 contentPadding = PaddingValues(end = 25.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                items(Int.MAX_VALUE) { index ->
-                    val filter = filters[index % filters.size]
+                items(filters, key = { it.name }) { filter ->
                     StatusChip(filter, selected == filter, onSelected)
                 }
             }
             // Edge fades signal scrollability, without consuming touch input.
-            Box(Modifier.align(Alignment.CenterStart).width(14.dp).fillMaxHeight()
+            if (rowState.canScrollBackward) Box(Modifier.align(Alignment.CenterStart).width(14.dp).fillMaxHeight()
                 .background(Brush.horizontalGradient(listOf(directoryBackground, directoryBackground.copy(alpha = 0f)))))
-            Box(Modifier.align(Alignment.CenterEnd).width(26.dp).fillMaxHeight()
+            if (rowState.canScrollForward) Box(Modifier.align(Alignment.CenterEnd).width(26.dp).fillMaxHeight()
                 .background(Brush.horizontalGradient(listOf(directoryBackground.copy(alpha = 0f), directoryBackground))))
         }
     }
@@ -277,7 +255,7 @@ private fun ProjectDirectoryCard(
     val percent = item.progressPercent?.coerceIn(0, 100)
     val palette = com.virlin.app.ui.hierarchy.rememberProjectPalette(item.id)
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 82.dp)
+        Modifier.fillMaxWidth().circularOrbCutout().heightIn(min = 82.dp)
             .clip(RoundedCornerShape(19.dp)).background(Color.White)
             .clickable(role = Role.Button) { onOpen(item.id) }
             .testTag("project_row_" + item.id)
@@ -285,7 +263,7 @@ private fun ProjectDirectoryCard(
                 contentDescription = item.title + ", " + item.workstreamCount + " WorkStreams" +
                     (item.progressPercent?.let { ", $it percent complete" } ?: ", no tasks yet")
             }
-            .padding(start = 13.dp, end = 10.dp, top = 11.dp, bottom = 11.dp),
+            .avoidOrbCircle().padding(start = 13.dp, end = 10.dp, top = 11.dp, bottom = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(Modifier.size(45.dp).background(item.iconBackground, CircleShape),

@@ -40,9 +40,10 @@ import java.util.Locale
 /**
  * NOW — greeting + today's achievement summary (presentation only).
  *
- * The four numbers below are **temporary display values**: they live in exactly one place,
+ * Values are supplied by the caller: today's focus is derived from stored sessions;
+ * the remaining achievement metrics stay unavailable until defined. They live in one place,
  * [NowDaySummaryValues], and nothing here reads the domain, the repository or the clock for them.
- * Wiring them later means passing a real instance from the ViewModel — the bar itself
+ * The bar itself
  * ([VirlinProgressBar]) only ever receives formatted strings.
  *
  * The date pill is the only live thing on this surface, and it is device date formatting, not a
@@ -57,7 +58,8 @@ data class NowDaySummaryValues(
     val projectsMovedUnit: String = "projects",
     /** "22h 18m" — real human attention invested. */
     val timeFocused: String = "—",
-    val greetingName: String = ""
+    val greetingName: String = "",
+    val savedUnit: String = "saved"
 )
 
 private val SummaryGreen = Color(0xFF16A34A)
@@ -80,13 +82,16 @@ private val DateFormat: DateTimeFormatter get() = DateTimeFormatter.ofPattern("E
 fun NowDaySummary(
     values: NowDaySummaryValues = NowDaySummaryValues(),
     today: LocalDate = LocalDate.now(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    timersRunning: Boolean = false,
+    pausingTimers: Boolean = false,
+    onPauseAll: (() -> Unit)? = null
 ) {
     Column(modifier = modifier.fillMaxWidth().testTag(NowDaySummaryTag)) {
         // ── greeting · date pill
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             // The accent rule sits ON the segment's left edge — the same edge as the summary
@@ -130,6 +135,10 @@ fun NowDaySummary(
                     maxLines = 1, softWrap = false
                 )
             }
+            if (onPauseAll != null) {
+                MasterTimerButton(timersRunning, pausingTimers, onPauseAll,
+                    runningGradient = listOf(Color(0xFF83CF76), Color(0xFF13A760), Color(0xFF087F5B)))
+            }
         }
 
         Spacer(Modifier.height(14.dp))
@@ -137,6 +146,7 @@ fun NowDaySummary(
         // ── THE SUMMARY BAR — the supplied `VirlinProgressBar`, fed by the same values.
         VirlinProgressBar(
             timeSaved = values.timeSaved,
+            savedUnit = values.savedUnit,
             tasksAdvanced = values.tasksAdvanced,
             projectsMoved = values.projectsMoved,
             timeFocused = values.timeFocused,
@@ -145,7 +155,7 @@ fun NowDaySummary(
                 .height(72.dp)
                 .testTag(NowSummaryBarTag)
                 .semantics {
-                    contentDescription = "${values.timeSaved} saved, " +
+                    contentDescription = "${values.timeSaved} ${values.savedUnit}, " +
                         "${values.tasksAdvanced} ${values.tasksAdvancedUnit} advanced, " +
                         "${values.projectsMoved} ${values.projectsMovedUnit} moved, " +
                         "${values.timeFocused} focused"

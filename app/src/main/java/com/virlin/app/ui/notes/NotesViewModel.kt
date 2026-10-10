@@ -19,6 +19,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Honest save state. Nothing here is set optimistically; SAVED follows a real write. */
 enum class NoteSaveState { NO_CHANGES, EDITED, SAVING, SAVED, FAILED }
@@ -63,8 +67,8 @@ data class NotesUiState(
  * against.
  *
  * Persistence is debounced and goes through [VirlinActions.saveNoteDoc]; the ViewModel never
- * touches a DAO. The document is self-contained: no capture item, no `NoteDocument`, and no
- * legacy `tasks.notes` string is read or written.
+ * touches a DAO. The editor is owner-agnostic: capture-owned documents use the domain's
+ * Knowledge adapter, while ordinary task/project workspace documents remain independent.
  */
 class NotesViewModel(
     private val ownerKey: String,
@@ -79,6 +83,7 @@ class NotesViewModel(
     private val undoStack = ArrayDeque<Snapshot>()
     private val redoStack = ArrayDeque<Snapshot>()
     private var saveJob: Job? = null
+    private val saveMutex = Mutex()
     private var lastTypedBlock: String? = null
 
     private data class Snapshot(
@@ -602,21 +607,36 @@ class NotesViewModel(
     /** Called when the page closes, so the last keystrokes are never lost to the debounce. */
     fun flush() {
         saveJob?.cancel()
+        if (_state.value.save == NoteSaveState.NO_CHANGES || _state.value.save == NoteSaveState.SAVED) return
         viewModelScope.launch { persist() }
     }
 
-    private suspend fun persist() {
+    fun saveAndClose(onSaved: () -> Unit) {
+        saveJob?.cancel()
+        if (_state.value.save == NoteSaveState.NO_CHANGES || _state.value.save == NoteSaveState.SAVED) {
+            onSaved()
+            return
+        }
+        viewModelScope.launch {
+            do { if (!persist()) return@launch } while (_state.value.save == NoteSaveState.EDITED)
+            onSaved()
+        }
+    }
+
+    private suspend fun persist(): Boolean = withContext(NonCancellable) { saveMutex.withLock {
         val s = _state.value
-        if (s.loading) return
+        if (s.loading) return@withLock false
         ui = _state.value.copy(save = NoteSaveState.SAVING)
         val result = actions.saveNoteDoc(ownerKey, s.title.takeIf { it.isNotBlank() }, s.blocks)
         ui = _state.value.copy(
             save = when (result) {
-                is ActionResult.Success -> NoteSaveState.SAVED
+                is ActionResult.Success -> if (_state.value.blocks == s.blocks && _state.value.title == s.title)
+                    NoteSaveState.SAVED else NoteSaveState.EDITED
                 else -> NoteSaveState.FAILED
             },
         )
-    }
+        result is ActionResult.Success
+    } }
 
     override fun onCleared() {
         saveJob?.cancel()

@@ -92,6 +92,7 @@ data class NeedsYouTaskUi(
     val statusLabel: String = "Check due",
     /** The app's own action wording: CHECK / RESUME / FOCUS NOW. */
     val checkLabel: String = "CHECK  →",
+    val externalSeconds: Long? = null,
 )
 
 private data class NeedsPalette(val accent: Color, val ink: Color)
@@ -314,6 +315,8 @@ private fun NeedsYouCard(
             Spacer(Modifier.height(4.dp))
             Text("${task.sourceAndContext} · ${task.statusLabel}", color = Color(0xFF667486),
                 fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            task.externalSeconds?.let { Text("External ${com.virlin.app.domain.model.ExecutionTiming.formatClock(it)}",
+                color = Color(0xFF667486), fontSize = 11.sp) }
         }
         Spacer(Modifier.width(6.dp))
         NeedsActionCapsule(task, nowEpochMillis, colors, capsulePhase, onCheck)
@@ -362,7 +365,9 @@ private fun NeedsActionCapsule(
             capsulePhase < .91f -> 1f
             else -> 1f - (capsulePhase - .91f) / .09f
         }.coerceIn(0f, 1f)
-        Row(Modifier.graphicsLayer(alpha = 1f - checkAlpha),
+        // Fade through a blank frame instead of painting two clock/action strings on top
+        // of one another (particularly illegible with three-digit elapsed hours).
+        if (checkAlpha < .5f) Row(Modifier.graphicsLayer(alpha = 1f - checkAlpha * 2f),
             verticalAlignment = Alignment.CenterVertically) {
                 Canvas(Modifier.size(15.dp)) {
                     val r = size.minDimension * .40f
@@ -376,7 +381,7 @@ private fun NeedsActionCapsule(
                 Text(timeText, fontWeight = FontWeight.Bold, fontSize = 12.sp,
                     color = colors.ink, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
         }
-        Text(task.checkLabel, modifier = Modifier.graphicsLayer(alpha = checkAlpha),
+        else Text(task.checkLabel, modifier = Modifier.graphicsLayer(alpha = (checkAlpha - .5f) * 2f),
             fontWeight = FontWeight.Bold, fontSize = 12.sp,
             color = colors.ink, maxLines = 1)
     }

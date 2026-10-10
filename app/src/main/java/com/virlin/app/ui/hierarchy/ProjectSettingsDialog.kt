@@ -1,7 +1,6 @@
 package com.virlin.app.ui.hierarchy
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,8 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -27,8 +24,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
@@ -71,41 +66,33 @@ fun ProjectSettingsDialog(
     onExecutionDefault: (EffectiveExecutionMode) -> Unit,
     onRestoreTask: (String) -> Unit,
     onCompleteProject: () -> Unit,
+    onDeleteProject: (() -> Unit)? = null,
 ) {
-    // Navigation is modal-local UI state. Keeping it out of saveable state avoids attempting to
+    // Section navigation belongs to this page, not a separate modal window.
     val palette = rememberProjectPalette(project.id)
     CompositionLocalProvider(LocalProjectPalette provides palette) {
     // serialize this sealed navigation contract during Activity recreation.
     var page: SettingsPage by remember(project.id) { mutableStateOf(SettingsPage.Categories) }
-    var entered by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { entered = true }
-    val scale by animateFloatAsState(if (entered) 1f else .96f, tween(180), label = "settings-scale")
-    val alpha by animateFloatAsState(if (entered) 1f else 0f, tween(150), label = "settings-alpha")
+    fun back() {
+        page = when (page) {
+            SettingsPage.Rename, SettingsPage.Colors -> SettingsPage.Category(SettingsCategory.IDENTITY)
+            SettingsPage.Execution -> SettingsPage.Category(SettingsCategory.DEFAULTS)
+            SettingsPage.Completed -> SettingsPage.Category(SettingsCategory.CONTENT)
+            is SettingsPage.Category -> SettingsPage.Categories
+            SettingsPage.Categories -> { onDismiss(); SettingsPage.Categories }
+        }
+    }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = true),
-    ) {
+    Box(Modifier.fillMaxSize()) {
+        BackHandler { back() }
         Surface(
             modifier = Modifier
-                .padding(horizontal = 22.dp, vertical = 42.dp)
-                .fillMaxWidth()
-                .widthIn(max = 460.dp)
-                .heightIn(min = 420.dp, max = 680.dp)
-                .scale(scale).alpha(alpha)
+                .fillMaxSize()
                 .testTag(ProjectSettingsTestTag),
-            shape = RoundedCornerShape(28.dp),
             color = Color(0xFFFBFDFB),
-            shadowElevation = 18.dp,
         ) {
-            Column(Modifier.fillMaxWidth()) {
-                SettingsHeader(project, page, onBack = {
-                    page = when (page) {
-                        is SettingsPage.Category, SettingsPage.Rename, SettingsPage.Execution,
-                        SettingsPage.Completed, SettingsPage.Colors -> SettingsPage.Categories
-                        SettingsPage.Categories -> SettingsPage.Categories
-                    }
-                }, onDismiss = onDismiss)
+            Column(Modifier.fillMaxSize()) {
+                SettingsHeader(project, page, onBack = { back() })
                 HorizontalDivider(color = Color(0xFFE5ECE8))
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (val current = page) {
@@ -120,13 +107,14 @@ fun ProjectSettingsDialog(
                             onCompleted = { page = SettingsPage.Completed },
                             onCompleteProject = onCompleteProject,
                             onColors = { page = SettingsPage.Colors },
+                            onDeleteProject = onDeleteProject,
                         )
                         SettingsPage.Rename -> RenamePage(project.title) { title -> onRename(title); page = SettingsPage.Categories }
                         SettingsPage.Execution -> ExecutionPage(project.defaultExecutionMode) { mode ->
                             onExecutionDefault(mode); page = SettingsPage.Categories
                         }
                         SettingsPage.Completed -> CompletedTasksPage(projectTasks.filter { it.status.isCompleted }, onRestoreTask)
-                        SettingsPage.Colors -> ProjectColorsEditor(project.id) { page = SettingsPage.Categories }
+                        SettingsPage.Colors -> ProjectColorsEditor(project.id) { page = SettingsPage.Category(SettingsCategory.IDENTITY) }
                     }
                     ScrollFade(Alignment.TopCenter)
                     ScrollFade(Alignment.BottomCenter)
@@ -136,11 +124,15 @@ fun ProjectSettingsDialog(
                     Modifier.fillMaxWidth().padding(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("Cancel") }
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = settingsAccent),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, settingsAccent.copy(alpha = .45f)),
+                        contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Cancel") }
                     Button(
                         onClick = onDismiss,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = settingsAccent),
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = settingsAccent, contentColor = readableOn(settingsAccent)),
                     ) { Text("Save changes") }
                 }
             }
@@ -154,7 +146,7 @@ private val settingsAccent: Color @Composable get() = LocalProjectPalette.curren
 private val settingsTint: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFEAF8F1)
 
 @Composable
-private fun SettingsHeader(project: Project, page: SettingsPage, onBack: () -> Unit, onDismiss: () -> Unit) {
+private fun SettingsHeader(project: Project, page: SettingsPage, onBack: () -> Unit) {
     val title = when (page) {
         SettingsPage.Categories -> "Project settings"
         is SettingsPage.Category -> page.value.title
@@ -164,16 +156,18 @@ private fun SettingsHeader(project: Project, page: SettingsPage, onBack: () -> U
         SettingsPage.Colors -> "Project colors"
     }
     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (page == SettingsPage.Categories) ProjectIcon(project = project, size = 42.dp, decorative = true)
-        else IconButton(onClick = onBack, modifier = Modifier.size(42.dp)) {
-            Icon(Icons.Outlined.ArrowBack, contentDescription = "Back to project settings")
+        IconButton(onClick = onBack, modifier = Modifier.size(42.dp)) {
+            Icon(Icons.Outlined.ArrowBack, contentDescription = if (page == SettingsPage.Categories) "Back to project" else "Back to project settings", tint = settingsAccent)
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = VirlinColors.TextPrimary)
-            Text(project.title, fontSize = 12.sp, color = VirlinColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold, color = VirlinColors.TextPrimary)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ProjectIcon(project = project, size = 28.dp, decorative = true)
+                Text(project.title, modifier = Modifier.weight(1f), fontSize = 12.sp, lineHeight = 18.sp,
+                    color = VirlinColors.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
         }
-        IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, contentDescription = "Close project settings") }
     }
 }
 
@@ -201,7 +195,10 @@ private fun CategoryPage(
     onCompleted: () -> Unit,
     onCompleteProject: () -> Unit,
     onColors: () -> Unit,
+    onDeleteProject: (() -> Unit)?,
 ) {
+    var completing by rememberSaveable(project.id, category) { mutableStateOf(false) }
+    if (completing) BackHandler { completing = false }
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 14.dp),
         contentPadding = PaddingValues(vertical = 14.dp),
@@ -209,10 +206,10 @@ private fun CategoryPage(
     ) {
         when (category) {
             SettingsCategory.IDENTITY -> {
-                item { SettingRow("Project name", project.title, onRename) }
-                item { SettingRow("Project icon", "Choose default or custom", onEditIcon) }
-                item { SettingRow("Project colors", "24 colors, shades and custom palette", onColors) }
-                item { SettingRow("Project status", project.status.name.lowercase().replaceFirstChar { it.uppercase() }, null) }
+                item { SettingRow("Project name", project.title, onRename, leading = Icons.Outlined.Edit) }
+                item { SettingRow("Project icon", "Built-in, automatic or your own image", onEditIcon, leading = Icons.Outlined.Image) }
+                item { SettingRow("Project colors", "Presets, custom shades and live preview", onColors, leading = Icons.Outlined.Palette) }
+                item { SettingRow("Project status", project.status.name.lowercase().replaceFirstChar { it.uppercase() }, null, leading = Icons.Outlined.CheckCircle) }
             }
             SettingsCategory.DEFAULTS -> {
                 item { SettingRow("Default execution", if (project.defaultExecutionMode == EffectiveExecutionMode.EXTERNAL) "External" else "Internal", onExecution) }
@@ -222,6 +219,22 @@ private fun CategoryPage(
                 item { PlannedRow("Opening tab", "Overview · Page shown when this project opens") }
             }
             SettingsCategory.ORGANIZATION -> {
+                item {
+                    val (enabled, setEnabled) = rememberWorkstreamBlocks(project.id)
+                    Column(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Organize workstreams as blocks", fontWeight = FontWeight.SemiBold)
+                                Text("Show drag handles to reorder workstreams in this project.", fontSize = 12.sp, color = VirlinColors.TextSecondary)
+                            }
+                            Switch(enabled, setEnabled, modifier = Modifier.testTag("workstream_blocks_switch"),
+                                colors = SwitchDefaults.colors(checkedTrackColor = settingsAccent, checkedThumbColor = readableOn(settingsAccent)))
+                        }
+                        Text("Hold the six-dot handle, then drag up or down. Off by default. Changes ordering only; saved immediately.",
+                            fontSize = 12.sp, lineHeight = 18.sp, color = settingsAccent)
+                    }
+                }
                 item { PlannedRow("WorkStream icons", "Automatic") }
                 item { PlannedRow("WorkStream ordering", "Manual") }
                 item { PlannedRow("Task ordering", "Manual") }
@@ -257,9 +270,29 @@ private fun CategoryPage(
                 item { PlannedRow("Duplicate project", "Structure or full copy") }
             }
             SettingsCategory.MANAGEMENT -> {
-                item { SettingRow("Complete project", "Mark this project done", onCompleteProject) }
+                item {
+                    SettingRow("Complete project", "Mark this project done", { completing = !completing })
+                }
+                if (completing) item {
+                    Column(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp))
+                        .testTag("complete_project_inline_confirmation").padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Complete ${project.title}?", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text("Mark this project as done using the existing completion action. This is not archive or deletion.",
+                            color = VirlinColors.TextSecondary, fontSize = 13.sp)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedButton(onClick = { completing = false }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Keep project") }
+                            Button(onClick = { completing = false; onCompleteProject() },
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("confirm_complete_project"),
+                                colors = ButtonDefaults.buttonColors(containerColor = settingsAccent, contentColor = readableOn(settingsAccent))) { Text("Complete") }
+                        }
+                    }
+                }
                 item { PlannedRow("Archive project", "Hide without deleting") }
-                item { PlannedRow("Delete project", "Permanent · confirmation required", danger = true) }
+                item {
+                    if (onDeleteProject != null) SettingRow("Delete project", "Permanently remove project and all its content", onDeleteProject, danger = true)
+                    else PlannedRow("Delete project", "Permanent · confirmation required", danger = true)
+                }
             }
         }
     }
@@ -371,14 +404,19 @@ private fun SettingsCard(icon: ImageVector, title: String, subtitle: String, onC
 }
 
 @Composable
-private fun SettingRow(title: String, value: String, onClick: (() -> Unit)?) {
+private fun SettingRow(title: String, value: String, onClick: (() -> Unit)?, danger: Boolean = false, leading: ImageVector? = null) {
     val modifier = Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(14.dp))
         .border(1.dp, Color(0xFFDDE6E1), RoundedCornerShape(14.dp))
         .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
         .padding(14.dp)
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        leading?.let {
+            Box(Modifier.padding(end = 12.dp).size(40.dp).background(settingsTint, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                Icon(it, contentDescription = null, tint = settingsAccent, modifier = Modifier.size(22.dp))
+            }
+        }
         Column(Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold, color = VirlinColors.TextPrimary)
+            Text(title, fontWeight = FontWeight.SemiBold, color = if (danger) Color(0xFF9B3C38) else VirlinColors.TextPrimary)
             Text(value, fontSize = 11.5.sp, color = VirlinColors.TextSecondary)
         }
         if (onClick != null) Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = VirlinColors.TextSecondary)

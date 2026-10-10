@@ -9,6 +9,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Where the map's APPEARANCE lives — layout, palette and colour overrides, per project.
@@ -22,25 +24,57 @@ class MapAppearanceStore(context: Context) {
 
     private val file = File(context.filesDir, "map_appearance.json")
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val mutex = Mutex()
+    private val removedProjects = mutableSetOf<String>()
+    private var loaded = false
     private val cache = MutableStateFlow<Map<String, MapAppearance>>(emptyMap())
     val all: StateFlow<Map<String, MapAppearance>> = cache
 
     init {
-        scope.launch { cache.value = read() }
+        scope.launch { mutex.withLock { if (!loaded) { cache.value = read(); loaded = true } } }
     }
 
     fun appearanceOf(projectId: String): MapAppearance =
         cache.value[projectId] ?: MapAppearance()
 
     fun save(projectId: String, appearance: MapAppearance) {
-        cache.value = cache.value + (projectId to appearance)
-        scope.launch { write(cache.value) }
+        scope.launch { mutex.withLock {
+            if (!loaded) { cache.value = read(); loaded = true }
+            if (projectId !in removedProjects) {
+                cache.value = cache.value + (projectId to prune(appearance))
+                write(cache.value)
+            }
+        } }
+    }
+
+    suspend fun remove(projectId: String) = mutex.withLock {
+        // Do not erase another project's configuration if the shared file is unreadable.
+        if (file.exists() || File(file.path + ".bak").exists()) JSONObject(android.util.AtomicFile(file).openRead().bufferedReader().use { it.readText() })
+        if (!loaded) { cache.value = read(); loaded = true }
+        removedProjects += projectId
+        val remaining = cache.value - projectId
+        write(remaining).getOrThrow()
+        cache.value = remaining
+    }
+
+    private val removedOwners = mutableSetOf<String>()
+    private fun prune(appearance: MapAppearance) = appearance.copy(
+        nodeColors = appearance.nodeColors - removedOwners,
+        branchColors = appearance.branchColors - removedOwners,
+    )
+    suspend fun removeOwners(ids: Set<String>) = mutex.withLock {
+        if (file.exists() || File(file.path + ".bak").exists()) JSONObject(android.util.AtomicFile(file).openRead().bufferedReader().use { it.readText() })
+        if (!loaded) { cache.value = read(); loaded = true }
+        removedOwners += ids
+        val remaining = cache.value.mapValues { prune(it.value) }
+        write(remaining).getOrThrow()
+        cache.value = remaining
     }
 
     private suspend fun read(): Map<String, MapAppearance> = withContext(Dispatchers.IO) {
         runCatching {
-            if (!file.exists()) return@runCatching emptyMap<String, MapAppearance>()
-            val root = JSONObject(file.readText())
+            if (!file.exists() && !File(file.path + ".bak").exists()) return@runCatching emptyMap<String, MapAppearance>()
+            val root = JSONObject(android.util.AtomicFile(file).openRead().bufferedReader().use { it.readText() })
             buildMap {
                 root.keys().forEach { projectId ->
                     val o = root.getJSONObject(projectId)
@@ -73,7 +107,10 @@ class MapAppearanceStore(context: Context) {
                         .put("branchColors", appearance.branchColors.toJson())
                 )
             }
-            file.writeText(root.toString())
+            val atomic = android.util.AtomicFile(file)
+            val output = atomic.startWrite()
+            try { output.write(root.toString().toByteArray(Charsets.UTF_8)); atomic.finishWrite(output) }
+            catch (e: Exception) { atomic.failWrite(output); throw e }
         }
     }
 

@@ -141,6 +141,7 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     override suspend fun getCycles(streamId: String) = inner?.getCycles(streamId) ?: emptyList()
 
     override suspend fun getProject(id: String) = inner?.getProject(id)
+    override suspend fun pendingProjectDeletions() = inner?.pendingProjectDeletions() ?: emptyList()
     override suspend fun getTask(id: String) = inner?.getTask(id)
     override suspend fun getStreamsByProject(projectId: String) = inner?.getStreamsByProject(projectId) ?: emptyList()
     override suspend fun getTasksByProject(projectId: String) = inner?.getTasksByProject(projectId) ?: emptyList()

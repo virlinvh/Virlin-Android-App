@@ -55,6 +55,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,10 +98,17 @@ data class ProjectPageUi(
     val activityContent: @Composable () -> Unit = {},
     /** The Knowledge tab's own content, given a bounded height by this page. */
     val knowledgeContent: @Composable () -> Unit = {},
-    val executionDefaultLabel: String = "Human"
+    val executionDefaultLabel: String = "Human",
+    val externalSeconds: Long = 0,
+    val focusSeconds: Long = 0,
+    val timersRunning: Boolean = false,
+    val timerControlBusy: Boolean = false,
+    val timerControlMessage: String? = null,
+    val searchItems: List<ProjectSearchItem> = emptyList(),
+    val searchTasks: List<StreamTaskUi> = emptyList()
 ) {
-    val totalTasks: Int get() = workstreams.sumOf { it.totalTasks } + standaloneTasks.size
-    val completedTasks: Int get() = workstreams.sumOf { it.completedTasks } + standaloneTasks.count { it.completed }
+    val totalTasks: Int get() = workstreams.sumOf { it.totalTasks } + standaloneTasks.sumOf { it.leafCount }
+    val completedTasks: Int get() = workstreams.sumOf { it.completedTasks } + standaloneTasks.sumOf { it.completedLeafCount }
     val progress: Float get() = if (totalTasks == 0) 0f else completedTasks.toFloat() / totalTasks
     val humanActiveCount: Int get() = workstreams.sumOf { it.humanRunCount ?: if (it.state == WorkstreamState.HUMAN_FOCUS) 1 else 0 }
     val externalActiveCount: Int get() = workstreams.sumOf { it.externalRunCount ?: if (it.state == WorkstreamState.EXTERNAL_RUNNING) 1 else 0 }
@@ -125,7 +136,8 @@ enum class WorkstreamKind { DESIGN, ASSISTANT, BUILD, CLOUD, GENERAL }
 enum class WorkstreamState {
     HUMAN_FOCUS, EXTERNAL_RUNNING, MULTI_RUN, NEEDS_ATTENTION, READY, WAITING, BLOCKED, PAUSED, COMPLETE
 }
-data class ProjectTaskUi(val id: String, val title: String, val completed: Boolean)
+data class ProjectTaskUi(val id: String, val title: String, val completed: Boolean,
+    val row: StreamTaskUi? = null, val leafCount: Int = 1, val completedLeafCount: Int = if (completed) 1 else 0)
 data class ProjectDocumentUi(
     val id: String,
     val title: String,
@@ -152,7 +164,9 @@ data class ProjectPageActions(
     val onProjectSettings: () -> Unit,
     val onEditProject: () -> Unit,
     val onManageWorkstreams: () -> Unit,
-    val onWorkstreamControls: (String) -> Unit = {}
+    val onWorkstreamControls: (String) -> Unit = {},
+    val onReorderWorkstream: (String, String?) -> Unit = { _, _ -> },
+    val onToggleTimers: (() -> Unit)? = null
 )
 
 private object P {
@@ -350,7 +364,9 @@ private fun SectionHeading(title: String, action: String, tag: String? = null, o
 
 @Composable
 private fun OverviewBody(ui: ProjectPageUi, actions: ProjectPageActions) {
-    ExecutionLegend(ui.humanActiveCount, ui.externalActiveCount)
+    ExecutionLegend(ui.humanActiveCount, ui.externalActiveCount,
+        ui.workstreams.count { it.state == WorkstreamState.MULTI_RUN },
+        ui.workstreams.count { it.state == WorkstreamState.NEEDS_ATTENTION }, ui.id)
     Spacer(Modifier.height(18.dp))
     // The app's existing tag, so the hierarchy journey still finds this control.
     SectionHeading("Workstreams", "New", AddWorkStreamButtonTag, actions.onAddWorkstream)
@@ -368,39 +384,10 @@ private fun OverviewBody(ui: ProjectPageUi, actions: ProjectPageActions) {
     Spacer(Modifier.height(4.dp))
     if (ui.standaloneTasks.isEmpty()) {
         Text("None", fontSize = 13.sp, color = P.secondary)
-    } else Surface(shape = RoundedCornerShape(13.dp), border = BorderStroke(1.dp, P.line), color = Color.White) {
-        Column {
+    } else Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             ui.standaloneTasks.forEachIndexed { index, task ->
-                Row(
-                    Modifier.fillMaxWidth().height(48.dp).testTag(taskRowTag(task.id)),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = { actions.onToggleTask(task.id) }, modifier = Modifier.testTag(taskCompleteTag(task.id))) {
-                        Box(
-                            Modifier.size(22.dp).clip(CircleShape)
-                                .background(if (task.completed) P.leaf else Color.White)
-                                .then(if (task.completed) Modifier else Modifier.background(Color.White)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (task.completed) Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(17.dp))
-                            else Canvas(Modifier.fillMaxSize()) {
-                                drawCircle(P.secondary, style = Stroke(1.4.dp.toPx()))
-                            }
-                        }
-                    }
-                    Text(
-                        task.title, modifier = Modifier.weight(1f).clickable { actions.onOpenTask(task.id) },
-                        fontSize = 15.sp, color = if (task.completed) P.secondary else P.ink,
-                        textDecoration = if (task.completed) TextDecoration.LineThrough else null,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                    IconButton(onClick = { actions.onTaskMenu(task.id) }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Options for ${task.title}", tint = P.secondary)
-                    }
-                }
-                if (index != ui.standaloneTasks.lastIndex) HorizontalDivider(Modifier.padding(start = 47.dp), color = P.line)
+                ProjectStandaloneTaskCard(task, index, actions)
             }
-        }
     }
     Spacer(Modifier.height(16.dp))
     KnowledgeBody(ui, actions, showHeading = true)
@@ -448,29 +435,81 @@ private fun WorkstreamRow(item: WorkstreamUi, onClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun ExecutionLegend(human: Int, external: Int) {
+internal fun ExecutionLegend(human: Int, external: Int, multiRun: Int = 0, review: Int = 0, projectId: String = "") {
+    var expanded by rememberSaveable(projectId) { mutableStateOf(false) }
     Surface(shape = RoundedCornerShape(14.dp), color = P.executionWash) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Execution signals", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = P.ink)
-                Text("Live modes inside each workstream", fontSize = 11.sp, color = P.secondary)
+        Column(Modifier.fillMaxWidth().testTag("execution_summary")) {
+            Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(28.dp).background(Color(0xFFDDF3EA), CircleShape)
+                    .testTag("execution_pulse_icon"), contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.size(18.dp)) {
+                        val pulse = Path().apply {
+                            moveTo(0f, size.height * 0.52f)
+                            lineTo(size.width * 0.22f, size.height * 0.52f)
+                            lineTo(size.width * 0.34f, size.height * 0.18f)
+                            lineTo(size.width * 0.49f, size.height * 0.82f)
+                            lineTo(size.width * 0.64f, size.height * 0.36f)
+                            lineTo(size.width * 0.76f, size.height * 0.52f)
+                            lineTo(size.width, size.height * 0.52f)
+                        }
+                        drawPath(pulse, Color(0xFF007B58), style = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round))
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Text("Execution", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = P.ink,
+                    modifier = Modifier.weight(1f))
+                Text("${human + external} active", fontSize = 11.sp, color = P.secondary)
+                IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(44.dp)
+                    .testTag("execution_disclosure").semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = if (expanded) "Hide execution details" else "Show execution details",
+                        tint = P.ink, modifier = Modifier.size(22.dp))
+                }
             }
-            CountChip("$human human", P.focus, Color(0xFFE7F7F0))
-            Spacer(Modifier.width(6.dp))
-            CountChip("$external external", P.external, Color(0xFFF0ECFF))
+            if (expanded) FlowRow(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 10.dp)
+                .testTag("execution_details"), horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                CountChip("Focus", human, Color(0xFF009F73), Color(0xFFE7F7F0))
+                CountChip("Running", external, Color(0xFF2864F0), Color(0xFFE8F0FF))
+                CountChip("Multi-run", multiRun, Color(0xFF7452E8), Color(0xFFF0ECFF))
+                CountChip("Review", review, Color(0xFFAA7500), Color(0xFFFFF3D5))
+            }
         }
     }
 }
 
 @Composable
-private fun CountChip(text: String, color: Color, background: Color) {
-    Text(text, color = color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.background(background, RoundedCornerShape(50)).padding(horizontal = 9.dp, vertical = 6.dp))
+private fun CountChip(label: String, count: Int, color: Color, background: Color) {
+    Row(Modifier.background(background, RoundedCornerShape(50))
+        .semantics(mergeDescendants = true) { contentDescription = "$label $count" }
+        .padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = color, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Spacer(Modifier.width(6.dp))
+        Box(Modifier.defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
+            .background(color.copy(alpha = 0.10f), CircleShape).padding(horizontal = 3.dp),
+            contentAlignment = Alignment.Center) {
+            Text("$count", color = color, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
 }
 
 @Composable
 internal fun ExecutionDial(state: WorkstreamState, modifier: Modifier = Modifier, activeRunCount: Int = 0) {
+    if (state == WorkstreamState.PAUSED) {
+        PausedWorkIcon(modifier)
+        return
+    }
+    if (state == WorkstreamState.WAITING || state == WorkstreamState.NEEDS_ATTENTION) {
+        WaitingReviewIcon(state == WorkstreamState.NEEDS_ATTENTION, modifier)
+        return
+    }
+    if (state == WorkstreamState.READY) {
+        ReadyWorkIcon(modifier, P.inactive)
+        return
+    }
     val animated = state == WorkstreamState.HUMAN_FOCUS ||
         state == WorkstreamState.EXTERNAL_RUNNING ||
         state == WorkstreamState.MULTI_RUN ||
@@ -714,6 +753,8 @@ internal fun StatePill(state: WorkstreamState) {
         WorkstreamState.EXTERNAL_RUNNING -> P.external to Color(0xFFEAF2FF)
         WorkstreamState.MULTI_RUN -> Color(0xFF315FE8) to Color(0xFFF0EDFF)
         WorkstreamState.NEEDS_ATTENTION -> P.attention to Color(0xFFFFF3D3)
+        WorkstreamState.WAITING -> WaitingStatusInk to WaitingStatusSurface
+        WorkstreamState.PAUSED -> PausedStatusInk to PausedStatusSurface
         WorkstreamState.BLOCKED -> P.coral to Color(0xFFFFECE9)
         WorkstreamState.COMPLETE -> P.focus to Color(0xFFE7F7F0)
         else -> P.secondary to Color(0xFFF1F3F4)

@@ -122,7 +122,7 @@ fun VoiceEditorScreen(
     /** Ownership for a new recording. Ignored when [captureId] is set; that row owns itself. */
     initialContext: CaptureContext = CaptureContext.None,
     vm: VoiceEditorViewModel = viewModel(
-        key = "voice-${captureId ?: "new"}-${initialContext.taskId ?: "global"}",
+        key = "voice-${captureId ?: "new"}-${initialContext.taskId ?: initialContext.workStreamId ?: initialContext.projectId ?: "global"}",
         factory = VoiceEditorViewModel.factory(captureId, LocalContext.current, initialContext)
     )
 ) {

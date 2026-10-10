@@ -1,5 +1,7 @@
 package com.virlin.app.ui.screens
 
+import androidx.lifecycle.flowWithLifecycle
+
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -116,6 +118,11 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
         return
     }
     val streams by MockData.streams.collectAsState()
+    val focusLifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    val dailyFocusFlow = remember(nowViewModel, focusLifecycle) {
+        nowViewModel.daySummary.flowWithLifecycle(focusLifecycle)
+    }
+    val daySummary by dailyFocusFlow.collectAsState(initial = NowDaySummaryValues(timeSaved = "Loading"))
     val taskItems by nowViewModel.taskItems.collectAsState()
     val readyFocusIds by nowViewModel.readyFocusIds.collectAsState()
     // Hierarchy (Project / WorkStream / active Task) comes from the domain, never from MockData.
@@ -130,7 +137,12 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     val needsYouDisplay by nowViewModel.needsYouDisplay.collectAsState()      // display order only (Phase 06)
     val needsYouSort by nowViewModel.needsYouSort.collectAsState()
     val projects by nowViewModel.projects.collectAsState()
+    val ownerStreams by nowViewModel.ownerStreams.collectAsState()
+    val readyFocusedLabels by nowViewModel.readyFocusedLabels.collectAsState()
     val chooser by nowViewModel.chooser.collectAsState()
+    val timersRunning by nowViewModel.timersRunning.collectAsState()
+    val pausingTimers by nowViewModel.pausingTimers.collectAsState()
+    val masterPauseMessage by nowViewModel.masterPauseMessage.collectAsState()
 
     // Domain focus identity is authoritative; a stale display row must never select focus.
     val focusStream = currentFocus?.let { focus -> streams.find { it.id == focus.streamId } }
@@ -183,6 +195,10 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
         CompleteWorkStreamDialog(title, onConfirm = nowViewModel::confirmCompleteWorkStream, onDismiss = nowViewModel::dismissWorkStreamCompletion)
     }
 
+    val nowTick = rememberSecondTicker()
+    var positionPicker by remember { mutableStateOf<String?>(null) }
+    var control by remember { mutableStateOf<Pair<String, NeedsYouControlTab>?>(null) }
+    Box(Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -194,7 +210,13 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
 
         // 1. GREETING + TODAY'S SUMMARY (the old Virlin/progress-pill header was removed)
         // Presentation only — see NowDaySummaryValues.
-        NowDaySummary()
+        NowDaySummary(values = daySummary,
+            timersRunning = timersRunning, pausingTimers = pausingTimers,
+            onPauseAll = nowViewModel::pauseAllTimers)
+        if (masterPauseMessage != null && (!timersRunning || !masterPauseMessage!!.startsWith("All tasks paused"))) {
+            Text(masterPauseMessage!!, fontSize = 12.sp, color = CharcoalMuted,
+                modifier = Modifier.padding(top = 8.dp).testTag("master_pause_message"))
+        }
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -217,11 +239,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
         if (needsYouStreams.isNotEmpty()) {
             // ONE per-second time source for every card's live timer (lifecycle-aware, drift-free).
             // Only the timer texts read it, so the rest of Now never recomposes on a tick.
-            val nowTick = rememberSecondTicker()
             // Queue-position selector (Phase 04 policies): one sheet for the section.
-            var positionPicker by remember { mutableStateOf<String?>(null) }
             // Which item's control sheet is open, and which tab it opened on. Transient UI state.
-            var control by remember { mutableStateOf<Pair<String, NeedsYouControlTab>?>(null) }
             var sortOpen by remember { mutableStateOf(false) }
 
             VirlinNeedsYouSection(
@@ -241,6 +260,11 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                         title = contextPaths[stream.id]?.lastOrNull() ?: stream.subtitle.ifBlank { stream.title },
                         sourceAndContext = contextPaths[stream.id]?.dropLast(1)?.joinToString(" › ")?.takeIf { it.isNotBlank() } ?: stream.title,
                         statusLabel = reason,
+                        externalSeconds = (taskItems.firstOrNull { it.id == stream.id }?.execution?.let {
+                            com.virlin.app.domain.model.ExternalTiming.seconds(it, externalNow)
+                        } ?: ownerStreams.firstOrNull { it.id == stream.id }?.let {
+                            com.virlin.app.domain.model.ExternalTiming.seconds(it, externalNow)
+                        })?.takeIf { it > 0 },
                         // `dueAt` is the temporal truth; the card renders `dueAt − now`, nothing else.
                         checkDueAtEpochMillis = (target ?: nowTick.value).toEpochMilli(),
                         showCheckLabel = target == null,
@@ -276,41 +300,6 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                 }
             )
 
-            // The unified control sheet (Phase 2): one surface for position and check decisions.
-            // It owns no domain logic — every row below calls an existing intent.
-            control?.let { (id, initialTab) ->
-                val item = needsYouStreams.firstOrNull { it.id == id }
-                val rank = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 }
-                NeedsYouControlSheet(
-                    stream = item,
-                    project = item?.let { com.virlin.app.domain.model.ProjectIdentity.resolve(it.projectId, projects) },
-                    kind = attention[id],
-                    position = rank,
-                    total = needsYouQueue.size,
-                    dueAt = dueAt[id] ?: waitingSince[id],
-                    now = nowTick,
-                    initialTab = initialTab,
-                    // Existing queue path; the sheet stays open so one visit can do both things.
-                    onMoveToPosition = { pos -> nowViewModel.reorderNeedsYou(id, pos) },
-                    onOpenPriorityPolicy = { control = null; positionPicker = id },
-                    onAction = { action ->
-                        // Every branch is an EXISTING transition out of CHECK. Actions that take the
-                        // item out of Needs You close the sheet; the list updates from the domain.
-                        when (action) {
-                            is NeedsYouControlAction.FocusNow ->
-                                if (attention[id] == AttentionKind.CHECK_DUE) nowViewModel.resultReadyNow(id) else nowViewModel.focus(id)
-                            is NeedsYouControlAction.StillRunning -> nowViewModel.stillRunning(id, action.minutes)
-                            is NeedsYouControlAction.RemindLater ->
-                                if (attention[id] == AttentionKind.RESULT_READY) nowViewModel.resultReadyLater(id, action.minutes)
-                                else nowViewModel.deferReturn(id, action.minutes)
-                            is NeedsYouControlAction.NotNow -> nowViewModel.markReady(id)
-                            is NeedsYouControlAction.Blocked -> nowViewModel.block(id)
-                        }
-                        control = null
-                    },
-                    onDismiss = { control = null }
-                )
-            }
             // Priority editor (Phase 04): still the home of durable policies, opened from the sheet.
             positionPicker?.let { id ->
                 val edited = needsYouStreams.firstOrNull { it.id == id }
@@ -346,13 +335,14 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                     }
                     WorkingTaskUi(
                         id = item.id,
-                        title = item.actorName,
+                        title = item.displayTitle,
                         detail = listOfNotNull(
                             (listOfNotNull(item.projectTitle, item.stream.title) + item.taskPath)
                                 .joinToString(" › "),
                             item.stageLabel() ?: item.instruction
                         ).joinToString(" · "),
                         checkStartedAtEpochMillis = windowStart?.toEpochMilli(),
+                        elapsedSeconds = com.virlin.app.domain.model.ExternalTiming.seconds(item.stream, externalNow),
                         nextCheckAtEpochMillis = due?.toEpochMilli()
                     )
                 },
@@ -387,15 +377,18 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
             VirlinWhenFreeSection(
                 items = readyStreams.map { stream ->
                     val project = com.virlin.app.domain.model.ProjectIdentity
-                        .resolve(stream.projectId, projects)
+                        .resolveWorkItem(stream.id, stream.projectId, projects, taskItems, ownerStreams)
                     WhenFreeCardUi(
                         id = stream.id,
                         title = stream.title,
-                        detail = stream.subtitle,
-                        durationLabel = stream.expectedDurationSec?.let { "~${it / 60} min" },
-                        projectIcon = project?.let {
-                            { com.virlin.app.ui.components.ProjectIcon(
-                                project = it, size = 30.dp, decorative = true) }
+                        detail = WhenFreePresentation.hierarchy(stream.id, projects, taskItems, ownerStreams),
+                        focusedLabel = readyFocusedLabels[stream.id],
+                        projectIcon = {
+                            if (project != null) com.virlin.app.ui.components.ProjectIcon(
+                                project = project, size = 30.dp, decorative = true)
+                            else com.virlin.app.ui.components.ProjectIcon(
+                                projectId = "projectless:${stream.id}", name = stream.title,
+                                iconPath = null, size = 30.dp, decorative = true)
                         }
                     )
                 },
@@ -409,6 +402,42 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
         }
 
         Spacer(modifier = Modifier.height(88.dp))   // clearance for the floating Orb; the bar itself is handled by Scaffold insets
+    }
+            // The unified control sheet (Phase 2): one surface for position and check decisions.
+            // It owns no domain logic — every row below calls an existing intent.
+            control?.let { (id, initialTab) ->
+                val item = needsYouStreams.firstOrNull { it.id == id }
+                val rank = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 }
+                NeedsYouControlSheet(
+                    stream = item,
+                    project = item?.let { com.virlin.app.domain.model.ProjectIdentity.resolve(it.projectId, projects) },
+                    kind = attention[id],
+                    position = rank,
+                    total = needsYouQueue.size,
+                    dueAt = dueAt[id] ?: waitingSince[id],
+                    now = nowTick,
+                    initialTab = initialTab,
+                    // Existing queue path; the sheet stays open so one visit can do both things.
+                    onMoveToPosition = { pos -> nowViewModel.reorderNeedsYou(id, pos) },
+                    onOpenPriorityPolicy = { control = null; positionPicker = id },
+                    onAction = { action ->
+                        // Every branch is an EXISTING transition out of CHECK. Actions that take the
+                        // item out of Needs You close the sheet; the list updates from the domain.
+                        when (action) {
+                            is NeedsYouControlAction.FocusNow ->
+                                if (attention[id] == AttentionKind.CHECK_DUE) nowViewModel.resultReadyNow(id) else nowViewModel.focus(id)
+                            is NeedsYouControlAction.StillRunning -> nowViewModel.stillRunning(id, action.minutes)
+                            is NeedsYouControlAction.RemindLater ->
+                                if (attention[id] == AttentionKind.RESULT_READY) nowViewModel.resultReadyLater(id, action.minutes)
+                                else nowViewModel.deferReturn(id, action.minutes)
+                            is NeedsYouControlAction.NotNow -> nowViewModel.markReady(id)
+                            is NeedsYouControlAction.Blocked -> nowViewModel.block(id)
+                        }
+                        control = null
+                    },
+                    onDismiss = { control = null }
+                )
+            }
     }
 }
 
@@ -431,7 +460,11 @@ fun FocusHeroCard(
         stream.priorFocusInvestedSec.toLong(),
         stream.focusInvestedSec
     )
-    val showInvested = !external && hierarchy?.activeTaskId != null
+    // A task-less focus session still has real elapsed attention time. Do not
+    // replace its duration with the generic FOCUS ACTIVE fallback.
+    val focusDurationLabel = if (hierarchy?.activeTaskId != null)
+        "Task total · ${com.virlin.app.domain.model.DailyFocus.label(totalInvestedSec)}"
+    else "${com.virlin.app.domain.model.DailyFocus.label(stream.focusInvestedSec.toLong())} focused"
 
     VirlinCurrentFocusCard(
         projectName = hierarchy?.projectTitle.orEmpty(),
@@ -440,7 +473,7 @@ fun FocusHeroCard(
         hierarchyLabels = hierarchy?.let { listOf(it.workStreamTitle) + it.taskPath.dropLast(1) }
             ?: listOf(stream.title),
         elapsedTime = "",                                   // the real timer comes through the slot
-        investedTime = if (showInvested) FocusInvestment.formatInvested(totalInvestedSec) else "",
+        investedTime = focusDurationLabel,
         nextAction = (hierarchy?.nextHumanAction ?: stream.nextAction).orEmpty(),
           nextEstimate = "",
         onLeave = { onLeave(stream.id) },
@@ -648,7 +681,7 @@ const val CompleteWorkStreamCancelTag = "complete_workstream_cancel"
 /** Explicit confirmation before a whole WorkStream is completed from the Now card. */
 @Composable
 fun CompleteWorkStreamDialog(title: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+    com.virlin.app.ui.components.SafeDialog(onDismissRequest = onDismiss, scrollContent = true) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

@@ -28,6 +28,10 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.animation.core.*
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,6 +83,17 @@ fun VirlinCurrentFocusCard(
     timerContent: (@Composable () -> Unit)? = null,
     hierarchyLabels: List<String> = listOf(headline),
 ) {
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    val lifecycleState by lifecycle.currentStateFlow.collectAsState()
+    val motion = android.animation.ValueAnimator.areAnimatorsEnabled() &&
+        lifecycleState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+    val focusLabelAlpha = if (motion) {
+        val transition = rememberInfiniteTransition(label = "focusLabelPulse")
+        val alpha by transition.animateFloat(1f, .72f,
+            infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "focusLabelAlpha")
+        alpha
+    } else 1f
     val cardShape = RoundedCornerShape(28.dp)
     Box(
         modifier = modifier
@@ -116,7 +131,8 @@ fun VirlinCurrentFocusCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                StatusPill("FOCUSING NOW", Color(0xFF14A74C), filled = true)
+                StatusPill("FOCUSING NOW", Color(0xFF14A74C), filled = true,
+                    labelModifier = Modifier.graphicsLayer { alpha = focusLabelAlpha })
                 // The invested time lives IN the pill now — same value, same live source, one row.
                 StatusPill(
                     // `investedTime` already reads "18m invested" — the caller formats it.

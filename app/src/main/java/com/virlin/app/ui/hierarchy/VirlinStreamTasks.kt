@@ -1,4 +1,6 @@
 package com.virlin.app.ui.hierarchy
+import com.virlin.app.ui.components.avoidOrbCircle
+import com.virlin.app.ui.components.circularOrbCutout
 
 // Supplied drop-in stream task page. Adapted where the app's own rules differ from the
 // reference's assumptions:
@@ -16,6 +18,8 @@ package com.virlin.app.ui.hierarchy
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clipToBounds
@@ -64,6 +68,7 @@ data class StreamTaskUi(
     val progressPercent: Int? = null,
     /** Exact leaf time, or descendant roll-up for a container. */
     val focusedLabel: String? = null,
+    val externalLabel: String? = null,
     val activityState: WorkstreamState = WorkstreamState.READY,
 )
 data class StreamTasksUi(
@@ -85,11 +90,16 @@ data class StreamTasksUi(
     val externalTaskId: String? = null,
     val sectionExternalSeconds: Map<String, Long> = emptyMap(),
     val projectId: String? = null,
+    val standalone: Boolean = false,
 )
 /** Implement these against the existing ViewModel/repository, including loading and error states. */
 interface StreamTaskActions {
     fun back()
     fun add(parentId: String?, title: String, afterId: String?, execution: StreamExecutionMode)
+    fun addWithResult(parentId: String?, title: String, afterId: String?, execution: StreamExecutionMode, onResult: (String?) -> Unit) {
+        add(parentId, title, afterId, execution)
+        onResult(null)
+    }
     fun rename(taskId: String, title: String)
     fun toggleComplete(taskId: String)
     fun setCurrent(taskId: String)
@@ -114,6 +124,25 @@ private val Amber = Color(0xFFE5A000)
 private val AmberWash = Color(0xFFFFF5DB)
 private val Danger = Color(0xFFC73728)
 private val CardShape = RoundedCornerShape(18.dp)
+
+/** Full-width title: actions never steal wrapping space from long ancestor names. */
+@Composable
+internal fun HierarchySectionHeading(
+    title: String,
+    progress: String,
+    onManage: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier.fillMaxWidth()) {
+        Text(title, Modifier.fillMaxWidth(), fontSize = 28.sp, lineHeight = 36.sp,
+            fontWeight = FontWeight.Bold, color = Ink)
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(progress, Modifier.weight(1f), color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
+            TextButton(onClick = onManage) { Text("Manage", color = DeepGreen) }
+        }
+    }
+}
 
 internal fun hierarchyElapsed(seconds: Long): String {
     val safe = seconds.coerceAtLeast(0)
@@ -147,6 +176,8 @@ fun VirlinStreamTasks(
     var deleteFor by remember { mutableStateOf<List<String>?>(null) }
     var selected by remember { mutableStateOf(setOf<String>()) }
     var streamMenu by remember { mutableStateOf(false) }
+    if (showAdd || organize || executionFor != null || menuFor != null ||
+        renameFor != null || moveFor != null || deleteFor != null || streamMenu) HideProjectOrb()
     val tasksById = remember(ui.tasks) { ui.tasks.associateBy { it.id } }
     LaunchedEffect(ui.tasks, path) { pathCsv = path.takeWhile { it in tasksById }.joinToString(",") }
     val parentId = path.lastOrNull()
@@ -162,19 +193,16 @@ fun VirlinStreamTasks(
         }
     }
     val parent = parentId?.let(tasksById::get)
+    val rootListTitle = if (ui.standalone) "Standalone tasks" else "Tasks"
     var headerHeight by remember { mutableFloatStateOf(0f) }
     var headerOffset by remember(pathCsv) { mutableFloatStateOf(0f) }
     val density = androidx.compose.ui.platform.LocalDensity.current
     val scrollConnection = remember(pathCsv, headerHeight) {
-        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
-            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
-                val previous = headerOffset
-                headerOffset = (headerOffset + available.y).coerceIn(-headerHeight, 0f)
-                return androidx.compose.ui.geometry.Offset(0f, headerOffset - previous)
-            }
-        }
+        ProjectHeaderScrollConnection(enabled = { true }, height = { headerHeight },
+            offset = { headerOffset }, updateOffset = { headerOffset = it })
     }
-    Scaffold(modifier = modifier.testTag(StreamTasksTag), containerColor = palette?.let { Color(it.surface) } ?: Color.White,
+    Box(modifier.fillMaxSize()) {
+    Scaffold(modifier = Modifier.testTag(StreamTasksTag), containerColor = palette?.let { Color(it.surface) } ?: Color.White,
         topBar = {
             Row(Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { if (path.isEmpty()) actions.back() else pathCsv = path.dropLast(1).joinToString(",") }) {
@@ -202,7 +230,8 @@ fun VirlinStreamTasks(
     ) { insets ->
         Box(Modifier.fillMaxSize().padding(insets).nestedScroll(scrollConnection)) {
             Column(Modifier.fillMaxSize()) {
-                Box(Modifier.fillMaxWidth().height(with(density) { (headerHeight + headerOffset).coerceAtLeast(0f).toDp() }).clipToBounds()) {
+                Box(Modifier.fillMaxWidth().height(with(density) { (headerHeight + headerOffset).coerceAtLeast(0f).toDp() })
+                    .clipToBounds().testTag("hierarchy_collapsible_details")) {
                     Column(Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).onSizeChanged { headerHeight = it.height.toFloat() }
                         .graphicsLayer { translationY = headerOffset }.padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 8.dp)) {
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
@@ -213,19 +242,20 @@ fun VirlinStreamTasks(
                                     modifier = Modifier.clickable { pathCsv = path.take(index + 1).joinToString(",") })
                             }
                         }
-                        Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(parent?.title ?: "Tasks", Modifier.weight(1f), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Ink)
-                            TextButton(onClick = { if (parent != null) actions.workControls(parent.id) else actions.streamWorkControls() }) { Text("Manage", color = DeepGreen) }
-                        }
                         val counted = siblings.filterNot { it.terminal && !it.completed }
                         val done = counted.count { it.completed }
                         val percent = if (counted.isEmpty()) 0 else done * 100 / counted.size
-                        Text("$percent% · $done/${counted.size} complete", color = Muted, fontSize = 13.sp)
+                        HierarchySectionHeading(
+                            title = parent?.title ?: rootListTitle,
+                            progress = "$percent% · $done/${counted.size} complete",
+                            onManage = { if (parent != null) actions.workControls(parent.id) else actions.streamWorkControls() },
+                            modifier = Modifier.padding(top = 14.dp)
+                        )
                         Row(Modifier.padding(top = 16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TaskFilter.entries.forEach { item -> FilterPill(item.name.lowercase().replaceFirstChar(Char::uppercase), filter == item, Modifier.weight(1f)) { filter = item } }
                         }
                         Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (parentId == null) "Tasks" else "Subtasks", Modifier.weight(1f), color = Muted, fontWeight = FontWeight.SemiBold)
+                            Text(if (parentId == null) rootListTitle else "Subtasks", Modifier.weight(1f), color = Muted, fontWeight = FontWeight.SemiBold)
                             TextButton(onClick = { organize = !organize; selected = emptySet() }) { Text(if (organize) "Done" else "↕ Organize", color = DeepGreen) }
                         }
                     }
@@ -251,10 +281,26 @@ fun VirlinStreamTasks(
         }
     }
     if (showAdd) {
+        var addError by remember { mutableStateOf<String?>(null) }
+        var adding by remember { mutableStateOf(false) }
         AddTaskSheet(parentTitle = addFor?.let { tasksById[it]?.title } ?: ui.streamName,
             defaultExecution = addFor?.let { tasksById[it]?.effectiveExecution } ?: ui.streamEffectiveExecution,
             siblings = ui.tasks.filter { it.parentId == addFor }.sortedBy { it.order },
-            onDismiss = { showAdd = false }, onSave = { title, after, mode -> actions.add(addFor, title, after, mode); showAdd = false })
+            onDismiss = { if (!adding) showAdd = false }, onSave = { title, after, mode ->
+                if (!adding) {
+                    adding = true; addError = null
+                    actions.addWithResult(addFor, title, after, mode) { error ->
+                        adding = false; addError = error
+                        if (error == null) showAdd = false
+                    }
+                }
+            }, errorMessage = addError,
+            heading = if (addFor == null) "Add task" else "Add subtask",
+            bulkDestination = com.virlin.app.domain.action.CreateTask("",
+                projectId = ui.projectId.takeIf { ui.standalone && addFor == null },
+                workStreamId = ui.streamId.takeIf { !ui.standalone && addFor == null }, parentTaskId = addFor),
+            bulkProjectId = ui.projectId)
+    }
     }
     if (executionFor != null) {
         val task = executionFor?.let(tasksById::get)
@@ -328,7 +374,7 @@ private fun executionWash(state: WorkstreamState): Color = when (state) {
 @Composable internal fun TaskRow(task: StreamTaskUi, number: Int, containsCurrent: Boolean, selected: Boolean, organize: Boolean, executionState: WorkstreamState, modifier: Modifier = Modifier, onOpen: () -> Unit, onComplete: () -> Unit, onWorkControls: () -> Unit, onMenu: () -> Unit, onReorder: (Int) -> Unit) {
     val rowState = task.activityState.takeIf { it != WorkstreamState.READY } ?: if (task.isCurrent) executionState else WorkstreamState.READY
     val tint = if (rowState != WorkstreamState.READY) executionWash(rowState) else if (selected || containsCurrent) Mint else Color.White
-    Row(modifier.fillMaxWidth().background(tint, CardShape).border(1.dp, if (selected) Green else Line, CardShape).clickable(onClick = onOpen).padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier.fillMaxWidth().circularOrbCutout().background(tint, CardShape).border(1.dp, if (selected) Green else Line, CardShape).clickable(onClick = onOpen).avoidOrbCircle().padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
         if (organize) {
             TextButton(onClick = onOpen) { Text(if (selected) "Selected" else "Select", color = DeepGreen, fontSize = 10.sp) }
             // No drag library is present in this project, so ordering is done with explicit,
@@ -350,6 +396,7 @@ private fun executionWash(state: WorkstreamState): Color = when (state) {
             val detail = buildList {
                 if (task.childCount > 0) add("${task.progressPercent?.let { "$it% · " }.orEmpty()}${task.childCount} subtasks")
                 task.focusedLabel?.let { add("$it focused") }
+                task.externalLabel?.let { add("$it external") }
             }.joinToString(" · ")
             if (detail.isNotBlank()) Text(detail, color = Muted, fontSize = 12.sp)
         }
@@ -381,44 +428,86 @@ private fun executionWash(state: WorkstreamState): Color = when (state) {
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Box(Modifier.size(112.dp).background(Mint, CircleShape), contentAlignment = Alignment.Center) { Text("☷", color = Green, fontSize = 42.sp) }
         Spacer(Modifier.height(22.dp)); Text(if (parentId == null) "No tasks yet" else "No subtasks yet", color = Ink, fontSize = 23.sp, fontWeight = FontWeight.Bold)
-        Text(if (parentId == null) "Break this stream into tasks, or keep it as a work item."
+        Text(if (parentId == null && ui.standalone) "Add a task directly to this project."
+            else if (parentId == null) "Break this stream into tasks, or keep it as a work item."
             else "Add a subtask here. Every subtask can have its own subtasks.",
             color = Muted, modifier = Modifier.padding(18.dp), lineHeight = 21.sp)
         // An empty level shows this instead of the bottom bar's "+ Task"; only one is ever present.
         Button(onClick = onAdd, colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = if(LocalProjectPalette.current==null) Color.White else readableOn(Green)), modifier = Modifier.fillMaxWidth().testTag(AddTaskButtonTag).padding(horizontal = 20.dp)) { Icon(Icons.Default.Add, null); Text(if (parentId == null) "Add first task" else "Add subtask") }
-        if (parentId == null) TextButton(onClick = onKeep) { Text("Keep stream as work item", color = DeepGreen) }
+        if (parentId == null && !ui.standalone) TextButton(onClick = onKeep) { Text("Keep stream as work item", color = DeepGreen) }
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable private fun AddTaskSheet(parentTitle: String, defaultExecution: StreamExecutionMode, siblings: List<StreamTaskUi>, onDismiss: () -> Unit, onSave: (String, String?, StreamExecutionMode) -> Unit) {
-    var title by remember { mutableStateOf("") }; var after by remember { mutableStateOf(siblings.lastOrNull()?.id) }; var mode by remember { mutableStateOf(StreamExecutionMode.INHERIT) }; var placement by remember { mutableStateOf(false) }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.White) {
-        Column(Modifier.fillMaxWidth().padding(22.dp)) {
-            Text("Add subtask", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
-            Text(parentTitle, color = Muted); Spacer(Modifier.height(22.dp))
-            OutlinedTextField(title, { title = it }, label = { Text("Title") }, placeholder = { Text("What needs to be done?") }, modifier = Modifier.fillMaxWidth().testTag(AddTaskTitleTag), singleLine = true)
-            Spacer(Modifier.height(14.dp))
-            Box { OutlinedButton(onClick = { placement = true }) { Text("Place after: ${siblings.find { it.id == after }?.title ?: "At beginning"}") }
+@Composable internal fun AddTaskSheet(parentTitle: String, defaultExecution: StreamExecutionMode, siblings: List<StreamTaskUi>, onDismiss: () -> Unit, onSave: (String, String?, StreamExecutionMode) -> Unit, heading: String = "Add subtask",
+    bulkDestination: com.virlin.app.domain.action.CreateTask? = null, bulkProjectId: String? = null, errorMessage: String? = null) {
+    var bulkOpen by rememberSaveable { mutableStateOf(false) }
+    var bulkBusy by remember { mutableStateOf(false) }
+    val dismiss = { if (!bulkBusy) onDismiss() }
+    var after by rememberSaveable { mutableStateOf(siblings.lastOrNull()?.id) }; var mode by rememberSaveable { mutableStateOf(StreamExecutionMode.INHERIT) }; var placement by remember { mutableStateOf(false) }
+    var executionMenu by remember { mutableStateOf(false) }
+    BackHandler(onBack = dismiss)
+    // The host viewport already excludes the real app footer; no second window covers it.
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .32f)).testTag("add_task_overlay")) {
+        Box(Modifier.matchParentSize().clickable(onClick = dismiss))
+        Box(Modifier.fillMaxSize().imePadding().padding(16.dp), contentAlignment = Alignment.Center) {
+        Surface(Modifier.widthIn(max = 480.dp).fillMaxWidth().testTag("add_task_dialog"),
+            shape = RoundedCornerShape(24.dp), color = Color.White,
+            shadowElevation = 8.dp) {
+        TaskCreationCard(parentTitle, heading, dismiss, { onSave(it, after, mode) }, modeSelector = {
+            errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp, modifier = Modifier.testTag("add_task_error")) }
+            if (bulkDestination != null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !bulkOpen, enabled = !bulkBusy, onClick = { bulkOpen = false }, label = { Text("Single") },
+                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor =
+                        LocalProjectPalette.current?.let { Color(it.main).copy(alpha = .14f) } ?: Color(0xFFE1F4EC),
+                        selectedLabelColor = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF007B58)))
+                FilterChip(selected = bulkOpen, enabled = !bulkBusy, onClick = { bulkOpen = true }, label = { Text("Bulk") },
+                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor =
+                        LocalProjectPalette.current?.let { Color(it.main).copy(alpha = .14f) } ?: Color(0xFFE1F4EC),
+                        selectedLabelColor = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF007B58)))
+            }
+        }, body = if (bulkOpen && bulkDestination != null) { {
+            BulkCreationDialog(parentTitle, "Task name", bulkProjectId, onDismiss = onDismiss,
+                onSingle = { onSave(it, after, mode) },
+                taskDestination = bulkDestination, startBulk = true, embedded = true,
+                onBusyChanged = { bulkBusy = it })
+        } } else null
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.weight(1f)) { OutlinedButton(onClick = { placement = true }, modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Muted)) {
+                Text(siblings.find { it.id == after }?.title?.let { "After $it" } ?: "At beginning", fontSize = 12.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, modifier = Modifier.size(16.dp)) }
                 DropdownMenu(placement, onDismissRequest = { placement = false }) {
                     DropdownMenuItem(text = { Text("At beginning") }, onClick = { after = null; placement = false })
                     siblings.forEach { sibling -> DropdownMenuItem(text = { Text(sibling.title) }, onClick = { after = sibling.id; placement = false }) }
                 }
             }
-            Spacer(Modifier.height(10.dp)); Text("Execution", color = Muted)
-            Text("${mode.name.lowercase().replaceFirstChar(Char::uppercase)} · effective ${if (mode == StreamExecutionMode.INHERIT) defaultExecution.name.lowercase() else mode.name.lowercase()}", color = Ink)
-            Row { StreamExecutionMode.entries.forEach { choice -> TextButton(onClick = { mode = choice }) { Text(choice.name.lowercase().replaceFirstChar(Char::uppercase), color = if (mode == choice) DeepGreen else Muted) } } }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) }
-                Button(onClick = { onSave(title.trim(), after, mode) }, enabled = title.isNotBlank(), modifier = Modifier.testTag(AddTaskConfirmTag), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = if(LocalProjectPalette.current==null) Color.White else readableOn(Green))) { Text("Add subtask") }
+            Box(Modifier.weight(1f)) {
+                OutlinedButton(onClick = { executionMenu = true }, modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Muted)) {
+                    val effective = if (mode == StreamExecutionMode.INHERIT) defaultExecution else mode
+                    Text(if (mode == StreamExecutionMode.INHERIT) "Inherit · ${effective.name.lowercase().replaceFirstChar(Char::uppercase)}"
+                        else mode.name.lowercase().replaceFirstChar(Char::uppercase), fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, modifier = Modifier.size(16.dp))
+                }
+                DropdownMenu(executionMenu, onDismissRequest = { executionMenu = false }) {
+                    StreamExecutionMode.entries.forEach { choice -> DropdownMenuItem(
+                        text = { Text(choice.name.lowercase().replaceFirstChar(Char::uppercase)) },
+                        onClick = { mode = choice; executionMenu = false }) }
+                }
             }
-            Spacer(Modifier.height(16.dp))
+            }
+        }
+        }
         }
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun ExecutionSheet(title: String, value: StreamExecutionMode, effective: StreamExecutionMode, source: String, onDismiss: () -> Unit, onChange: (StreamExecutionMode) -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.White) {
-        Column(Modifier.padding(22.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(22.dp)) {
             Text("Execution", color = Ink, fontWeight = FontWeight.Bold, fontSize = 23.sp)
             Text(title, color = Muted, modifier = Modifier.padding(bottom = 12.dp))
             listOf(StreamExecutionMode.INHERIT to "Use the nearest ancestor's execution", StreamExecutionMode.HUMAN to "Do it yourself", StreamExecutionMode.EXTERNAL to "Performed outside").forEach { (mode, hint) ->
@@ -439,7 +528,7 @@ private fun executionWash(state: WorkstreamState): Color = when (state) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun MoveSheet(ui: StreamTasksUi, ids: List<String>, onDismiss: () -> Unit, onMove: (String?) -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.White) {
-        Column(Modifier.padding(22.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(22.dp)) {
             Text("Move ${ids.size} ${if (ids.size == 1) "task" else "tasks"}", fontWeight = FontWeight.Bold, fontSize = 22.sp, color = Ink)
             Text("Choose a parent in this stream", color = Muted)
             TextButton(onClick = { onMove(null) }) { Text("Stream root", color = DeepGreen) }

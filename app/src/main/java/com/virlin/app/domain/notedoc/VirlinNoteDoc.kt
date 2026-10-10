@@ -5,10 +5,9 @@ import java.time.Instant
 /**
  * The Notes page's OWN document model.
  *
- * Deliberately independent of [com.virlin.app.domain.model.NoteDocument], of the capture Text
- * Note editor and of the legacy plain `tasks.notes` string. The Notes page is being built as a
- * self-contained feature; the relationship to those other surfaces is a later decision, so this
- * model shares no types with them and nothing here reads or writes their storage.
+ * The rich editor model, independent of the legacy plain `tasks.notes` string.
+ * CaptureNoteBridge adapts older capture documents and creates compatibility projections;
+ * this rich document remains the authoritative formatting source.
  */
 enum class NoteDocBlockType {
     PARAGRAPH, HEADING_1, HEADING_2, HEADING_3,

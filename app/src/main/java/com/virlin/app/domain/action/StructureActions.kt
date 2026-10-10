@@ -43,9 +43,11 @@ internal class StructureActions(
 
     // ------------------------------------------------------------------ Project
 
-    suspend fun createProject(r: CreateProject): ActionResult<Project> = tx {
-        if (r.title.isBlank()) return@tx ActionResult.Rejected(DomainError.EmptyTitle)
-        r.estimatedEffort?.let { if (it.isNegative || it.isZero) return@tx ActionResult.Rejected(DomainError.InvalidEffort) }
+    suspend fun createProject(r: CreateProject): ActionResult<Project> = tx { createProjectIn(this, r) }
+
+    suspend fun createProjectIn(w: WorkStreamWriter, r: CreateProject): ActionResult<Project> = with(w) {
+        if (r.title.isBlank()) return ActionResult.Rejected(DomainError.EmptyTitle)
+        r.estimatedEffort?.let { if (it.isNegative || it.isZero) return ActionResult.Rejected(DomainError.InvalidEffort) }
         val now = clock.now()
         val p = Project(
             id = r.id ?: ids.newId("proj"), title = r.title.trim(), description = r.description,

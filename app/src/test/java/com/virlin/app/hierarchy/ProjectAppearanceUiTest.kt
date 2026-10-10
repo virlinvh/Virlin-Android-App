@@ -47,6 +47,7 @@ class ProjectAppearanceUiTest {
         prefs.edit().clear().commit()
         compose.setContent { ProjectColorsEditor("p") {} }
         compose.onNodeWithText("Ocean").performClick()
+        compose.onNodeWithTag("project_custom_palette_toggle").performScrollTo().performClick()
         compose.onNodeWithText("Heading text").performScrollTo().performClick()
         compose.onNode(hasSetTextAction()).performScrollTo().performTextReplacement("#FFFFFF")
         compose.onNodeWithText("Use hex color").performScrollTo().performClick()
@@ -60,5 +61,19 @@ class ProjectAppearanceUiTest {
         assertTrue(prefs.contains("p"))
         compose.onNodeWithTag("save_project_colors").performClick()
         assertFalse(prefs.contains("p"));assertEquals("keep",prefs.getString("other",null))
+    }
+    @Test fun customControlsAreAbsentUntilExpandedAndTogglingDoesNotChangePalette() {
+        val original = ProjectPalette.from(Color(0xFF166534))
+        prefs.edit().clear().putString("p", original.encode()).commit()
+        compose.setContent { ProjectColorsEditor("p") {} }
+        compose.onNodeWithText("Brightness").assertDoesNotExist()
+        compose.onNodeWithTag("project_color_role_0").assertDoesNotExist()
+        compose.onNodeWithTag("project_custom_palette_toggle").performScrollTo().performClick()
+        compose.onNodeWithTag("project_color_role_0").assertExists()
+        compose.onNodeWithText("Brightness").assertExists()
+        compose.onNodeWithTag("project_custom_palette_toggle").performScrollTo().performClick()
+        compose.onNodeWithText("Brightness").assertDoesNotExist()
+        compose.onNodeWithTag("save_project_colors").performClick()
+        assertEquals(original, ProjectPalette.decode(prefs.getString("p", null)))
     }
 }

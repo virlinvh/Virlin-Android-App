@@ -28,6 +28,23 @@ class ProjectIdentityTest {
     private val t0: Instant = Instant.parse("2026-09-21T09:00:00Z")
     private fun project(id: String, title: String, iconPath: String? = null) = Project(id = id, title = title, createdAt = t0, updatedAt = t0, iconPath = iconPath)
 
+    @Test fun nestedTasks_inheritExactOwningProjectIcon() {
+        val p = project("p", "Project", "custom.png")
+        val owner = WorkStream("w", "Work", projectId = p.id, state = WorkStreamState.READY, createdAt = t0, updatedAt = t0)
+        val parent = com.virlin.app.domain.model.Task("parent", "Parent", workStreamId = owner.id, createdAt = t0, updatedAt = t0)
+        val leaf = com.virlin.app.domain.model.Task("leaf", "Leaf", parentTaskId = parent.id, createdAt = t0, updatedAt = t0)
+        assertEquals(p, ProjectIdentity.resolveWorkItem(leaf.id, null, listOf(p), listOf(parent, leaf), listOf(owner)))
+        assertEquals(p, ProjectIdentity.resolveWorkItem(parent.id, null, listOf(p), listOf(parent, leaf), listOf(owner)))
+        assertEquals(p, ProjectIdentity.resolveWorkItem(owner.id, null, listOf(p), emptyList(), listOf(owner)))
+    }
+
+    @Test fun projectlessAndCyclicItems_doNotBorrowUnrelatedProjectIcons() {
+        val a = com.virlin.app.domain.model.Task("a", "A", parentTaskId = "b", createdAt = t0, updatedAt = t0)
+        val b = a.copy(id = "b", parentTaskId = "a")
+        assertNull(ProjectIdentity.resolveWorkItem("a", null, listOf(project("p", "Unrelated")), listOf(a, b), emptyList()))
+        assertNull(ProjectIdentity.resolveWorkItem("missing", "deleted", listOf(project("p", "Unrelated")), emptyList(), emptyList()))
+    }
+
     // ------------------------------------------------------------------ deterministic fallback initials
 
     @Test fun initials_toolAndProject() = assertEquals("CV", ProjectIdentity.initials("Claude · Virlin"))

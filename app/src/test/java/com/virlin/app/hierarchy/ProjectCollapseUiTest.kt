@@ -13,6 +13,24 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class ProjectCollapseUiTest {
     @get:Rule val compose = createComposeRule()
+    @Test fun settingsButtonOpensPageDirectlyWithoutPopup() {
+        var opened = 0
+        val ui = ProjectPageUi("p", "Project", "", workstreams = emptyList(),
+            standaloneTasks = emptyList(), documents = emptyList())
+        val actions = ProjectPageActions(onBack = {}, onSearch = {}, onProgress = {},
+            onOpenWorkstream = {}, onAddWorkstream = {}, onOpenTask = {}, onToggleTask = {},
+            onTaskMenu = {}, onAddTask = {}, onOpenDocument = {}, onAddDocument = {},
+            onProjectSettings = { opened++ }, onEditProject = {}, onManageWorkstreams = {})
+        val experienceActions = ProjectExperienceActions(actions,
+            KnowledgeActions({}, {}, { _, _, _ -> }, {}, {}, {}, {}, {}, { _, _ -> },
+                { _, _, _ -> }, onMoveMany = { _, _, _ -> }), ActivityActions({}, {}, {}, {}, {}))
+        compose.setContent { VirlinProjectExperience(
+            ProjectExperienceData(ui, emptyList(), emptyList(), activity = emptyList()),
+            experienceActions, projectIcon = {}) }
+        compose.onNodeWithContentDescription("Project settings").assertIsDisplayed().performClick()
+        compose.runOnIdle { org.junit.Assert.assertEquals(1, opened) }
+        compose.onNodeWithText("Project settings").assertDoesNotExist()
+    }
     @Test fun overviewCollapsesAndReturns_withoutHidingPinnedHeadings() {
         val ui = ProjectPageUi("p", "Project name", "", workstreams = emptyList(),
             standaloneTasks = List(20) { ProjectTaskUi("t$it", "Task $it", false) }, documents = emptyList(),
@@ -35,7 +53,16 @@ class ProjectCollapseUiTest {
         assertTrue(collapsed < before)
         compose.onNodeWithText("Project name").assertIsDisplayed()
         compose.onNodeWithText("Workstreams").assertIsDisplayed()
-        compose.onNodeWithTag("active_project_overview_scroll").performTouchInput { swipeDown() }
+        compose.onNodeWithTag("standalone_section_toggle").performScrollTo().performClick()
+        compose.onNodeWithTag("active_project_overview_scroll").performScrollToNode(hasText("Task 19"))
+        compose.onNodeWithTag("active_project_overview_scroll").performTouchInput {
+            swipe(center, center.copy(y = center.y + 80f), durationMillis = 600)
+        }
+        val stillCollapsed = compose.onNodeWithTag("active_project_collapsible_details").fetchSemanticsNode().boundsInRoot.height
+        assertTrue("Header must remain hidden while list is away from top", stillCollapsed <= collapsed + 1f)
+        repeat(10) {
+            compose.onNodeWithTag("active_project_overview_scroll").performTouchInput { swipeDown() }
+        }
         val expanded = compose.onNodeWithTag("active_project_collapsible_details").fetchSemanticsNode().boundsInRoot.height
         assertTrue(expanded > collapsed)
         compose.onNodeWithText("Project name").assertIsDisplayed()

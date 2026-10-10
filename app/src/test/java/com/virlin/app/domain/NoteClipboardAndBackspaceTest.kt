@@ -7,7 +7,6 @@ import com.virlin.app.domain.model.NoteDocument
 import com.virlin.app.domain.note.NoteClipboardImporter
 import com.virlin.app.domain.note.NotePlainTextSerializer
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
-import com.virlin.app.ui.note.TextNoteViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -112,70 +111,22 @@ class NoteClipboardAndBackspaceTest {
         assertEquals("", NotePlainTextSerializer.preview(doc))
     }
 
-    @Test fun backspace_emptyRemovesAndFocusesPrevious() = runTest {
+    @Test fun currentEditorBackspaceMergesEmptyParagraphAndPreservesText() = runTest {
         val repo = InMemoryWorkStreamRepository()
         val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
+        val vm = com.virlin.app.ui.notes.NotesViewModel("owner", "Notes", actions, ids)
         val first = vm.state.value.blocks.first().id
-        vm.onBlockTextChange(first, "Hello")
-        vm.handleEnter(first, "Hello", "")
+        vm.onTextChanged(first, "Hello\n", androidx.compose.ui.text.TextRange(6))
         val second = vm.state.value.blocks.last().id
-        assertTrue(second != first)
-        assertEquals("", vm.state.value.blocks.last().plainText)
-        assertTrue(vm.handleBackspaceOnEmpty(second))
+        assertNotEquals(first, second)
+        assertTrue(vm.onBackspaceAtStart(second))
         assertEquals(1, vm.state.value.blocks.size)
-        assertEquals(first, vm.state.value.focusedBlockId)
-        assertEquals("Hello", vm.state.value.blocks.single().plainText)
-        assertEquals(first, vm.state.value.cursorAtEndBlockId)
+        assertEquals("Hello", vm.state.value.blocks.single().text)
     }
 
-    @Test fun backspace_lastEmptyKeepsSurface() = runTest {
-        val repo = InMemoryWorkStreamRepository()
-        val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        val id = vm.state.value.blocks.single().id
-        assertTrue(vm.handleBackspaceOnEmpty(id))
+    @Test fun currentEditorKeepsItsOnlyEmptyParagraph() = runTest {
+        val vm = com.virlin.app.ui.notes.NotesViewModel("owner", "Notes", DefaultVirlinActions(InMemoryWorkStreamRepository(), clock, ids), ids)
+        assertFalse(vm.onBackspaceAtStart(vm.state.value.blocks.single().id))
         assertEquals(1, vm.state.value.blocks.size)
-        assertEquals(NoteBlockType.TEXT, vm.state.value.blocks.single().type)
-        assertEquals("", vm.state.value.blocks.single().plainText)
-    }
-
-    @Test fun backspace_collapsesMultipleEmpty() = runTest {
-        val repo = InMemoryWorkStreamRepository()
-        val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        val a = vm.state.value.blocks.first().id
-        vm.onBlockTextChange(a, "A")
-        vm.handleEnter(a, "A", "")
-        val b = vm.state.value.blocks.last().id
-        vm.handleEnter(b, "", "")
-        val c = vm.state.value.blocks.last().id
-        assertEquals(3, vm.state.value.blocks.size)
-        assertTrue(vm.handleBackspaceOnEmpty(c))
-        assertEquals(2, vm.state.value.blocks.size)
-        assertTrue(vm.handleBackspaceOnEmpty(vm.state.value.focusedBlockId!!))
-        assertEquals(1, vm.state.value.blocks.size)
-        assertEquals("A", vm.state.value.blocks.single().plainText)
-    }
-
-    @Test fun pasteStructured_replacesEmptyBlock() = runTest {
-        val repo = InMemoryWorkStreamRepository()
-        val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        val id = vm.state.value.blocks.first().id
-        vm.pasteStructured(id, null, "# Pasted\n\n- item")
-        assertEquals(NoteBlockType.HEADING_1, vm.state.value.blocks[0].type)
-        assertEquals("Pasted", vm.state.value.blocks[0].plainText)
-        assertEquals(NoteBlockType.BULLETED_LIST, vm.state.value.blocks[1].type)
-    }
-
-    @Test fun nonEmptyBackspace_notIntercepted() = runTest {
-        val repo = InMemoryWorkStreamRepository()
-        val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        val id = vm.state.value.blocks.first().id
-        vm.onBlockTextChange(id, "Hi")
-        assertFalse(vm.handleBackspaceOnEmpty(id))
-        assertEquals("Hi", vm.state.value.blocks.single().plainText)
     }
 }

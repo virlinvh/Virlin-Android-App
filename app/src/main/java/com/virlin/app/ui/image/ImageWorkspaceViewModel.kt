@@ -65,6 +65,7 @@ class ImageWorkspaceViewModel(
     private val actions: VirlinActions = VirlinGraph.actions,
     private val repository: WorkStreamRepository = VirlinGraph.repository,
     private val ids: IdProvider = VirlinGraph.ids,
+    private val projectId: String? = null,
 ) : ViewModel() {
     private val _state = MutableStateFlow(ImageWorkspaceState(taskId = taskId))
     val state: StateFlow<ImageWorkspaceState> = _state.asStateFlow()
@@ -76,8 +77,10 @@ class ImageWorkspaceViewModel(
 
     fun refresh() {
         viewModelScope.launch {
+            val ownerProject = projectId ?: initialCaptureId?.let { repository.getCapture(it)?.projectId }
             val captures = repository.captures.value.filter {
-                it.type == CaptureType.FILE && (taskId == null || it.taskId == taskId)
+                it.type == CaptureType.FILE && it.status != com.virlin.app.domain.model.CaptureStatus.ARCHIVED && (taskId == null || it.taskId == taskId) &&
+                    (ownerProject == null || it.projectId == ownerProject)
             }
             val images = captures.mapNotNull { capture ->
                 val document = actions.getAttachmentByCaptureId(capture.id) ?: return@mapNotNull null
@@ -93,7 +96,7 @@ class ImageWorkspaceViewModel(
                 else -> _state.value.selected?.let { old -> images.firstOrNull { it.capture.id == old.capture.id } }
             }
             _state.value = _state.value.copy(
-                taskTitle = taskId?.let { repository.getTask(it)?.title }.orEmpty(),
+                taskTitle = (taskId?.let { repository.getTask(it)?.title } ?: ownerProject?.let { repository.getProject(it)?.title }).orEmpty(),
                 loading = false,
                 items = images,
                 selected = selected,
@@ -125,7 +128,10 @@ class ImageWorkspaceViewModel(
                             sizeBytes = file.sizeBytes,
                             relativePath = file.relativePath,
                             kind = AttachmentKind.IMAGE,
-                            context = CaptureContext(taskId = taskId),
+                            context = CaptureContext(
+                                projectId = projectId ?: initialCaptureId?.let { repository.getCapture(it)?.projectId },
+                                workStreamId = initialCaptureId?.let { repository.getCapture(it)?.workStreamId },
+                                taskId = taskId ?: initialCaptureId?.let { repository.getCapture(it)?.taskId }),
                             attachmentId = attachmentId,
                         )
                         if (result is ActionResult.Success) savedCount++ else {
@@ -234,11 +240,11 @@ class ImageWorkspaceViewModel(
     }
 
     companion object {
-        fun factory(taskId: String?, captureId: String?, context: Context): ViewModelProvider.Factory =
+        fun factory(taskId: String?, captureId: String?, context: Context, projectId: String? = null): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    ImageWorkspaceViewModel(taskId, captureId, context.applicationContext) as T
+                    ImageWorkspaceViewModel(taskId, captureId, context.applicationContext, projectId = projectId) as T
             }
     }
 }

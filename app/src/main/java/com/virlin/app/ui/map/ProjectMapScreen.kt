@@ -6,6 +6,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -59,6 +61,10 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
     var preview by remember { mutableStateOf<VirlinMapSnapshot?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    var addingContainer by remember { mutableStateOf<MapTopic?>(null) }
+    var creatingUnder by remember { mutableStateOf<Pair<MapTopic, Boolean>?>(null) }
+    var choosingContentOwner by remember { mutableStateOf<MapTopic?>(null) }
+    var containerContentTask by remember { mutableStateOf<MapTopic?>(null) }
 
     if (project == null) {
         Box(Modifier.fillMaxSize()) { Text("This project is no longer available") }
@@ -310,7 +316,7 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
     fun openTopic(topic: MapTopic) {
         when (topic.kind) {
             // The project's own node is where we already are.
-            MapKind.PROJECT -> Unit
+            MapKind.PROJECT -> navController.navigate(com.virlin.app.ui.hierarchy.projectDetail(topic.id))
             MapKind.WORKSTREAM -> navController.navigate(workStreamDetail(topic.id))
             MapKind.TASK -> navController.navigate(taskDetail(topic.id))
         }
@@ -400,8 +406,11 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
             intent = StructureIntent.MOVE
         },
         onOpenTaskPage = { topic ->
-            navController.navigate(com.virlin.app.ui.page.taskPage(topic.id))
+            if (topic.kind == MapKind.TASK) navController.navigate(com.virlin.app.ui.page.taskPage(topic.id))
+            else previewHost.startEditing(topic.id)
         },
+        onAddContainer = { addingContainer = it },
+        onAddChildTask = { addingChildTo = it },
         // Add: the palette itself writes nothing. Each choice lands here and runs exactly one
         // real flow, after its own confirmation step.
         onAddChoice = { topic, kind -> addChoice = topic to kind },
@@ -549,6 +558,98 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
         PlacementRefusedDialog(reason) { refused = null }
     }
 
+    addingContainer?.let { owner ->
+        AlertDialog(
+            onDismissRequest = { addingContainer = null },
+            title = { Text("Add to ${owner.title}") },
+            text = {
+                androidx.compose.foundation.layout.Column {
+                    if (owner.kind == MapKind.PROJECT) TextButton(onClick = {
+                        addingContainer = null; creatingUnder = owner to true
+                    }) { Text("New workstream") }
+                    TextButton(onClick = {
+                        addingContainer = null; creatingUnder = owner to false
+                    }) { Text(if (owner.kind == MapKind.PROJECT) "New standalone task" else "New task") }
+                    TextButton(onClick = {
+                        addingContainer = null; choosingContentOwner = owner
+                    }) { Text("Add content to a task…") }
+                    TextButton(onClick = {
+                        addingContainer = null; previewHost.startEditing(owner.id)
+                    }) { Text("Edit node preview") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { addingContainer = null }) { Text("Cancel") } },
+        )
+    }
+
+    creatingUnder?.let { (owner, workstream) ->
+        if (workstream) com.virlin.app.ui.hierarchy.BulkCreationDialog(
+            "New workstream in ${owner.title}", "Workstream name", project.id,
+            onDismiss = { creatingUnder = null }, onSingle = { name ->
+                scope.launch {
+                    val result = VirlinGraph.actions.createWorkStream(com.virlin.app.domain.action.CreateWorkStream(name, project.id))
+                    if (result !is ActionResult.Success) problem = editRefusal(result)
+                }
+            }) else
+        com.virlin.app.ui.hierarchy.BulkCreationDialog(
+            title = owner.title, placeholder = "Task name", projectId = project.id,
+            taskDestination = com.virlin.app.domain.action.CreateTask("",
+                projectId = project.id.takeIf { owner.kind == MapKind.PROJECT },
+                workStreamId = owner.id.takeIf { owner.kind == MapKind.WORKSTREAM }),
+            onDismiss = { creatingUnder = null },
+            onSingle = { name ->
+                creatingUnder = null
+                scope.launch {
+                    val result = if (workstream) {
+                        VirlinGraph.actions.createWorkStream(com.virlin.app.domain.action.CreateWorkStream(
+                            title = name, projectId = project.id))
+                    } else {
+                        VirlinGraph.actions.createTask(com.virlin.app.domain.action.CreateTask(
+                            title = name,
+                            projectId = if (owner.kind == MapKind.PROJECT) project.id else null,
+                            workStreamId = owner.id.takeIf { owner.kind == MapKind.WORKSTREAM }))
+                    }
+                    if (result !is ActionResult.Success) problem = editRefusal(result)
+                }
+            },
+        )
+    }
+
+    choosingContentOwner?.let { owner ->
+        val eligible = topics.filter { topic ->
+            topic.kind == MapKind.TASK && (owner.kind == MapKind.PROJECT ||
+                tasks.firstOrNull { it.id == topic.id }?.workStreamId == owner.id)
+        }
+        AlertDialog(
+            onDismissRequest = { choosingContentOwner = null },
+            title = { Text("Choose a task in ${owner.title}") },
+            text = {
+                androidx.compose.foundation.layout.Column(Modifier
+                    .then(Modifier.heightIn(max = 360.dp))
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                    if (eligible.isEmpty()) Text("Create a task here first. Content is saved against a task.")
+                    eligible.forEach { task ->
+                        TextButton(onClick = {
+                            choosingContentOwner = null; containerContentTask = task
+                        }) { Text(task.title) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { choosingContentOwner = null }) { Text("Cancel") } },
+        )
+    }
+
+    containerContentTask?.let { task ->
+        com.virlin.app.ui.components.SafeDialog(onDismissRequest = { containerContentTask = null }) {
+            MapAddPalette(task.title, dialogMode = true, onDismiss = { containerContentTask = null }, onChoose = { kind ->
+                containerContentTask = null
+                // Re-resolve before routing: deleted owners must never become orphan documents.
+                val live = topics.firstOrNull { it.id == task.id && it.kind == MapKind.TASK }
+                if (live != null) addChoice = live to kind else problem = "This task is no longer available."
+            })
+        }
+    }
+
     addChoice?.let { (topic, kind) ->
         when (kind) {
             // A To-do opens the task's own step list as a page; it never creates a task.
@@ -606,10 +707,13 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
     }
 
     addingChildTo?.let { parent ->
-        MapAddSubtaskDialog(
-            parentTitle = parent.title,
+        val creationPalette = com.virlin.app.ui.hierarchy.rememberProjectPalette(projectId)
+        androidx.compose.runtime.CompositionLocalProvider(com.virlin.app.ui.hierarchy.LocalProjectPalette provides creationPalette) {
+        com.virlin.app.ui.hierarchy.BulkCreationDialog(
+            title = parent.title, placeholder = "Subtask name", projectId = project.id,
+            taskDestination = com.virlin.app.domain.action.CreateTask("", parentTaskId = parent.id),
             onDismiss = { addingChildTo = null },
-            onSave = { title ->
+            onSingle = { title ->
                 addingChildTo = null
                 scope.launch {
                     // addSubtask is THE canonical child creation: it inherits the parent's
@@ -629,6 +733,7 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
                 }
             }
         )
+        }
     }
 
     notice?.let { (title, message) ->

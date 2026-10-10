@@ -2,6 +2,8 @@ package com.virlin.app.ui.page
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -163,7 +165,7 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
         }
     }
     s.message?.let { AlertDialog(onDismissRequest = vm::clearMessage, confirmButton = { TextButton(vm::clearMessage) { Text("OK") } }, text = { Text(it) }) }
-    transfer?.let { (row, duplicate) -> AlertDialog(onDismissRequest = { transfer = null }, title = { Text(if (duplicate) "Duplicate block" else "Move block") }, text = { Column { if (s.destinations.isEmpty()) Text("No other task is available in this project.") else s.destinations.forEach { task -> Text(task.title, Modifier.fillMaxWidth().clickable { transfer = null; vm.transfer(row.block.id, task.id, duplicate) }.padding(vertical = 14.dp), fontWeight = FontWeight.Medium) } } }, confirmButton = {}, dismissButton = { TextButton({ transfer = null }) { Text("Cancel") } }) }
+    transfer?.let { (row, duplicate) -> AlertDialog(onDismissRequest = { transfer = null }, title = { Text(if (duplicate) "Duplicate block" else "Move block") }, text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) { if (s.destinations.isEmpty()) Text("No other task is available in this project.") else s.destinations.forEach { task -> Text(task.title, Modifier.fillMaxWidth().clickable { transfer = null; vm.transfer(row.block.id, task.id, duplicate) }.padding(vertical = 14.dp), fontWeight = FontWeight.Medium) } } }, confirmButton = {}, dismissButton = { TextButton({ transfer = null }) { Text("Cancel") } }) }
 }
 
 private fun iconFor(key: String) = when (key) { TaskPageTypeKeys.TODO -> Icons.Default.CheckBox; TaskPageTypeKeys.NOTE -> Icons.Default.Description; TaskPageTypeKeys.capture(CaptureType.LINK) -> Icons.Default.Link; TaskPageTypeKeys.capture(CaptureType.PROMPT) -> Icons.Default.Assignment; else -> Icons.Default.InsertDriveFile }

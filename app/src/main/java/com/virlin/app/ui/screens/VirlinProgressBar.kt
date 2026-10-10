@@ -49,6 +49,7 @@ fun VirlinProgressBar(
     timeFocused: String,
     modifier: Modifier = Modifier,
     animateSparkles: Boolean = true,
+    savedUnit: String = "saved",
 ) {
     val shape = RoundedCornerShape(18.dp)
     val pulse by rememberInfiniteTransition(label = "sparkle").animateFloat(
@@ -125,9 +126,9 @@ fun VirlinProgressBar(
         ) {
             Box(Modifier.width(leftWidth).fillMaxHeight(), contentAlignment = Alignment.Center) {
                 androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(timeSaved, fontSize = if (narrow) 29.sp else 32.sp, lineHeight = 32.sp,
+                    Text(timeSaved, fontSize = if (timeSaved.length > 8) 12.sp else if (narrow) 29.sp else 32.sp, lineHeight = 32.sp,
                         fontWeight = FontWeight.Black, color = Color(0xFF102322), maxLines = 1)
-                    Text("saved", fontSize = 12.sp, lineHeight = 14.sp,
+                    Text(savedUnit, fontSize = 12.sp, lineHeight = 14.sp,
                         fontWeight = FontWeight.Medium, color = Color(0xFF4F5B5B))
                 }
             }

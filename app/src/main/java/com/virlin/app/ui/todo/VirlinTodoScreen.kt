@@ -93,6 +93,8 @@ data class TodoActions(
     val onDelete: (String) -> Unit,
     val onClearCompleted: () -> Unit,
     val onUndo: () -> Unit,
+    /** Optional non-blocking persistence; completion reports whether the draft can be cleared. */
+    val onAddAsync: ((String, (Boolean) -> Unit) -> Unit)? = null,
 )
 
 /**
@@ -116,6 +118,7 @@ fun VirlinTodoScreen(
     val completed = ordered.count { it.done }
     var arrange by rememberSaveable(taskId) { mutableStateOf(false) }
     var draft by rememberSaveable(taskId) { mutableStateOf("") }
+    var adding by remember(taskId) { mutableStateOf(false) }
     var editId by rememberSaveable(taskId) { mutableStateOf<String?>(null) }
     var editValue by rememberSaveable(taskId) { mutableStateOf("") }
     var rename by rememberSaveable(taskId) { mutableStateOf(false) }
@@ -345,14 +348,25 @@ fun VirlinTodoScreen(
                 ),
             verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
-                value = draft, onValueChange = { draft = it }, modifier = Modifier.weight(1f),
+                value = draft, onValueChange = { draft = it }, enabled = !adding, modifier = Modifier.weight(1f),
                 placeholder = { Text("Add an item") }, singleLine = true,
                 shape = RoundedCornerShape(12.dp),
             )
             Spacer(Modifier.width(10.dp))
             Surface(onClick = {
                 val value = draft.trim()
-                if (value.isNotEmpty() && actions.onAdd(value)) draft = ""
+                if (value.isNotEmpty() && !adding) {
+                    val async = actions.onAddAsync
+                    if (async == null) {
+                        if (actions.onAdd(value)) draft = ""
+                    } else {
+                        adding = true
+                        async(value) { accepted ->
+                            if (accepted) draft = ""
+                            adding = false
+                        }
+                    }
+                }
             }, shape = RoundedCornerShape(50), color = Green,
                 modifier = Modifier.size(48.dp).testTag("todo_add")) {
                 Box(contentAlignment = Alignment.Center) {

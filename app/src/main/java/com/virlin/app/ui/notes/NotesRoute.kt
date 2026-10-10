@@ -1,4 +1,5 @@
 package com.virlin.app.ui.notes
+import androidx.activity.compose.BackHandler
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,7 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.virlin.app.ui.components.SafeDialog as Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.virlin.app.domain.notedoc.NoteDocAlign
@@ -85,7 +86,8 @@ private val Muted = Color(0xFF66758A)
  * filling the slot as well would put two footers on the page.
  *
  * [ownerKey] is the opaque key the document is stored under and [title] is display only. Nothing
- * on this page reads or writes a task's note field, a capture item or a `NoteDocument`.
+ * on this page writes a task's legacy note field. Capture-owned keys use the domain adapter
+ * to update Knowledge lifecycle/preview atomically alongside the rich document.
  */
 @Composable
 fun NotesRoute(
@@ -98,6 +100,7 @@ fun NotesRoute(
     ),
 ) {
     val state by vm.state.collectAsState()
+    BackHandler { vm.saveAndClose { navController.popBackStack() } }
 
     // The debounce must never eat the last keystrokes when the page goes away.
     DisposableEffect(Unit) { onDispose { vm.flush() } }
@@ -106,7 +109,7 @@ fun NotesRoute(
         taskTitle = state.title.ifBlank { title },
         saveLabel = vm.saveLabel(),
         tools = vm.toolState(),
-        onClose = { vm.flush(); navController.popBackStack() },
+        onClose = { vm.saveAndClose { navController.popBackStack() } },
         onTool = vm::onTool,
         onAddBlock = vm::openAddBlock,
         onPreview = vm::openPreview,

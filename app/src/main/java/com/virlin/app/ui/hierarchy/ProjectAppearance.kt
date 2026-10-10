@@ -7,6 +7,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -74,6 +85,7 @@ internal fun readablePalette(p: ProjectPalette): Boolean {
     val prefs = LocalContext.current.getSharedPreferences("project_appearance", 0)
     var draft by remember(projectId) { mutableStateOf(ProjectPalette.decode(prefs.getString(projectId, null))) }
     var role by remember { mutableIntStateOf(0) }
+    var customExpanded by remember(projectId) { mutableStateOf(false) }
     val roleValues = draft?.let { listOf(it.main,it.primary,it.secondary,it.tertiary,it.surface,it.text,it.muted) }
     var hex by remember(role, draft) { mutableStateOf(roleValues?.get(role)?.let { "#%06X".format(it and 0xFFFFFF) } ?: "") }
     val names = listOf("Main", "Primary", "Secondary", "Tertiary", "Surface", "Heading text", "Secondary text")
@@ -86,14 +98,25 @@ internal fun readablePalette(p: ProjectPalette): Boolean {
     }
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement=Arrangement.spacedBy(8.dp)) {
-            Text("24 curated colors · choose by preference, not promised mood effects.")
-            Text("Cool: blue, teal and violet. Warm: coral, clay and gold. Neutral: cocoa, slate and charcoal. Try the preview to choose what feels comfortable to you.", style=MaterialTheme.typography.bodySmall)
+            Text("Choose your project palette", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text("Start with a preset, then fine-tune the shades below.", color = Color(0xFF526171), style = MaterialTheme.typography.bodyMedium)
+            Text("PRESET COLORS", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 12.dp))
             projectColorChoices.chunked(4).forEach { row -> Row(Modifier.fillMaxWidth()) {
-                row.forEach { (name, value) -> TextButton(onClick={ draft=ProjectPalette.from(Color(value)) }, modifier=Modifier.weight(1f)) {
-                    Column { Box(Modifier.size(30.dp).background(Color(value), CircleShape)); Text(name, style=MaterialTheme.typography.labelSmall) }
-                } }
+                row.forEach { (name, value) ->
+                    val chosen = p.main == value.toInt()
+                    Column(Modifier.weight(1f).padding(3.dp)
+                        .background(if (chosen) Color(p.tertiary) else Color.White, RoundedCornerShape(14.dp))
+                        .border(if (chosen) 2.dp else 1.dp, if (chosen) Color(p.secondary) else Color(0xFFE2E8E5), RoundedCornerShape(14.dp))
+                        .testTag("project_color_$name").semantics { selected = chosen }
+                        .clickable { draft = ProjectPalette.from(Color(value)) }.padding(vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.size(28.dp).background(Color(value), CircleShape))
+                        Text(name, style = MaterialTheme.typography.labelSmall, color = Color(0xFF17202C), maxLines = 1)
+                    }
+                }
             } }
-            Surface(color=Color(p.surface), tonalElevation=0.dp) {
+            Surface(color=Color(p.surface), tonalElevation=0.dp, shape = RoundedCornerShape(18.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8E5)), modifier = Modifier.padding(vertical = 8.dp)) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
                     Text("Project preview", color=Color(p.text))
                     Text("Progress · selected tab · Add task", color=Color(p.muted))
@@ -101,28 +124,64 @@ internal fun readablePalette(p: ProjectPalette): Boolean {
                     Button(onClick={}, colors=ButtonDefaults.buttonColors(containerColor=Color(p.primary), contentColor=readableOn(Color(p.primary)))) { Text("Add task") }
                 }
             }
-            Text("Custom · select a role")
-            names.indices.toList().chunked(2).forEach { indices -> Row(Modifier.fillMaxWidth()) {
-                indices.forEach { i -> TextButton(onClick={role=i},modifier=Modifier.weight(1f)) {
-                    Text(if(role==i) "${names[i]} · selected" else names[i],style=MaterialTheme.typography.labelMedium)
-                } }
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp)
+                .background(Color.White, RoundedCornerShape(16.dp))
+                .border(1.dp, Color(0xFFE2E8E5), RoundedCornerShape(16.dp))
+                .testTag("project_custom_palette_toggle")
+                .semantics { stateDescription = if (customExpanded) "Expanded" else "Collapsed" }
+                .clickable { customExpanded = !customExpanded }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Customize your palette", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Custom roles, shades and hex colors", style = MaterialTheme.typography.bodySmall, color = Color(0xFF526171))
+                }
+                Icon(if (customExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null, tint = Color(p.secondary))
+            }
+            if (customExpanded) {
+            Text("Choose the part of the interface you want to change.", color = Color(0xFF526171), style = MaterialTheme.typography.bodySmall)
+            val values = listOf(p.main, p.primary, p.secondary, p.tertiary, p.surface, p.text, p.muted)
+            names.indices.toList().chunked(2).forEach { indices -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                indices.forEach { i ->
+                    Row(Modifier.weight(1f).heightIn(min = 56.dp)
+                        .background(if (role == i) Color(p.tertiary) else Color.White, RoundedCornerShape(14.dp))
+                        .border(if (role == i) 2.dp else 1.dp, if (role == i) Color(p.secondary) else Color(0xFFE2E8E5), RoundedCornerShape(14.dp))
+                        .testTag("project_color_role_$i").semantics { selected = role == i }
+                        .clickable { role = i }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(22.dp).background(Color(values[i]), CircleShape).border(1.dp, Color(0xFFCDD6D0), CircleShape))
+                        Spacer(Modifier.width(8.dp))
+                        Text(names[i], style = MaterialTheme.typography.labelMedium, color = Color(0xFF17202C))
+                    }
+                }
+                if (indices.size == 1) Spacer(Modifier.weight(1f))
             } }
-            ColorWheel(onColor=::setColor)
+            Surface(shape = RoundedCornerShape(18.dp), color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8E5))) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Editing ${names[role]}", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 12.dp))
+                    key(role) { ColorWheel(onColor=::setColor) }
+                }
+            }
             Text("Shades for ${names[role]}")
             Row { listOf(-.4f,-.2f,.2f,.4f,.65f,.85f).forEach { shade ->
-                val color=lerp(Color(p.main),if(shade<0) Color.Black else Color.White,abs(shade))
+                val color=lerp(Color(values[role]),if(shade<0) Color.Black else Color.White,abs(shade))
                 Box(Modifier.padding(4.dp).size(36.dp).background(color,CircleShape).clickable { setColor(color) })
             } }
             OutlinedTextField(hex, {hex=it}, label={Text("Hex · #RRGGBB")}, modifier=Modifier.fillMaxWidth())
             TextButton(onClick={ if(hex.matches(Regex("#?[0-9a-fA-F]{6}"))) setColor(Color((0xFF000000L or hex.removePrefix("#").toLong(16)).toInt())) }, enabled=hex.matches(Regex("#?[0-9a-fA-F]{6}"))) { Text("Use hex color") }
+            }
             if(!readablePalette(p)) Text("Text or secondary-link contrast is too low. Choose darker text/secondary colors or a lighter surface.")
-            Text("Focus, Running, Review and other status colors stay unchanged. Preview until saved.")
+            Surface(shape = RoundedCornerShape(14.dp), color = Color(0xFFF3F6F4)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("About project colors", fontWeight = FontWeight.SemiBold)
+                    Text("Colors apply to project accents and appearance. Focus, Running and Review keep their status colors. Changes are only saved when you select Save palette.", style = MaterialTheme.typography.bodySmall, color = Color(0xFF526171))
+                }
+            }
             TextButton(onClick={draft=null}) { Text("Reset to original") }
         }
         HorizontalDivider()
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick=onDone,modifier=Modifier.weight(1f)) { Text("Discard preview") }
-            Button(onClick={ val edit=prefs.edit(); if(draft==null) edit.remove(projectId) else edit.putString(projectId,draft!!.encode()); edit.apply(); onDone() }, enabled=draft==null || readablePalette(p), modifier=Modifier.weight(1f).testTag("save_project_colors")) { Text("Save palette") }
+            val accent = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF087848)
+            OutlinedButton(onClick=onDone,modifier=Modifier.weight(1f).heightIn(min = 48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = accent), contentPadding = PaddingValues(8.dp)) { Text("Discard preview") }
+            Button(onClick={ val edit=prefs.edit(); if(draft==null) edit.remove(projectId) else edit.putString(projectId,draft!!.encode()); edit.apply(); onDone() }, enabled=draft==null || readablePalette(p), modifier=Modifier.weight(1f).heightIn(min = 48.dp).testTag("save_project_colors"), colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = readableOn(accent)), contentPadding = PaddingValues(8.dp)) { Text("Save palette") }
         }
     }
 }
@@ -138,7 +197,7 @@ internal fun readablePalette(p: ProjectPalette): Boolean {
         selectedHue=hue; selectedSaturation=saturation
         onColor(Color.hsv(hue,saturation,brightness))
     }
-    Canvas(Modifier.size(220.dp).pointerInput(brightness) { detectTapGestures {pick(it,size)} }
+    Canvas(Modifier.widthIn(max = 220.dp).fillMaxWidth().aspectRatio(1f).pointerInput(brightness) { detectTapGestures {pick(it,size)} }
         .pointerInput(brightness) { detectDragGestures { change,_ -> change.consume();pick(change.position,size) } }) {
         drawCircle(Brush.sweepGradient((0..12).map {Color.hsv((it*30f)%360f,1f,brightness)}))
         drawCircle(Brush.radialGradient(listOf(Color.hsv(0f,0f,brightness),Color.Transparent)))

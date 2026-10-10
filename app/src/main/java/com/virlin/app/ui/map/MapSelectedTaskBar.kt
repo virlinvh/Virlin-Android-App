@@ -39,7 +39,7 @@ const val MapSelectedTaskBarTag = "map_selected_task_bar"
 fun mapTaskActionTag(label: String) = "map_task_action_${label.lowercase().replace(' ', '_')}"
 
 /**
- * The actions for the task currently selected on the map.
+ * Contextual actions for the node currently selected on the map.
  *
  * It floats over the canvas rather than sitting in a column with it: as a sibling its height
  * would change when a task was selected, which moves the canvas out from under a finger that is
@@ -57,8 +57,6 @@ internal fun MapSelectedTaskBar(
     onAdd: (MapTopic) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Only a task has these four actions; a workstream or the project root has its own bar.
-    require(task.kind == MapKind.TASK) { "The selected-task bar is only for tasks" }
     Surface(
         modifier = modifier.fillMaxWidth().testTag(MapSelectedTaskBarTag),
         shape = RoundedCornerShape(22.dp),
@@ -71,14 +69,23 @@ internal fun MapSelectedTaskBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Open Task is widest and leftmost: it is the one action that leaves the map.
-            MapTaskAction(Icons.Outlined.OpenInNew, "Open Task", task.title, Modifier.weight(1.22f)) {
+            val openLabel = when (task.kind) {
+                MapKind.PROJECT -> "Open Project"
+                MapKind.WORKSTREAM -> "Open Workstream"
+                MapKind.TASK -> "Open Task"
+            }
+            MapTaskAction(Icons.Outlined.OpenInNew, openLabel, task.title, Modifier.weight(1.22f)) {
                 onOpenTask(task)
             }
             Box(Modifier.width(1.dp).height(38.dp)) {
                 Surface(color = MapHairline, modifier = Modifier.width(1.dp).height(38.dp)) {}
             }
-            MapTaskAction(Icons.Outlined.OpenWith, "Move", task.title, Modifier.weight(1f)) { onMove(task) }
-            MapTaskAction(Icons.Outlined.Description, "Page", task.title, Modifier.weight(1f)) { onPage(task) }
+            if (task.kind != MapKind.PROJECT) {
+                MapTaskAction(Icons.Outlined.OpenWith, "Move", task.title, Modifier.weight(1f)) { onMove(task) }
+            }
+            MapTaskAction(Icons.Outlined.Description,
+                if (task.kind == MapKind.TASK) "Page" else "Preview",
+                task.title, Modifier.weight(1f)) { onPage(task) }
             MapTaskAction(Icons.Outlined.Add, "Add", task.title, Modifier.weight(1f)) { onAdd(task) }
         }
     }

@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -27,6 +29,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import androidx.activity.compose.BackHandler
+import com.virlin.app.ui.hierarchy.LocalProjectPalette
+import com.virlin.app.ui.hierarchy.rememberProjectPalette
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -70,31 +77,31 @@ fun ProjectIconEditorSheet(
     onCustomImported: (String) -> Unit,
     onRemoveCustom: () -> Unit,
     onUseAuto: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    keepFooterVisible: Boolean = false
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var error by remember { mutableStateOf<String?>(null) }
     val picker = rememberProjectImagePicker(project.id, onImported = { error = null; onCustomImported(it) }, onError = { error = it })
     val selection = ProjectIconSelection.of(project)
     val hairline = VirlinColors.TextPrimary.copy(alpha = 0.08f)
+    val palette = rememberProjectPalette(project.id)
+    val accent = palette?.let { Color(it.secondary) } ?: VirlinColors.Emerald
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = VirlinColors.Background,
-        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 2.dp).width(36.dp).height(4.dp).background(VirlinColors.TextPrimary.copy(alpha = 0.12f), RoundedCornerShape(2.dp))) }
-    ) {
+    val content: @Composable () -> Unit = {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
-                .navigationBarsPadding()
                 .padding(bottom = 20.dp)
                 .testTag(ProjectIconEditorTestTag)
         ) {
-            Text("Project icon", fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp, color = VirlinColors.TextTertiary,
-                modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Project icon", fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
+                    color = VirlinColors.TextPrimary, modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("Done", color = accent) }
+            }
             Spacer(Modifier.height(12.dp))
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 ProjectIcon(project = project, size = 72.dp, modifier = Modifier.testTag(ProjectIconEditorPreviewTestTag))
@@ -123,7 +130,7 @@ fun ProjectIconEditorSheet(
                         modifier = Modifier
                             .size(58.dp)
                             .background(look.surface, RoundedCornerShape(16.dp))
-                            .border(if (chosen) 2.dp else 1.dp, if (chosen) VirlinColors.Emerald else hairline, RoundedCornerShape(16.dp))
+                            .border(if (chosen) 2.dp else 1.dp, if (chosen) accent else hairline, RoundedCornerShape(16.dp))
                             .testTag(projectIconChoiceTag(look.id))
                             .clickable(role = Role.RadioButton) { onSelectBuiltIn(look.id) }
                             .semantics { contentDescription = "${look.label} icon"; selected = chosen },
@@ -131,7 +138,7 @@ fun ProjectIconEditorSheet(
                     ) {
                         Icon(look.icon, contentDescription = null, tint = look.symbol, modifier = Modifier.size(26.dp))
                         if (chosen) Box(
-                            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(16.dp).background(VirlinColors.Emerald, CircleShape),
+                            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(16.dp).background(accent, CircleShape),
                             contentAlignment = Alignment.Center
                         ) { Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp)) }
                     }
@@ -141,13 +148,13 @@ fun ProjectIconEditorSheet(
             Spacer(Modifier.height(18.dp))
             Text("CUSTOM", fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp, color = VirlinColors.TextTertiary)
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 EditorChip(
                     label = if (selection is ProjectIconSelection.Custom) "Change image" else "Choose image",
-                    tag = ProjectIconEditorChooseImageTestTag, primary = true, description = "Choose custom project icon"
+                    tag = ProjectIconEditorChooseImageTestTag, primary = true, description = "Choose custom project icon", accent = accent
                 ) { picker.choose() }
                 if (selection is ProjectIconSelection.Custom) EditorChip(
-                    label = "Remove custom image", tag = ProjectIconEditorRemoveImageTestTag, primary = false, description = "Remove custom project icon"
+                    label = "Remove custom image", tag = ProjectIconEditorRemoveImageTestTag, primary = false, description = "Remove custom project icon", accent = accent
                 ) { onRemoveCustom() }
             }
             error?.let { Text(it, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = VirlinColors.Amber, modifier = Modifier.padding(top = 8.dp)) }
@@ -157,7 +164,7 @@ fun ProjectIconEditorSheet(
             Text(
                 if (isAuto) "Using the automatic icon" else "Use automatic icon",
                 fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                color = if (isAuto) VirlinColors.TextTertiary else VirlinColors.Emerald,
+                color = if (isAuto) VirlinColors.TextTertiary else accent,
                 modifier = Modifier
                     .testTag(ProjectIconEditorAutoTestTag)
                     .clickable(enabled = !isAuto, role = Role.Button) { onUseAuto() }
@@ -166,16 +173,25 @@ fun ProjectIconEditorSheet(
             )
         }
     }
+    if (keepFooterVisible) {
+        BackHandler(onBack = onDismiss)
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .28f)), contentAlignment = Alignment.Center) {
+            Surface(Modifier.padding(16.dp).fillMaxWidth().heightIn(max = (maxHeight - 32.dp).coerceAtLeast(48.dp)),
+                shape = RoundedCornerShape(24.dp), color = Color.White) { content() }
+        }
+    } else {
+        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Color.White) { content() }
+    }
 }
 
 @Composable
-private fun EditorChip(label: String, tag: String, primary: Boolean, description: String, onClick: () -> Unit) {
+private fun EditorChip(label: String, tag: String, primary: Boolean, description: String, accent: Color, onClick: () -> Unit) {
     val hairline = VirlinColors.TextPrimary.copy(alpha = 0.08f)
     Text(
         label, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.4.sp,
-        color = if (primary) Color.White else VirlinColors.TextPrimary,
+        color = if (primary) com.virlin.app.ui.hierarchy.readableOn(accent) else accent,
         modifier = Modifier.heightIn(min = 36.dp)
-            .background(if (primary) VirlinColors.TextPrimary else Color.White, RoundedCornerShape(50))
+            .background(if (primary) accent else Color.White, RoundedCornerShape(50))
             .border(1.dp, if (primary) Color.Transparent else hairline, RoundedCornerShape(50))
             .testTag(tag)
             .clickable(role = Role.Button, onClick = onClick)

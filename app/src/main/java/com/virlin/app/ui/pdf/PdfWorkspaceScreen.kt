@@ -99,8 +99,9 @@ fun PdfWorkspaceScreen(
     navController: NavController,
     captureId: String?,
     taskId: String?,
+    projectId: String? = null,
     vm: PdfWorkspaceViewModel = viewModel(
-        factory = PdfWorkspaceViewModel.factory(captureId, taskId, LocalContext.current)
+        factory = PdfWorkspaceViewModel.factory(captureId, taskId, LocalContext.current, projectId)
     )
 ) {
     val state by vm.state.collectAsState()

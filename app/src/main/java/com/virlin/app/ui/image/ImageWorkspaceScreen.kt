@@ -59,9 +59,10 @@ fun ImageWorkspaceScreen(
     navController: NavController,
     taskId: String?,
     captureId: String?,
+    projectId: String? = null,
     vm: ImageWorkspaceViewModel = viewModel(
-        key = "image-${taskId.orEmpty()}-${captureId.orEmpty()}",
-        factory = ImageWorkspaceViewModel.factory(taskId, captureId, LocalContext.current),
+        key = "image-${taskId.orEmpty()}-${captureId.orEmpty()}-${projectId.orEmpty()}",
+        factory = ImageWorkspaceViewModel.factory(taskId, captureId, LocalContext.current, projectId),
     ),
 ) {
     val state by vm.state.collectAsState()

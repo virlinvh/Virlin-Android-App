@@ -1,4 +1,6 @@
 package com.virlin.app.ui.hierarchy
+import com.virlin.app.ui.components.avoidOrbCircle
+import com.virlin.app.ui.components.circularOrbCutout
 
 // Supplied drop-in project Task Index. Adapted to the app's own rules:
 //  - the rows ARE the units `ProgressCalculator.ofProject` counted (see ProjectTaskUnits), so a
@@ -84,11 +86,11 @@ interface ProjectTaskIndexActions {
 private val Ink = Color(0xFF17202C)
 private val Muted = Color(0xFF66758A)
 private val Line = Color(0xFFE4E9ED)
-private val Green = Color(0xFF65BB31)
-private val DeepGreen = Color(0xFF176B45)
-private val Mint = Color(0xFFEAF7EC)
-private val Amber = Color(0xFFE5A000)
-private val AmberWash = Color(0xFFFFF5DB)
+private val Green: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.primary) } ?: Color(0xFF65BB31)
+private val DeepGreen: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF176B45)
+private val Mint: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFEAF7EC)
+private val Amber: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.primary) } ?: Color(0xFFE5A000)
+private val AmberWash: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFFFF5DB)
 private val Neutral = Color(0xFFF5F7F7)
 
 /** Place inside the current project Overview progress block; the whole area is tappable. */
@@ -107,7 +109,7 @@ fun ProjectProgressEntry(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(66.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(progress = { percent / 100f }, modifier = Modifier.fillMaxSize(), color = Green, trackColor = Color(0xFFE0EDDB), strokeWidth = 5.dp)
+            CircularProgressIndicator(progress = { percent / 100f }, modifier = Modifier.fillMaxSize(), color = Green, trackColor = Mint, strokeWidth = 5.dp)
             Text("$percent%", color = Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
         Spacer(Modifier.width(16.dp))
@@ -237,10 +239,10 @@ fun VirlinProjectTaskIndex(
 
 @Composable private fun ProjectIndexTaskRow(entry: ProjectTaskIndexEntry, onClick: () -> Unit) {
     val bg = if (entry.current && !entry.completed) AmberWash else Neutral
-    Row(Modifier.fillMaxWidth().background(bg, RoundedCornerShape(18.dp)).clickable(onClick = onClick).padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(38.dp).background(if (entry.completed) Green else if (entry.current) Amber else Color(0xFFE9EDEF), CircleShape), contentAlignment = Alignment.Center) {
-            if (entry.completed) Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(22.dp))
-            else if (entry.current) Box(Modifier.size(15.dp).background(Color.White, CircleShape))
+    Row(Modifier.fillMaxWidth().circularOrbCutout().background(bg, RoundedCornerShape(18.dp)).clickable(onClick = onClick).avoidOrbCircle().padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(38.dp).background(if (entry.completed) DeepGreen else if (entry.current) Amber else Mint, CircleShape), contentAlignment = Alignment.Center) {
+            if (entry.completed) Icon(Icons.Default.Check, null, tint = readableOn(DeepGreen), modifier = Modifier.size(22.dp))
+            else if (entry.current) Box(Modifier.size(15.dp).background(readableOn(Amber), CircleShape))
             else Box(Modifier.size(15.dp).background(Color.White, CircleShape))
         }
         Spacer(Modifier.width(13.dp))
@@ -249,7 +251,7 @@ fun VirlinProjectTaskIndex(
                 Text(entry.title, color = Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (entry.current && !entry.completed) {
                     Spacer(Modifier.width(8.dp))
-                    Text("Current", color = Color(0xFF805A00), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Current", color = DeepGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
             val path = if (entry.isEmptyWorkStream) "Workstream · no tasks yet"

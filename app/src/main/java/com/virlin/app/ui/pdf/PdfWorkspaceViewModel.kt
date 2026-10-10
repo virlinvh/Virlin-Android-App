@@ -55,7 +55,8 @@ class PdfWorkspaceViewModel(
     private val appContext: Context,
     private val actions: VirlinActions = VirlinGraph.actions,
     private val repository: WorkStreamRepository = VirlinGraph.repository,
-    private val ids: IdProvider = VirlinGraph.ids
+    private val ids: IdProvider = VirlinGraph.ids,
+    private val projectId: String? = null,
 ) : ViewModel() {
     private val draftCaptureId = initialCaptureId ?: ids.newId("cap")
     private val draftAttachmentId = ids.newId("att")
@@ -64,7 +65,7 @@ class PdfWorkspaceViewModel(
             captureId = initialCaptureId,
             attachmentId = if (initialCaptureId == null) draftAttachmentId else null,
             taskId = initialTaskId,
-            context = CaptureContext(taskId = initialTaskId),
+            context = CaptureContext(projectId = projectId, taskId = initialTaskId),
             committed = initialCaptureId != null,
             busy = initialCaptureId != null || initialTaskId != null
         )
@@ -73,7 +74,7 @@ class PdfWorkspaceViewModel(
 
     init {
         viewModelScope.launch {
-            val title = initialTaskId?.let { repository.getTask(it)?.title }
+            val title = initialTaskId?.let { repository.getTask(it)?.title } ?: projectId?.let { repository.getProject(it)?.title }
             _state.update { it.copy(taskTitle = title) }
             if (initialCaptureId != null) loadExisting(initialCaptureId)
             else _state.update { it.copy(busy = false) }
@@ -331,11 +332,11 @@ class PdfWorkspaceViewModel(
     }
 
     companion object {
-        fun factory(captureId: String?, taskId: String?, context: Context): ViewModelProvider.Factory =
+        fun factory(captureId: String?, taskId: String?, context: Context, projectId: String? = null): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    PdfWorkspaceViewModel(captureId, taskId, context.applicationContext) as T
+                    PdfWorkspaceViewModel(captureId, taskId, context.applicationContext, projectId = projectId) as T
             }
     }
 }

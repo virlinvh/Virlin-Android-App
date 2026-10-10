@@ -29,7 +29,7 @@ class WorkstreamControlsUiTest {
         preference: ExecutionPreference = ExecutionPreference.HUMAN,
         taskId: String? = null, onCompleteTask: (() -> Unit)? = null,
         conflict: String? = null, onOpenConflict: () -> Unit = {}, onRename: ((String) -> Unit)? = null,
-        executionAllowed: Boolean = true, childActivities: List<Pair<String, String>> = emptyList()): InMemoryWorkStreamRepository {
+        executionAllowed: Boolean = true, childActivities: List<Pair<String, String>> = emptyList(), onDelete: (() -> Unit)? = null): InMemoryWorkStreamRepository {
         val stream = WorkStream("s", "Example", state = state, executionPreference = preference, createdAt = now, updatedAt = now)
         val repo = InMemoryWorkStreamRepository(seed = listOf(stream))
         val clock = FakeClock(now)
@@ -40,7 +40,7 @@ class WorkstreamControlsUiTest {
                 onDismiss = {}, onMode = {}, onFocus = {}, intents = intents,
                 taskId = taskId, onCompleteTask = onCompleteTask,
                 externalStartConflict = conflict, onOpenConflictingWork = onOpenConflict, onRename = onRename,
-                executionAllowed = executionAllowed, childActivities = childActivities)
+                executionAllowed = executionAllowed, childActivities = childActivities, onDelete = onDelete)
         } }
         return repo
     }
@@ -53,6 +53,19 @@ class WorkstreamControlsUiTest {
         compose.onNodeWithText("Complete task").performClick()
         assertEquals(true, completed)
         assertEquals(WorkStreamState.FOCUS, repo.streams.value.single().state)
+    }
+    @Test fun compactWorkstreamExposesPermanentDeletionWithoutChangingWork() {
+        var requested = false
+        val repo = show(executionAllowed = false, onDelete = { requested = true })
+        compose.onNodeWithText("Delete workstream").performScrollTo().performClick()
+        assertEquals(true, requested)
+        assertEquals(1, repo.streams.value.size)
+    }
+    @Test fun nestedTaskAndTerminalTaskExposePermanentDeletion() {
+        var requested = false
+        show(state = WorkStreamState.DONE, taskId = "deep", executionAllowed = false, onDelete = { requested = true })
+        compose.onNodeWithText("Delete task").performScrollTo().performClick()
+        assertEquals(true, requested)
     }
     @Test fun parentTaskControls_hideActivityAndExecution_keepManagement() {
         show(taskId = "parent", onCompleteTask = {}, onRename = {}, executionAllowed = false,

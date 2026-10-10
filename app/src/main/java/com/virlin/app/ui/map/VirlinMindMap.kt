@@ -361,6 +361,9 @@ fun VirlinProjectMindMap(
     onOpenTaskPage: (MapTopic) -> Unit = {},
     /** Open the host's destination picker for this task. Nothing is written until it confirms. */
     onMoveTask: (MapTopic) -> Unit = {},
+    /** Project/workstream creation menu; task content retains its real task owner. */
+    onAddContainer: (MapTopic) -> Unit = {},
+    onAddChildTask: (MapTopic) -> Unit = {},
 ) {
     var current by remember(appearance) { mutableStateOf(appearance) }
     val geometry = remember(topics, current.layout, expandedPreviewId, expandedPreviewHeight) {
@@ -563,7 +566,9 @@ fun VirlinProjectMindMap(
                                     return@detectTapGestures
                                 }
                                 if (previewEditZone(frame).contains(world.x, world.y)) {
-                                    onEditPreview(topic)
+                                    if (topic.kind != MapKind.TASK && topic.id !in previewOwners) {
+                                        onAddContainer(topic)
+                                    } else onEditPreview(topic)
                                     return@detectTapGestures
                                 }
                             }
@@ -824,7 +829,7 @@ fun VirlinProjectMindMap(
             // The selected task's actions, sitting directly above the Fit/zoom controls. Like the
             // structure bar it is an OVERLAY, not a sibling in a column, so selecting a task
             // cannot resize the canvas or move its hit-test origin.
-            val barTask = selectedId?.let(byId::get)?.takeIf { it.kind == MapKind.TASK }
+            val barTask = selectedId?.let(byId::get)
             if (barTask != null && dragId == null && paletteTask == null && !showOutline &&
                 !showLayouts && !showColors && !selectingColor
             ) {
@@ -835,7 +840,10 @@ fun VirlinProjectMindMap(
                     onOpenTask = onNodeOpen,
                     onMove = onMoveTask,
                     onPage = onOpenTaskPage,
-                    onAdd = { task -> addPaletteTaskId = task.id },
+                    onAdd = { task ->
+                        if (task.kind == MapKind.TASK) addPaletteTaskId = task.id
+                        else onAddContainer(task)
+                    },
                 )
             }
             Row(
@@ -873,6 +881,7 @@ fun VirlinProjectMindMap(
                 )
                 MapAddPalette(
                     selectedTaskTitle = paletteTask.title,
+                    onAddChild = { val parent = paletteTask; addPaletteTaskId = null; onAddChildTask(parent) },
                     modifier = Modifier.align(Alignment.BottomCenter),
                     onDismiss = { addPaletteTaskId = null },
                     onChoose = { choice ->

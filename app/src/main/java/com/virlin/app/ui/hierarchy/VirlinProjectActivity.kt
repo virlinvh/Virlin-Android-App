@@ -1,4 +1,5 @@
 package com.virlin.app.ui.hierarchy
+import com.virlin.app.ui.components.avoidOrbCircle
 
 // Supplied drop-in Activity tab. Adapted where the app already owns what is being drawn:
 //  - the record model gained NOTE and LINK kinds, a media path and a `hasSnapshot` flag,
@@ -372,7 +373,7 @@ private fun SmallOutlineButton(label: String, onClick: () -> Unit) {
 @Composable
 private fun ActivityRow(record: ActivityRecord, zone: ZoneId,
     imagePreview: @Composable (String, Modifier) -> Unit, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).defaultMinSize(minHeight = 72.dp)
+    Row(Modifier.fillMaxWidth().avoidOrbCircle().clickable(onClick = onClick).defaultMinSize(minHeight = 72.dp)
         .padding(start = 20.dp, end = 14.dp), verticalAlignment = Alignment.Top) {
         Text(record.time(zone), modifier = Modifier.width(49.dp).padding(top = 14.dp),
             fontSize = 12.sp, color = AColor.muted)
@@ -519,7 +520,7 @@ private fun ActivityCalendarSheet(today: LocalDate, initialDate: LocalDate, acti
     var selected by remember { mutableStateOf(initialDate) }
     var yearMenu by remember { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.White) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Select date", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = AColor.ink,
                     modifier = Modifier.weight(1f))
