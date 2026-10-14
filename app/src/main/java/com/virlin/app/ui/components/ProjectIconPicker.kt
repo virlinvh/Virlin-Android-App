@@ -55,13 +55,13 @@ class ProjectImagePicker internal constructor(private val launch: () -> Unit) {
 }
 
 @Composable
-fun rememberProjectImagePicker(projectId: String, onImported: (String) -> Unit, onError: (String) -> Unit): ProjectImagePicker {
+fun rememberProjectImagePicker(projectId: String, onImported: (String) -> Unit, onError: (String) -> Unit, preserveExisting: Boolean = false): ProjectImagePicker {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { ProjectIconStore.importFromUri(context, projectId, uri) } }
+            val result = withContext(Dispatchers.IO) { runCatching { ProjectIconStore.importFromUri(context, projectId, uri, preserveExisting) } }
             result.onSuccess(onImported)
                 .onFailure { onError(if (it is ProjectIconStore.UnsupportedImage) "Choose a PNG, JPEG or WebP image." else "Couldn't use that image.") }
         }

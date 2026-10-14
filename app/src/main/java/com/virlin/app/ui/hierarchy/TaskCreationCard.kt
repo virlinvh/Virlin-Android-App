@@ -28,12 +28,14 @@ internal fun TaskCreationCard(parentTitle: String, heading: String, onDismiss: (
     onSave: (String) -> Unit, titleTag: String = AddTaskTitleTag,
     confirmTag: String = AddTaskConfirmTag, modeSelector: @Composable () -> Unit = {},
     body: (@Composable () -> Unit)? = null, options: @Composable () -> Unit = {}) {
+    HideProjectOrb()
     var name by rememberSaveable { mutableStateOf("") }
     val palette = LocalProjectPalette.current
     val accent = palette?.let { Color(it.primary) } ?: Color(0xFF65BB31)
     val ink = Color(0xFF17202C)
     val muted = Color(0xFF63717B)
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp)) {
+    Column(Modifier.fillMaxWidth().padding(18.dp)) {
+      Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).testTag("task_creation_form")) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(24.dp).background(accent.copy(alpha = .14f), CircleShape), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Add, null, tint = palette?.let { Color(it.secondary) } ?: accent, modifier = Modifier.size(16.dp))
@@ -60,9 +62,14 @@ internal fun TaskCreationCard(parentTitle: String, heading: String, onDismiss: (
                 focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, cursorColor = accent))
         Spacer(Modifier.height(10.dp))
         options()
-        Spacer(Modifier.height(14.dp))
+        }
+      }
+      // Actions are outside the scroll viewport: the IME may constrain the form, never
+      // clip Cancel or Add at its bottom. Bulk content keeps its existing own actions.
+      if (body == null) {
+        Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = muted, fontSize = 14.sp) }
+            TextButton(onClick = onDismiss, modifier = Modifier.testTag("task_creation_cancel")) { Text("Cancel", color = muted, fontSize = 14.sp) }
             Button(onClick = { onSave(name.trim()) }, enabled = name.isNotBlank(), modifier = Modifier.testTag(confirmTag).heightIn(min = 44.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = readableOn(accent))) {
                 Text(heading, fontSize = 14.sp, fontWeight = FontWeight.Medium)

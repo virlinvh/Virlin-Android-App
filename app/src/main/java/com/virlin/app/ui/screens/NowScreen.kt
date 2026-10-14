@@ -196,7 +196,6 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
     }
 
     val nowTick = rememberSecondTicker()
-    var positionPicker by remember { mutableStateOf<String?>(null) }
     var control by remember { mutableStateOf<Pair<String, NeedsYouControlTab>?>(null) }
     Box(Modifier.fillMaxSize()) {
     Column(
@@ -300,22 +299,6 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                 }
             )
 
-            // Priority editor (Phase 04): still the home of durable policies, opened from the sheet.
-            positionPicker?.let { id ->
-                val edited = needsYouStreams.firstOrNull { it.id == id }
-                var existingPreference by remember(id) { mutableStateOf<com.virlin.app.domain.attention.PriorityPreference?>(null) }
-                LaunchedEffect(id) { existingPreference = nowViewModel.priorityPreference(id) }
-                NeedsYouPriorityEditor(
-                    stream = edited,
-                    currentPosition = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 },
-                    queueSize = needsYouQueue.size,
-                    // Read the durable policy off the main thread; null until it arrives.
-                    existing = existingPreference,
-                    onRemoveSaved = { nowViewModel.clearPriorityPreference(id) },
-                    onSave = { pos, scope -> positionPicker = null; nowViewModel.setNeedsYouPriority(id, pos, scope) },
-                    onDismiss = { positionPicker = null }
-                )
-            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -408,6 +391,8 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
             control?.let { (id, initialTab) ->
                 val item = needsYouStreams.firstOrNull { it.id == id }
                 val rank = needsYouQueue.indexOf(id).let { if (it < 0) null else it + 1 }
+                var controlPreference by remember(id) { mutableStateOf<com.virlin.app.domain.attention.PriorityPreference?>(null) }
+                LaunchedEffect(id) { controlPreference = nowViewModel.priorityPreference(id) }
                 NeedsYouControlSheet(
                     stream = item,
                     project = item?.let { com.virlin.app.domain.model.ProjectIdentity.resolve(it.projectId, projects) },
@@ -419,11 +404,25 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                     initialTab = initialTab,
                     // Existing queue path; the sheet stays open so one visit can do both things.
                     onMoveToPosition = { pos -> nowViewModel.reorderNeedsYou(id, pos) },
-                    onOpenPriorityPolicy = { control = null; positionPicker = id },
+                    existingPreference = controlPreference,
+                    onSavePreference = { pos, scope, done ->
+                        nowViewModel.saveNeedsYouPriority(id, pos, scope) { ok ->
+                            if (ok && scope != com.virlin.app.domain.attention.PriorityScope.OneTime) {
+                                controlPreference = com.virlin.app.domain.attention.PriorityPreference(
+                                    id, pos, scope, java.time.Instant.now())
+                            }
+                            done(ok)
+                        }
+                    },
+                    onRemovePreference = {
+                        nowViewModel.clearPriorityPreference(id)
+                        controlPreference = null
+                    },
                     onAction = { action ->
                         // Every branch is an EXISTING transition out of CHECK. Actions that take the
                         // item out of Needs You close the sheet; the list updates from the domain.
                         when (action) {
+                            is NeedsYouControlAction.Complete -> nowViewModel.complete(id)
                             is NeedsYouControlAction.FocusNow ->
                                 if (attention[id] == AttentionKind.CHECK_DUE) nowViewModel.resultReadyNow(id) else nowViewModel.focus(id)
                             is NeedsYouControlAction.StillRunning -> nowViewModel.stillRunning(id, action.minutes)

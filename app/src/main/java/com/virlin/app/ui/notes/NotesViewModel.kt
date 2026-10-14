@@ -122,9 +122,10 @@ class NotesViewModel(
                     caretMarks = emptySet(),
                 )
             }
-        } else if (s.focusedBlockId == blockId) {
-            ui = s.copy(focusedBlockId = null, caretMarks = emptySet())
         }
+        // A toolbar tap or picker temporarily blurs the field. Keep its selection and block
+        // target so Bold/Italic/Code apply to the text the user just selected. A different
+        // text field replaces this target when it receives focus.
     }
 
     fun onSelectionChanged(blockId: String, selection: TextRange) {
@@ -212,7 +213,9 @@ class NotesViewModel(
         }
         val second = NoteDocBlock(
             id = ids.newId("nb"), type = nextType, text = tail, runs = tailRuns,
-            align = block.align, indent = block.indent,
+            align = block.align,
+            indent = if (block.type == NoteDocBlockType.TOGGLE) (block.indent + 1).coerceAtMost(5)
+                else block.indent,
             lineSpacing = block.lineSpacing,
         )
         val index = s.blocks.indexOfFirst { it.id == block.id }
@@ -337,6 +340,9 @@ class NotesViewModel(
             NoteTool.PROMPT -> toggleBlockType(NoteDocBlockType.PROMPT)
             NoteTool.TABLE -> openDialog(NoteDialog.Table)
             NoteTool.DIVIDER -> insertBlock(NoteDocBlockType.DIVIDER)
+            // The route launches Android's picker, then calls insertImage with a durable copy.
+            NoteTool.IMAGE -> Unit
+            NoteTool.TOGGLE -> insertBlock(NoteDocBlockType.TOGGLE)
         }
     }
 
@@ -480,9 +486,13 @@ class NotesViewModel(
     fun insertBlock(type: NoteDocBlockType, table: NoteDocTable? = null) {
         pushUndo()
         val s = _state.value
+        val focused = s.focusedBlock
+        val indent = ((focused?.indent ?: 0) +
+            if (focused?.type == NoteDocBlockType.TOGGLE) 1 else 0).coerceAtMost(5)
         val created = NoteDocBlock(
             id = ids.newId("nb"),
             type = type,
+            indent = indent,
             table = if (type == NoteDocBlockType.TABLE) table ?: NoteDocTable.blank(2, 2) else null,
             promptTitle = if (type == NoteDocBlockType.PROMPT) "" else null,
         )
@@ -490,11 +500,14 @@ class NotesViewModel(
         val blocks = s.blocks.toMutableList()
         if (index >= 0) blocks.add(index + 1, created) else blocks.add(created)
         // A divider or table cannot hold the caret, so give the user a paragraph after it.
-        val trailing = if (!type.isTextual) newBlock() else null
+        val trailing = when (type) {
+            NoteDocBlockType.TOGGLE -> newBlock().copy(indent = (indent + 1).coerceAtMost(5))
+            else -> if (!type.isTextual) newBlock().copy(indent = indent) else null
+        }
         trailing?.let { blocks.add(blocks.indexOf(created) + 1, it) }
         ui = s.copy(
             blocks = blocks,
-            focusedBlockId = (trailing ?: created).id,
+            focusedBlockId = (if (type == NoteDocBlockType.TOGGLE) created else trailing ?: created).id,
             selection = TextRange.Zero,
             save = NoteSaveState.EDITED,
             dialog = null,
@@ -623,6 +636,44 @@ class NotesViewModel(
         }
     }
 
+    fun toggleCollapsed(blockId: String) {
+        val s = _state.value
+        val index = s.blocks.indexOfFirst { it.id == blockId }
+        if (index < 0 || s.blocks[index].type != NoteDocBlockType.TOGGLE) return
+        pushUndo()
+        val toggle = s.blocks[index]
+        val nextCollapsed = !toggle.isCollapsed
+        val descendantIds = s.blocks.drop(index + 1).takeWhile { it.indent > toggle.indent }
+            .mapTo(hashSetOf()) { it.id }
+        ui = s.copy(
+            blocks = s.blocks.map { if (it.id == blockId) it.copy(isCollapsed = nextCollapsed) else it },
+            focusedBlockId = if (nextCollapsed && s.focusedBlockId in descendantIds) blockId else s.focusedBlockId,
+            selection = if (nextCollapsed && s.focusedBlockId in descendantIds) TextRange(toggle.text.length)
+                else s.selection,
+            save = NoteSaveState.EDITED,
+        )
+        scheduleSave()
+    }
+
+    /** Places a selected image after the current block without storing a temporary content URI. */
+    fun insertImage(imagePath: String) {
+        pushUndo()
+        val s = _state.value
+        val focused = s.focusedBlock
+        val indent = ((focused?.indent ?: 0) +
+            if (focused?.type == NoteDocBlockType.TOGGLE) 1 else 0).coerceAtMost(5)
+        val image = newBlock(NoteDocBlockType.IMAGE).copy(imagePath = imagePath, indent = indent)
+        val following = newBlock().copy(indent = indent)
+        val blocks = s.blocks.toMutableList()
+        val index = blocks.indexOfFirst { it.id == s.focusedBlockId }
+        val insertion = if (index < 0) blocks.size else index + 1
+        blocks.add(insertion, image)
+        blocks.add(insertion + 1, following)
+        ui = s.copy(blocks = blocks, focusedBlockId = following.id,
+            selection = TextRange.Zero, save = NoteSaveState.EDITED, dialog = null)
+        scheduleSave()
+    }
+
     private suspend fun persist(): Boolean = withContext(NonCancellable) { saveMutex.withLock {
         val s = _state.value
         if (s.loading) return@withLock false
@@ -685,6 +736,7 @@ class NotesViewModel(
                 NoteDocBlockType.CHECKLIST -> add(NoteTool.CHECKLIST)
                 NoteDocBlockType.QUOTE -> add(NoteTool.QUOTE)
                 NoteDocBlockType.PROMPT -> add(NoteTool.PROMPT)
+                NoteDocBlockType.TOGGLE -> add(NoteTool.TOGGLE)
                 else -> Unit
             }
         }
@@ -694,6 +746,8 @@ class NotesViewModel(
             // Block-shape tools work from a focused block; insertion tools always work.
             add(NoteTool.TABLE)
             add(NoteTool.DIVIDER)
+            add(NoteTool.TOGGLE)
+            add(NoteTool.IMAGE)
             if (block != null) {
                 addAll(
                     listOf(
@@ -725,6 +779,7 @@ class NotesViewModel(
                 NoteDocBlockType.CODE -> "Code"
                 NoteDocBlockType.QUOTE -> "Quote"
                 NoteDocBlockType.PROMPT -> "Prompt"
+                NoteDocBlockType.TOGGLE -> "Toggle"
                 else -> "Normal text"
             },
             fontLabel = run?.fontFamily ?: "Inter",

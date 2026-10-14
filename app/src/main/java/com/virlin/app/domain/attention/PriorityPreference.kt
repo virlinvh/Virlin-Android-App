@@ -31,6 +31,7 @@ data class PriorityPreference(
         PriorityScope.Always -> true
         PriorityScope.CurrentTerm -> true              // no term boundary exists yet — see the docs
         is PriorityScope.Until -> now.isBefore(s.expiresAt)
+        is PriorityScope.NextReturns -> s.remaining > 0
     }
 }
 
@@ -44,6 +45,11 @@ sealed interface PriorityScope {
 
     /** "Always prioritize here": re-apply the preferred position whenever the item returns. */
     data object Always : PriorityScope
+
+    /** Re-apply on this item's next [remaining] entries into Needs You, then remove the policy. */
+    data class NextReturns(val remaining: Int) : PriorityScope {
+        init { require(remaining > 0) }
+    }
 
     /**
      * "This term": applies while the current work term is active. Virlin has no term/semester

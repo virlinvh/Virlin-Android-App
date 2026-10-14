@@ -128,6 +128,7 @@ class InMemoryWorkStreamRepository(
     override suspend fun getOpenFocusSession(streamId: String) = lock.withLock { sessions.lastOrNull { it.workStreamId == streamId && it.isOpen } }
     override suspend fun getCurrentCycle(streamId: String) = lock.withLock { cycles.lastOrNull { it.workStreamId == streamId && it.endedAt == null } }
     override suspend fun getLatestSnapshot(streamId: String) = lock.withLock { snapshots.lastOrNull { it.workStreamId == streamId } }
+    override suspend fun getSnapshots(streamId: String) = lock.withLock { snapshots.filter { it.workStreamId == streamId } }
     override suspend fun getEvents(streamId: String) = lock.withLock { events.filter { it.workStreamId == streamId } }
     override suspend fun getEventsForStreams(streamIds: List<String>, limit: Int, offset: Int) =
         lock.withLock {

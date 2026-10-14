@@ -1,16 +1,28 @@
 package com.virlin.app.ui.map
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FileCopy
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material3.Icon
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -21,12 +33,17 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -37,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.virlin.app.domain.structure.HierarchyNode
 import com.virlin.app.domain.structure.NodeKind
+import kotlinx.coroutines.delay
 
 const val MapStructureBarTag = "map_structure_bar"
 const val MapMoveSheetTag = "map_move_sheet"
@@ -53,12 +71,8 @@ internal val MapHairline = Color(0xFFE1E8E2)
 enum class StructureIntent { MOVE, COPY }
 
 /**
- * The bar for the selected node.
- *
- * It appears in BOTH modes. While viewing it is a compact strip that names the node and offers
- * to open it; while [organizing] it also carries the placement actions, every one of which ends
- * in the same `placeBranch` command. Opening is always an explicit button - a tap on the canvas
- * only ever selects - so selection never navigates by surprise.
+ * An icon-only overlay for the selected node. Its 44dp touch targets and accessibility labels
+ * remain present even though the visible border, selected title, and helper copy are gone.
  */
 @Composable
 fun MapStructureBar(
@@ -74,65 +88,74 @@ fun MapStructureBar(
     taskToolbarPresent: Boolean = false,
     onOpen: () -> Unit,
     onEdit: () -> Unit,
+    onAddBranch: () -> Unit = {},
     onMove: () -> Unit,
     onCopy: () -> Unit,
+    onDuplicate: () -> Unit,
     onPaste: () -> Unit,
     onClear: () -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxWidth().testTag(MapStructureBarTag)
-            .background(Color(0xFFF1F7F2)).padding(horizontal = 14.dp, vertical = 10.dp)
-    ) {
-        if (selected == null) {
-            // Nothing selected and not organizing: there is nothing to say, so no bar.
-            if (!organizing) return@Column
-            Text(
-                if (clipboard == null)
-                    "Organize: tap a task to select it, then drag its green handle onto " +
-                        "another task or workstream."
-                else "Copied \"${clipboard.title}\". Tap where it should go, then Paste.",
-                fontSize = 13.sp, color = MapMuted
-            )
-            return@Column
-        }
-        // The action says what it will open, so it is never a guess from a generic "Open".
-        val openLabel = when (selected.kind) {
-            MapKind.TASK -> "Open Task"
-            MapKind.WORKSTREAM -> "Open Workstream"
-            else -> "Open Project"
-        }
-        Text(
-            selected.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MapInk,
-            maxLines = 1, overflow = TextOverflow.Ellipsis
-        )
-        // The branch size matters only when something is about to move.
-        if (organizing) Text(
-            if (affectedCount == 1) "This branch is 1 item"
-            else "This branch is $affectedCount items",
-            fontSize = 12.sp, color = MapMuted
-        )
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (!taskToolbarPresent) BarAction(openLabel, onOpen)
-            if (organizing) {
-                BarAction("Edit", onEdit)
-                if (!taskToolbarPresent) BarAction("Move here…", onMove)
-                if (selected.kind == MapKind.TASK) BarAction("Copy", onCopy)
-                if (clipboard != null) BarAction("Paste into", onPaste)
+    if (selected == null) return
+    val openLabel = when (selected.kind) {
+        MapKind.TASK -> "Open Task"
+        MapKind.WORKSTREAM -> "Open Workstream"
+        else -> "Open Project"
+    }
+    val actions = buildList {
+        if (organizing) {
+            add(MapToolbarAction(Icons.Default.Edit, "Edit", onEdit))
+            add(MapToolbarAction(Icons.Default.AccountTree, "Add branch", onAddBranch))
+            if (selected.kind == MapKind.TASK) {
+                add(MapToolbarAction(Icons.Default.ContentCopy, "Copy", onCopy))
+                add(MapToolbarAction(Icons.Default.FileCopy, "Duplicate", onDuplicate))
+            } else if (!taskToolbarPresent) {
+                add(MapToolbarAction(Icons.Default.OpenInNew, openLabel, onOpen))
+                add(MapToolbarAction(Icons.Default.DriveFileMove, "Move", onMove))
             }
-            BarAction("Clear", onClear)
+            if (clipboard != null) add(MapToolbarAction(Icons.Default.ContentPaste, "Paste into", onPaste))
+        } else if (!taskToolbarPresent) {
+            add(MapToolbarAction(Icons.Default.OpenInNew, openLabel, onOpen))
+        }
+        add(MapToolbarAction(Icons.Default.Close, "Clear selection", onClear))
+    }
+    Row(
+        Modifier.testTag(MapStructureBarTag).padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        actions.forEachIndexed { index, action ->
+            key(selected.id, action.label) {
+                MapIconAction(action.icon, action.label,
+                    entranceDelayMs = (actions.lastIndex - index) * 40L, action.onClick)
+            }
         }
     }
 }
 
+private data class MapToolbarAction(
+    val icon: ImageVector, val label: String, val onClick: () -> Unit,
+)
+
 @Composable
-private fun BarAction(label: String, onClick: () -> Unit) {
-    Text(
-        label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MapGreen,
-        modifier = Modifier.defaultMinSize(minHeight = 44.dp)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 12.dp)
-    )
+private fun MapIconAction(icon: ImageVector, label: String, entranceDelayMs: Long, onClick: () -> Unit) {
+    val entrance = remember { Animatable(0f) }
+    val tint = com.virlin.app.ui.hierarchy.LocalProjectPalette.current?.let { Color(it.secondary) } ?: MapGreen
+    LaunchedEffect(Unit) {
+        delay(entranceDelayMs)
+        entrance.animateTo(1f, tween(180))
+    }
+    Box(
+        Modifier.size(44.dp)
+            .graphicsLayer {
+                alpha = entrance.value
+                translationX = (1f - entrance.value) * 10.dp.toPx()
+            }
+            .semantics { contentDescription = label }
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+    }
 }
 
 /**
@@ -149,23 +172,26 @@ fun MapDestinationSheet(
     onDismiss: () -> Unit,
     onChoose: (MapDestination) -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    val palette = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+    val ink = palette?.let { Color(it.text) } ?: MapInk
+    val muted = palette?.let { Color(it.muted) } ?: MapMuted
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.White) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
             Text(
                 if (intent == StructureIntent.MOVE) "Move \"${source.title}\""
                 else "Copy \"${source.title}\"",
-                fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MapInk
+                fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ink
             )
             Text(
                 if (affectedCount == 1) "1 item will move." else "$affectedCount items will move.",
-                fontSize = 12.sp, color = MapMuted
+                fontSize = 12.sp, color = muted
             )
             Spacer(Modifier.height(10.dp))
         }
         if (destinations.isEmpty()) {
             Text(
                 "There is nowhere else this branch can go.",
-                Modifier.padding(18.dp), fontSize = 13.sp, color = MapMuted
+                Modifier.padding(18.dp), fontSize = 13.sp, color = muted
             )
         }
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp).testTag(MapMoveSheetTag)) {
@@ -179,9 +205,9 @@ fun MapDestinationSheet(
                         }
                         .padding(horizontal = 18.dp, vertical = 12.dp)
                 ) {
-                    Text(destination.title, fontSize = 15.sp, color = MapInk, maxLines = 1,
+                    Text(destination.title, fontSize = 15.sp, color = ink, maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
-                    Text(destination.breadcrumb, fontSize = 12.sp, color = MapMuted, maxLines = 1,
+                    Text(destination.breadcrumb, fontSize = 12.sp, color = muted, maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -309,11 +335,12 @@ fun MapAddSubtaskDialog(
     onDismiss: () -> Unit,
     onSave: (String) -> Unit,
 ) {
+    val muted = com.virlin.app.ui.hierarchy.LocalProjectPalette.current?.let { Color(it.muted) } ?: MapMuted
     com.virlin.app.ui.components.SafeDialog(onDismissRequest = onDismiss) {
         androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp), color = Color.White) {
             com.virlin.app.ui.hierarchy.TaskCreationCard(parentTitle, "Add subtask", onDismiss, onSave,
                 titleTag = MapAddSubtaskFieldTag, confirmTag = MapAddSubtaskSaveTag) {
-                Text("Use parent · At end", fontSize = 12.sp, color = MapMuted)
+                Text("Use parent · At end", fontSize = 12.sp, color = muted)
             }
         }
     }
@@ -332,12 +359,13 @@ fun MapAddTextDialog(
     singleLine: Boolean = true,
 ) {
     var text by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(initial) }
+    val muted = com.virlin.app.ui.hierarchy.LocalProjectPalette.current?.let { Color(it.muted) } ?: MapMuted
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
             Column {
-                Text(subtitle, fontSize = 13.sp, color = MapMuted)
+                Text(subtitle, fontSize = 13.sp, color = muted)
                 Spacer(Modifier.height(10.dp))
                 androidx.compose.material3.OutlinedTextField(
                     value = text, onValueChange = { text = it },

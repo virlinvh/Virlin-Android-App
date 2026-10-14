@@ -90,7 +90,9 @@ object NowPresentation {
             s.id to when (s.snoozeReason) {
                 SnoozeReason.HUMAN_RETURN -> AttentionKind.RETURN_DUE
                 SnoozeReason.EXTERNAL_RESULT_READY -> AttentionKind.RESULT_READY
-                null -> if (s.processingStartedAt == null && ExecutionModeResolver.resolveCurrent(s, projects, tasks) ==
+                null -> if (s.processingStartedAt == null && s.externalTrackedSeconds == 0L &&
+                    s.externalActorId == null && !s.externalTrackingPaused &&
+                    ExecutionModeResolver.resolveCurrent(s, projects, tasks) ==
                     com.virlin.app.domain.model.EffectiveExecutionMode.HUMAN) AttentionKind.RETURN_DUE else AttentionKind.CHECK_DUE
             }
         }

@@ -364,10 +364,6 @@ private fun SectionHeading(title: String, action: String, tag: String? = null, o
 
 @Composable
 private fun OverviewBody(ui: ProjectPageUi, actions: ProjectPageActions) {
-    ExecutionLegend(ui.humanActiveCount, ui.externalActiveCount,
-        ui.workstreams.count { it.state == WorkstreamState.MULTI_RUN },
-        ui.workstreams.count { it.state == WorkstreamState.NEEDS_ATTENTION }, ui.id)
-    Spacer(Modifier.height(18.dp))
     // The app's existing tag, so the hierarchy journey still finds this control.
     SectionHeading("Workstreams", "New", AddWorkStreamButtonTag, actions.onAddWorkstream)
     Spacer(Modifier.height(7.dp))
@@ -439,10 +435,12 @@ private fun WorkstreamRow(item: WorkstreamUi, onClick: () -> Unit) {
 @Composable
 internal fun ExecutionLegend(human: Int, external: Int, multiRun: Int = 0, review: Int = 0, projectId: String = "") {
     var expanded by rememberSaveable(projectId) { mutableStateOf(false) }
-    Surface(shape = RoundedCornerShape(14.dp), color = P.executionWash) {
+    val palette = LocalProjectPalette.current
+    val accent = palette?.let { Color(it.secondary) } ?: Color(0xFF007B58)
+    Surface(shape = RoundedCornerShape(14.dp), color = palette?.let { Color(it.tertiary) } ?: P.executionWash) {
         Column(Modifier.fillMaxWidth().testTag("execution_summary")) {
             Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(28.dp).background(Color(0xFFDDF3EA), CircleShape)
+                Box(Modifier.size(28.dp).background(palette?.let { Color(it.tertiary) } ?: Color(0xFFDDF3EA), CircleShape)
                     .testTag("execution_pulse_icon"), contentAlignment = Alignment.Center) {
                     Canvas(Modifier.size(18.dp)) {
                         val pulse = Path().apply {
@@ -454,18 +452,18 @@ internal fun ExecutionLegend(human: Int, external: Int, multiRun: Int = 0, revie
                             lineTo(size.width * 0.76f, size.height * 0.52f)
                             lineTo(size.width, size.height * 0.52f)
                         }
-                        drawPath(pulse, Color(0xFF007B58), style = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round))
+                        drawPath(pulse, accent, style = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round))
                     }
                 }
                 Spacer(Modifier.width(10.dp))
-                Text("Execution", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = P.ink,
+                Text("Execution", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette?.let { Color(it.text) } ?: P.ink,
                     modifier = Modifier.weight(1f))
-                Text("${human + external} active", fontSize = 11.sp, color = P.secondary)
+                Text("${human + external} active", fontSize = 11.sp, color = palette?.let { Color(it.muted) } ?: P.secondary)
                 IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(44.dp)
                     .testTag("execution_disclosure").semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }) {
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = if (expanded) "Hide execution details" else "Show execution details",
-                        tint = P.ink, modifier = Modifier.size(22.dp))
+                        tint = palette?.let { Color(it.text) } ?: P.ink, modifier = Modifier.size(22.dp))
                 }
             }
             if (expanded) FlowRow(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 10.dp)
@@ -494,6 +492,17 @@ private fun CountChip(label: String, count: Int, color: Color, background: Color
             Text("$count", color = color, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
         }
     }
+}
+
+/** Smooth viewport-edge envelope for each copy of the travelling wave dot. */
+internal fun flowingWaveHeadOpacity(progress: Float): Float {
+    if (progress <= 0f || progress >= 1f) return 0f
+        val edge = .14f
+    fun smooth(value: Float): Float {
+        val t = value.coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+    return smooth(progress / edge) * smooth((1f - progress) / edge)
 }
 
 @Composable
@@ -596,10 +605,21 @@ internal fun ExecutionDial(state: WorkstreamState, modifier: Modifier = Modifier
                         drawPath(path, if (lane == 1) P.external else P.externalLight.copy(alpha = .42f + lane * .18f),
                             style = Stroke((3.8f - lane * .65f).dp.toPx(), cap = StrokeCap.Round))
                     }
-                    val headX = size.width * (.08f + .84f * phase)
-                    val headY = size.height * .50f + sin((phase * Math.PI * 4.0)).toFloat() * size.height * .10f
-                    drawCircle(P.externalLight.copy(alpha = .20f), 6.dp.toPx(), Offset(headX, headY))
-                    drawCircle(P.externalLight, 2.6.dp.toPx(), Offset(headX, headY))
+                    // Periodic copies cross opposite edges together. Each head feathers out
+                    // before leaving and the next feathers in, so the restart is invisible.
+                    for (copy in -1..2) {
+                        val progress = phase + copy
+                        val position = progress * .86f
+                        val opacity = flowingWaveHeadOpacity(position)
+                        if (opacity <= 0f) continue
+                        val head = Offset(
+                            size.width * position,
+                            size.height * .50f +
+                                sin((progress * Math.PI * 4.0)).toFloat() * size.height * .10f,
+                        )
+                        drawCircle(P.externalLight.copy(alpha = .20f * opacity), 6.dp.toPx(), head)
+                        drawCircle(P.externalLight.copy(alpha = opacity), 2.6.dp.toPx(), head)
+                    }
                 }
                 WorkstreamState.MULTI_RUN -> {
                     // Independent lanes orbit one shared center. Each ribbon uses the established

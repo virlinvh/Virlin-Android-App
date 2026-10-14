@@ -144,6 +144,12 @@ class AttentionIntentController(
      */
     fun complete(streamId: String) {
         scope.launch {
+            // Now's queue also contains task execution projections, whose id is the task id.
+            // Complete that exact task, not its owner or the currently focused task elsewhere.
+            if (repository.getTask(streamId) != null) {
+                completeTaskNow(streamId)
+                return@launch
+            }
             val stream = repository.getStream(streamId)
             val active = stream?.activeTaskId
             if (active != null) {

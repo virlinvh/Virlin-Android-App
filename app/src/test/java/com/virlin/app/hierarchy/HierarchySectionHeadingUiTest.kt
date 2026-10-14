@@ -8,8 +8,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.virlin.app.ui.hierarchy.HierarchySectionHeading
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -41,6 +44,9 @@ class HierarchySectionHeadingUiTest {
             }
         }
         val titleBounds = compose.onNodeWithText(title).fetchSemanticsNode().boundsInRoot
+        val titleLayouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        compose.onNodeWithText(title).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(titleLayouts) }
+        assertEquals(23.sp, titleLayouts.single().layoutInput.style.fontSize)
         val progressBounds = compose.onNodeWithText(progress).fetchSemanticsNode().boundsInRoot
         val manageBounds = compose.onNodeWithText("Manage").fetchSemanticsNode().boundsInRoot
         assertTrue(titleBounds.bottom <= progressBounds.top)

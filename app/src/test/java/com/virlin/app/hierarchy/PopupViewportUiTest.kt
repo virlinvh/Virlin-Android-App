@@ -68,7 +68,7 @@ class PopupViewportUiTest {
                 onDismiss = {}, onSingle = {})
         }
         compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("Keyboard test")
-        compose.onNodeWithText("Create").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Create").assertIsDisplayed()
         compose.onNodeWithText("Cancel").assertIsDisplayed()
         compose.onNodeWithText("Keyboard test").performScrollTo().assertIsDisplayed()
     }
@@ -82,8 +82,8 @@ class PopupViewportUiTest {
         }
         compose.onNode(hasSetTextAction()).performScrollTo()
             .performTextInput("""{"version":2,"items":[{"name":"Phase 1"}]}""")
-        compose.onNodeWithText("Preview").performScrollTo().assertIsDisplayed().performClick()
-        compose.onNodeWithText("Add 1 items").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Preview").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Add 1 items").assertIsDisplayed()
     }
 
     @Test fun cancelFollowsConfiguredProjectColorAndLiveChanges() {

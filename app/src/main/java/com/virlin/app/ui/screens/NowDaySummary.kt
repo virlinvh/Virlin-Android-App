@@ -59,7 +59,8 @@ data class NowDaySummaryValues(
     /** "22h 18m" — real human attention invested. */
     val timeFocused: String = "—",
     val greetingName: String = "",
-    val savedUnit: String = "saved"
+    val savedUnit: String = "saved",
+    val timeExternal: String = "—"
 )
 
 private val SummaryGreen = Color(0xFF16A34A)
@@ -81,7 +82,7 @@ private val DateFormat: DateTimeFormatter get() = DateTimeFormatter.ofPattern("E
 @Composable
 fun NowDaySummary(
     values: NowDaySummaryValues = NowDaySummaryValues(),
-    today: LocalDate = LocalDate.now(),
+    today: LocalDate = rememberCurrentLocalDate(),
     modifier: Modifier = Modifier,
     timersRunning: Boolean = false,
     pausingTimers: Boolean = false,
@@ -150,15 +151,14 @@ fun NowDaySummary(
             tasksAdvanced = values.tasksAdvanced,
             projectsMoved = values.projectsMoved,
             timeFocused = values.timeFocused,
+            timeExternal = values.timeExternal,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(72.dp)
                 .testTag(NowSummaryBarTag)
                 .semantics {
                     contentDescription = "${values.timeSaved} ${values.savedUnit}, " +
-                        "${values.tasksAdvanced} ${values.tasksAdvancedUnit} advanced, " +
-                        "${values.projectsMoved} ${values.projectsMovedUnit} moved, " +
-                        "${values.timeFocused} focused"
+                        "${values.timeFocused} focused, ${values.timeExternal} combined external task time"
                 }
         )
     }

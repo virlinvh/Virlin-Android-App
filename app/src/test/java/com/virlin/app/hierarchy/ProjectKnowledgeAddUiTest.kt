@@ -1,6 +1,11 @@
 package com.virlin.app.hierarchy
 
 import androidx.compose.ui.test.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Text
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -20,6 +25,19 @@ import org.robolectric.annotation.Config
 class ProjectKnowledgeAddUiTest {
     @get:Rule val compose = createComposeRule()
 
+    @Test fun knowledgeSheetMeetsTheContentEdgeWithoutAnExtraRoundedShell() {
+        compose.setContent {
+            Box(Modifier.size(360.dp, 600.dp).testTag("knowledge_host")) {
+                ProjectKnowledgeAdd("project", "My project", rememberNavController()) {}
+            }
+        }
+        compose.waitForIdle()
+        val host = compose.onNodeWithTag("knowledge_host").fetchSemanticsNode().boundsInRoot
+        val sheet = compose.onNodeWithTag("mind_map_add_palette").fetchSemanticsNode().boundsInRoot
+        org.junit.Assert.assertEquals(host.bottom, sheet.bottom, 1f)
+        compose.onNodeWithContentDescription("Close Add menu").performClick()
+    }
+
     @Test fun noteOpensExistingEditorInsteadOfGenericEntryDialog() {
         compose.setContent {
             val nav = rememberNavController()
@@ -33,13 +51,19 @@ class ProjectKnowledgeAddUiTest {
         compose.onNodeWithText("Title (optional)").assertDoesNotExist()
     }
 
-    @Test fun audioSupportsRecordingAndImportWithoutSavingAnEmptyCapture() {
-        compose.setContent { ProjectKnowledgeAdd("project", "My project", rememberNavController()) {} }
+    @Test fun audioOpensProjectPageDirectlyWithoutChoiceDialog() {
+        compose.setContent {
+            val nav = rememberNavController()
+            NavHost(nav, startDestination = "add") {
+                composable("add") { ProjectKnowledgeAdd("project", "My project", nav) {} }
+                composable("voice_editor/new/project/{projectId}") {
+                    Text("Project audio page: " + it.arguments?.getString("projectId"))
+                }
+            }
+        }
         compose.onNodeWithText("Audio").performClick()
-        compose.onNodeWithText("Record audio").assertIsDisplayed()
-        compose.onNodeWithText("Import audio").assertIsDisplayed()
-        compose.onNodeWithText("Back").performClick()
-        compose.onNodeWithText("Note").assertExists()
+        compose.onNodeWithText("Project audio page: project").assertIsDisplayed()
+        compose.onNodeWithText("Add audio").assertDoesNotExist()
     }
 
     @Test fun todoPromptAndLinkHaveProjectScopedRoutes() {
@@ -65,6 +89,8 @@ class ProjectKnowledgeAddUiTest {
         }
         compose.onNodeWithTag("notes_tool_paragraph").assertIsDisplayed()
         compose.onNodeWithTag("notes_tool_font").assertIsDisplayed()
+        compose.onNodeWithTag("notes_tool_image").assertExists()
+        compose.onNodeWithTag("notes_tool_toggle").assertExists()
         compose.onNodeWithTag("notes_add_block").assertIsDisplayed()
         compose.onNode(hasSetTextAction()).performTextReplacement("Knowledge note body")
         compose.onNodeWithContentDescription("Close note").performClick()

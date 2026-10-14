@@ -116,6 +116,8 @@ private object AColor {
     val ink: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.text) } ?: Color(0xFF17202C)
     val muted: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.muted) } ?: Color(0xFF647087)
     val line: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE6EAF0)
+    val accent: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF54AF26)
+    val accentWash: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFF2FAEC)
     // Event-kind colors below remain semantic, not project accents.
     val green = Color(0xFF54AF26)
     val greenWash = Color(0xFFF2FAEC)
@@ -227,7 +229,7 @@ fun VirlinProjectActivity(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("$activeCount active filters", color = AColor.muted, fontSize = 12.sp)
-                    Text("Clear all", color = AColor.green, fontSize = 12.sp,
+                    Text("Clear all", color = AColor.accent, fontSize = 12.sp,
                         modifier = Modifier.clickable {
                             kindsCsv = ""; selectedWorkstream = null; dateCode = DateSelection.All.encode()
                         })
@@ -235,7 +237,7 @@ fun VirlinProjectActivity(
             }
             if (loading && scoped.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = AColor.green, strokeWidth = 2.dp,
+                    CircularProgressIndicator(color = AColor.accent, strokeWidth = 2.dp,
                         modifier = Modifier.size(22.dp))
                 }
             } else if (errorMessage != null) {
@@ -481,7 +483,7 @@ private fun ActivityFilterSheet(kinds: Set<ActivityKind>, workstreamId: String?,
                 }, modifier = Modifier.weight(1f).height(48.dp)) { Text("Reset") }
                 val count = countResults(draftKinds, draftWorkstream, draftDate)
                 Button(onClick = { onApply(draftKinds, draftWorkstream, draftDate, draftNewest) },
-                    colors = ButtonDefaults.buttonColors(containerColor = AColor.green),
+                    colors = ButtonDefaults.buttonColors(containerColor = AColor.accent, contentColor = readableOn(AColor.accent)),
                     modifier = Modifier.weight(2f).height(48.dp)) {
                     Text(if (count == 1) "Show 1 result" else "Show $count results")
                 }
@@ -504,8 +506,8 @@ private fun ActivityFilterSheet(kinds: Set<ActivityKind>, workstreamId: String?,
 }
 @Composable private fun Choice(label: String, chosen: Boolean, onClick: () -> Unit) {
     Surface(onClick = onClick, shape = RoundedCornerShape(10.dp),
-        color = if (chosen) AColor.greenWash else Color.White,
-        border = BorderStroke(1.dp, if (chosen) AColor.green else AColor.line)) {
+        color = if (chosen) AColor.accentWash else Color.White,
+        border = BorderStroke(1.dp, if (chosen) AColor.accent else AColor.line)) {
         Box(Modifier.defaultMinSize(minHeight = 40.dp).padding(horizontal = 11.dp), contentAlignment = Alignment.Center) {
             Text(label, fontSize = 12.sp, color = AColor.ink)
         }
@@ -568,13 +570,13 @@ private fun ActivityCalendarSheet(today: LocalDate, initialDate: LocalDate, acti
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center) {
                             Box(Modifier.size(30.dp).background(
-                                if (day == selected) AColor.green else Color.Transparent, CircleShape),
+                                if (day == selected) AColor.accent else Color.Transparent, CircleShape),
                                 contentAlignment = Alignment.Center) {
                                 Text(day?.dayOfMonth?.toString() ?: "", fontSize = 13.sp,
-                                    color = if (day == selected) Color.White else AColor.ink)
+                                    color = if (day == selected) readableOn(AColor.accent) else AColor.ink)
                             }
                             Box(Modifier.size(4.dp).background(
-                                if (day != null && day in activityDays) AColor.green else Color.Transparent, CircleShape))
+                                if (day != null && day in activityDays) AColor.accent else Color.Transparent, CircleShape))
                         }
                     }
                 }
@@ -587,7 +589,7 @@ private fun ActivityCalendarSheet(today: LocalDate, initialDate: LocalDate, acti
                     Text("Entire month")
                 }
                 Button(onClick = { onDay(selected) }, modifier = Modifier.weight(1f).height(48.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AColor.green)) {
+                    colors = ButtonDefaults.buttonColors(containerColor = AColor.accent, contentColor = readableOn(AColor.accent))) {
                     Text("Jump to day")
                 }
             }
@@ -730,7 +732,7 @@ fun ActivityImage(relativePath: String, modifier: Modifier = Modifier) {
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(file.absolutePath, bounds)
                 var sample = 1
-                while (bounds.outWidth / sample > 1080) sample *= 2
+                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1080) sample *= 2
                 BitmapFactory.decodeFile(
                     file.absolutePath,
                     BitmapFactory.Options().apply { inSampleSize = sample }

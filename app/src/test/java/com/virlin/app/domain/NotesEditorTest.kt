@@ -121,6 +121,57 @@ class NotesEditorTest {
         assertFalse(NoteRuns.rangeHasMark(runs, 5, 11, NoteDocMark.BOLD))
     }
 
+    @Test fun insertedImage_isBetweenEditableParagraphsAndPersists() = runTest {
+        val repo = InMemoryWorkStreamRepository()
+        val vm = vm(repo)
+        advanceUntilIdle()
+        val first = vm.focusFirst()
+        vm.insertImage("123e4567-e89b-12d3-a456-426614174000")
+        val blocks = vm.state.value.blocks
+        assertEquals(first, blocks[0].id)
+        assertEquals(NoteDocBlockType.IMAGE, blocks[1].type)
+        assertEquals("123e4567-e89b-12d3-a456-426614174000", blocks[1].imagePath)
+        assertEquals(NoteDocBlockType.PARAGRAPH, blocks[2].type)
+        advanceUntilIdle()
+        assertEquals(blocks, repo.getNoteDoc("owner-1")!!.blocks)
+    }
+
+    @Test fun toggleCreatesNestedParagraphAndCollapsePersists() = runTest {
+        val repo = InMemoryWorkStreamRepository()
+        val vm = vm(repo)
+        advanceUntilIdle()
+        vm.focusFirst()
+        vm.onTool(NoteTool.TOGGLE)
+        val toggle = vm.state.value.blocks[1]
+        val child = vm.state.value.blocks[2]
+        assertEquals(NoteDocBlockType.TOGGLE, toggle.type)
+        assertEquals(toggle.indent + 1, child.indent)
+        vm.toggleCollapsed(toggle.id)
+        assertTrue(vm.state.value.blocks[1].isCollapsed)
+        advanceUntilIdle()
+        assertTrue(repo.getNoteDoc("owner-1")!!.blocks[1].isCollapsed)
+        vm.toggleCollapsed(toggle.id)
+        assertFalse(vm.state.value.blocks[1].isCollapsed)
+    }
+
+    @Test fun toolbarBlurRetainsSelectionForInlineFormatting() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val id = vm.focusFirst()
+        vm.onTextChanged(id, "first second third", TextRange(18))
+        vm.onSelectionChanged(id, TextRange(6, 12))
+        vm.onFocusChanged(id, false) // tapping the formatting rail blurs BasicTextField
+        assertEquals(TextRange(6, 12), vm.state.value.selection)
+        vm.onTool(NoteTool.BOLD)
+        vm.onTool(NoteTool.ITALIC)
+        vm.onTool(NoteTool.CODE)
+        val runs = vm.state.value.blocks.single().runs
+        for (mark in listOf(NoteDocMark.BOLD, NoteDocMark.ITALIC, NoteDocMark.CODE)) {
+            assertTrue(NoteRuns.rangeHasMark(runs, 6, 12, mark))
+            assertFalse(NoteRuns.rangeHasMark(runs, 0, 5, mark))
+        }
+    }
+
     @Test fun boldTwice_removesIt() = runTest {
         val vm = vm()
         advanceUntilIdle()

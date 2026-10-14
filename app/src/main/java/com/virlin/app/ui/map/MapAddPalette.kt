@@ -3,6 +3,9 @@ package com.virlin.app.ui.map
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,7 +34,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -84,11 +90,23 @@ private val rows = listOf(
     MapAddKind.IMAGE to MapAddKind.AUDIO,
 )
 
-private val ink = Color(0xFF19231E)
+private val ink: Color
+    @Composable get() = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+        ?.let { Color(it.text) } ?: Color(0xFF19231E)
 private val green: Color
     @Composable get() = com.virlin.app.ui.hierarchy.LocalProjectPalette.current?.let { Color(it.secondary) }
         ?: Color(0xFF087848)
 private val line = Color(0xFFDDE6E1)
+
+internal data class AddChoiceStyle(val background: Color, val border: Color)
+
+/** Every enabled option rests alike; only the user's current press receives emphasis. */
+internal fun addChoiceStyle(kind: MapAddKind, pressed: Boolean, accent: Color): AddChoiceStyle = when {
+    !kind.isSupported -> AddChoiceStyle(Color(0xFFF6F7F6), line)
+    pressed -> AddChoiceStyle(androidx.compose.ui.graphics.lerp(Color.White, accent, .13f),
+        androidx.compose.ui.graphics.lerp(Color.White, accent, .55f))
+    else -> AddChoiceStyle(Color.White, line)
+}
 
 /** Put inside the existing map Canvas Box, above the host-owned footer. */
 @Composable
@@ -100,6 +118,8 @@ fun MapAddPalette(
     /** Centered dialogs have four rounded corners and no sheet drag handle. */
     dialogMode: Boolean = false,
     onAddChild: (() -> Unit)? = null,
+    addChildLabel: String = "New subtask · Single or Bulk",
+    allowedKinds: Set<MapAddKind> = MapAddKind.entries.toSet(),
     knowledgeMode: Boolean = false,
 ) {
     androidx.compose.runtime.DisposableEffect(Unit) {
@@ -148,7 +168,7 @@ fun MapAddPalette(
             // The scrolling option area, masked so buttons dissolve at the edge instead of
             onAddChild?.let { addChild ->
                 androidx.compose.material3.TextButton(onClick = addChild) {
-                    Text("New subtask · Single or Bulk", color = green)
+                    Text(addChildLabel, color = green)
                 }
             }
             // being sliced off. The mask covers ONLY this viewport - the title, the close
@@ -186,10 +206,12 @@ fun MapAddPalette(
                 modifier = Modifier.verticalScroll(scrollState),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                rows.forEach { (left, right) ->
+                rows.filter { (left, right) -> left in allowedKinds || right in allowedKinds }.forEach { (left, right) ->
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AddChoice(left, Modifier.weight(1f), onChoose, knowledgeMode)
-                        AddChoice(right, Modifier.weight(1f), onChoose, knowledgeMode)
+                        if (left in allowedKinds) AddChoice(left, Modifier.weight(1f), onChoose, knowledgeMode)
+                        else Spacer(Modifier.weight(1f))
+                        if (right in allowedKinds) AddChoice(right, Modifier.weight(1f), onChoose, knowledgeMode)
+                        else Spacer(Modifier.weight(1f))
                     }
                 }
             }
@@ -210,25 +232,22 @@ private fun AddChoice(
     knowledgeMode: Boolean = false,
 ) {
     val supported = kind.isSupported
-    val isPrimary = supported && kind == MapAddKind.TODO
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed = interactionSource.collectIsPressedAsState().value
+    val style = addChoiceStyle(kind, pressed, green)
+    val background = animateColorAsState(style.background, tween(110), label = "add option background").value
+    val border = animateColorAsState(style.border, tween(110), label = "add option border").value
     val shape = RoundedCornerShape(13.dp)
     Row(
         modifier = modifier.heightIn(min = 52.dp)
             .clip(shape)
-            .background(
-                when {
-                    knowledgeMode -> androidx.compose.ui.graphics.lerp(Color.White, green, .05f)
-                    !supported -> Color(0xFFF6F7F6)
-                    kind == MapAddKind.NOTE -> androidx.compose.ui.graphics.lerp(Color.White, green, .08f)
-                    kind == MapAddKind.TODO -> androidx.compose.ui.graphics.lerp(Color.White, green, .04f)
-                    else -> Color.White
-                }
-            )
-            .border(1.dp, if (isPrimary) androidx.compose.ui.graphics.lerp(Color.White, green, .25f) else line, shape)
+            .background(background)
+            .border(1.dp, border, shape)
             // An unsupported kind is not clickable at all, so there is no path from this button
             // to a success message for something that was never stored.
             .then(
-                if (supported) Modifier.clickable(role = Role.Button) { onChoose(kind) }
+                if (supported) Modifier.clickable(interactionSource = interactionSource,
+                    indication = LocalIndication.current, role = Role.Button) { onChoose(kind) }
                 else Modifier.semantics {
                     disabled()
                     contentDescription = kind.label + ", not available yet"
@@ -239,7 +258,7 @@ private fun AddChoice(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        Surface(color = if (knowledgeMode) androidx.compose.ui.graphics.lerp(Color.White, green, .12f) else Color.Transparent,
+        Surface(color = Color.Transparent,
             shape = RoundedCornerShape(8.dp)) { Icon(
             iconFor(kind), contentDescription = null,
             tint = if (supported) green else Color(0xFFA9B4AE), modifier = Modifier.padding(if (knowledgeMode) 6.dp else 0.dp).size(22.dp)
@@ -247,7 +266,7 @@ private fun AddChoice(
         Column(Modifier.weight(1f, fill = false)) {
             Text(
                 kind.label, color = if (supported) ink else Color(0xFF8A958F), fontSize = 14.sp,
-                fontWeight = if (isPrimary) FontWeight.SemiBold else FontWeight.Medium,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             if (!supported) Text(

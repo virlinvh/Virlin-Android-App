@@ -63,7 +63,9 @@ data class PriorityPreferenceEntity(
     val scopeType: String,
     val createdAt: Instant,
     /** Set only for UNTIL. */
-    val expiresAt: Instant?
+    val expiresAt: Instant?,
+    /** Remaining future Needs You entries for NEXT_RETURNS policies. */
+    val remainingReturns: Int? = null
 )
 
 @Entity(
@@ -159,7 +161,8 @@ data class TaskEntity(
     @ColumnInfo(defaultValue = "0") val executionCycleCount: Int = 0,
     val executionActorId: String? = null,
     val executionTool: String? = null,
-    val executionInstruction: String? = null
+    val executionInstruction: String? = null,
+    val executionAttentionRank: Int? = null
 )
 
 /**

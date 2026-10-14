@@ -12,10 +12,10 @@ import java.time.Instant
 enum class NoteDocBlockType {
     PARAGRAPH, HEADING_1, HEADING_2, HEADING_3,
     BULLET, NUMBERED, CHECKLIST,
-    QUOTE, CODE, PROMPT, DIVIDER, TABLE;
+    QUOTE, CODE, PROMPT, DIVIDER, TABLE, IMAGE, TOGGLE;
 
-    /** Divider and table hold no editable inline text of their own. */
-    val isTextual: Boolean get() = this != DIVIDER && this != TABLE
+    /** Non-text blocks hold no editable inline text of their own. */
+    val isTextual: Boolean get() = this != DIVIDER && this != TABLE && this != IMAGE
 }
 
 enum class NoteDocAlign { LEFT, CENTER, RIGHT }
@@ -78,7 +78,23 @@ data class NoteDocBlock(
     /** PROMPT only: the callout's user-authored heading. Never AI generated. */
     val promptTitle: String? = null,
     val table: NoteDocTable? = null,
+    /** IMAGE only: app-managed file name, never a temporary picker URI. */
+    val imagePath: String? = null,
+    /** TOGGLE only: hides all following blocks with a deeper indent. */
+    val isCollapsed: Boolean = false,
 )
+
+/** Visible document order, shared by the editor and preview. Descendants remain stored intact. */
+fun visibleNoteBlocks(blocks: List<NoteDocBlock>): List<NoteDocBlock> {
+    val visible = ArrayList<NoteDocBlock>(blocks.size)
+    val hiddenAt = ArrayDeque<Int>()
+    blocks.forEach { block ->
+        while (hiddenAt.isNotEmpty() && block.indent <= hiddenAt.last()) hiddenAt.removeLast()
+        if (hiddenAt.isEmpty()) visible += block
+        if (block.type == NoteDocBlockType.TOGGLE && block.isCollapsed) hiddenAt.addLast(block.indent)
+    }
+    return visible
+}
 
 /**
  * One note. [ownerKey] is an opaque key the feature is filed under; the Notes page does not

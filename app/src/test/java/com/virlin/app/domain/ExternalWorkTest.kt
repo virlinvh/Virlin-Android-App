@@ -172,12 +172,13 @@ class ExternalWorkTest {
 
         assertEquals(1, working(repo).size)                                      // 21: before checkAt
         clock.advance(Duration.ofMinutes(5))
-        assertEquals(1, working(repo).size) // A due check does not stop external tracking.
+        assertEquals(1, working(repo).size) // The persisted state changes when the scheduler delivers the check.
         actions.checkDue("ws1")                                                  // the scheduler's transition
         val s = repo.getStream("ws1")!!
         assertEquals(WorkStreamState.CHECK, s.state)                             // 23: Needs You
         assertTrue(working(repo).isEmpty()) // Attention and background sections are exclusive.
-        assertEquals(t0, s.processingStartedAt) // Hiding the card must not stop the run.
+        assertNull(s.processingStartedAt) // Review waiting must not extend the external run.
+        assertEquals(300L, s.externalTrackedSeconds)
         assertEquals("ws1", s.id)                                                // 24: same stable identity
         assertEquals(item.id, s.activeTaskId)
         assertEquals("claude_code", s.externalActorId)
@@ -189,7 +190,29 @@ class ExternalWorkTest {
         actions.continueProcessing("ws1", clock.now().plusSeconds(300))
         assertEquals(listOf("ws1"), working(repo).map { it.id })
         assertTrue(NeedsYouOrder.queue(repo.streams.value).isEmpty())
-        assertEquals(s.processingStartedAt, repo.getStream("ws1")!!.processingStartedAt)
+        assertEquals(clock.now(), repo.getStream("ws1")!!.processingStartedAt)
+    }
+
+    @Test fun lateCheckFreezesAtDeadlineAndNextRunExcludesReviewWait() = runBlocking {
+        val (repo, actions) = harness(stream("ws1"))
+        actions.delegate("ws1", minutes = 5)
+        val due = repo.getStream("ws1")!!.checkAt!!
+        clock.current = due.plus(Duration.ofHours(6))
+        // Even before alarm reconciliation, the display must never count overdue review as work.
+        assertEquals(300L, com.virlin.app.domain.model.ExternalTiming.seconds(repo.getStream("ws1")!!, clock.now()))
+        actions.checkDue("ws1")
+        val waiting = repo.getStream("ws1")!!
+        assertEquals(WorkStreamState.CHECK, waiting.state)
+        assertNull(waiting.processingStartedAt)
+        assertEquals(300L, waiting.externalTrackedSeconds)
+        clock.advance(Duration.ofMinutes(20))
+        assertEquals(300L, com.virlin.app.domain.model.ExternalTiming.seconds(waiting, clock.now()))
+        val resumedAt = clock.now()
+        actions.markExternalStillRunning("ws1", resumedAt.plusSeconds(120))
+        assertEquals(resumedAt, repo.getStream("ws1")!!.processingStartedAt)
+        clock.advance(Duration.ofSeconds(120))
+        actions.checkDue("ws1")
+        assertEquals(420L, repo.getStream("ws1")!!.externalTrackedSeconds)
     }
 
     // ------------------------------------------------------------------ 29-39 check outcomes

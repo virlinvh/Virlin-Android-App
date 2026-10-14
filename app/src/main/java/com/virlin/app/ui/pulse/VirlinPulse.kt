@@ -37,7 +37,7 @@ import kotlin.math.roundToInt
 
 /** UI + pure analytics. The app's repository supplies intervals and task metadata. */
 enum class PulseKind { FOCUS, EXTERNAL, BLOCKED }
-enum class PulsePeriod { TODAY, WEEK, MONTH }
+enum class PulsePeriod { TODAY, WEEK, MONTH, ALL }
 
 data class PulseInterval(
     val id: String,
@@ -60,8 +60,10 @@ data class PulseInput(
     val intervals: List<PulseInterval>,
     val projects: List<PulseProject>,
     val workstreams: List<PulseWorkstream>,
-    val tasks: List<PulseTask>
+    val tasks: List<PulseTask>,
+    val captures: List<PulseCapture> = emptyList()
 )
+data class PulseCapture(val id: String, val createdAt: Instant, val projectId: String? = null)
 
 data class PulseBucket(val label: String, val focusMs: Long, val externalMs: Long, val overlapMs: Long)
 data class PulseTaskTotal(val task: PulseTask, val focusMs: Long)
@@ -94,11 +96,13 @@ fun pulseWindow(period: PulsePeriod, date: LocalDate, zone: ZoneId): Pair<Instan
         PulsePeriod.TODAY -> date
         PulsePeriod.WEEK -> date.with(java.time.DayOfWeek.MONDAY)
         PulsePeriod.MONTH -> date.withDayOfMonth(1)
+        PulsePeriod.ALL -> LocalDate.of(1970, 1, 1)
     }
     val endDate = when (period) {
         PulsePeriod.TODAY -> startDate.plusDays(1)
         PulsePeriod.WEEK -> startDate.plusWeeks(1)
         PulsePeriod.MONTH -> startDate.plusMonths(1)
+        PulsePeriod.ALL -> date.plusDays(1)
     }
     return startDate.atStartOfDay(zone).toInstant() to endDate.atStartOfDay(zone).toInstant()
 }
@@ -150,6 +154,30 @@ fun calculatePulse(
                 val a = first.plusDays(n * 7L)
                 if (a.month != first.month) null else Triple("${a.dayOfMonth}",
                     a.atStartOfDay(zone).toInstant(), minOf(a.plusDays(7), first.plusMonths(1)).atStartOfDay(zone).toInstant())
+            }
+        }
+        PulsePeriod.ALL -> {
+            val earliest = (live.map { it.start } + input.tasks.mapNotNull { it.completedAt } +
+                input.captures.map { it.createdAt }).minOrNull()?.coerceAtLeast(from) ?: horizon
+            val span = (horizon.toEpochMilli() - earliest.toEpochMilli()).coerceAtLeast(1L)
+            val firstDay = earliest.atZone(zone).toLocalDate()
+            val elapsedDays = java.time.temporal.ChronoUnit.DAYS.between(
+                firstDay, horizon.atZone(zone).toLocalDate()) + 1
+            if (elapsedDays <= 6) {
+                (0 until elapsedDays.toInt()).map { n ->
+                    val day = firstDay.plusDays(n.toLong())
+                    Triple(day.dayOfMonth.toString(), day.atStartOfDay(zone).toInstant(),
+                        day.plusDays(1).atStartOfDay(zone).toInstant())
+                }
+            } else (0..5).map { n ->
+                val a = Instant.ofEpochMilli(earliest.toEpochMilli() + span * n / 6)
+                val b = if (n == 5) to else Instant.ofEpochMilli(earliest.toEpochMilli() + span * (n + 1) / 6)
+                val pattern = when {
+                    span < 60L * 24 * 60 * 60 * 1000 -> "d/M"
+                    span < 2L * 365 * 24 * 60 * 60 * 1000 -> "MMM"
+                    else -> "yy"
+                }
+                Triple(a.atZone(zone).format(DateTimeFormatter.ofPattern(pattern)), a, b)
             }
         }
     }
@@ -232,60 +260,20 @@ private fun Long.asDuration(): String {
 @Composable
 fun VirlinPulseScreen(
     input: PulseInput,
-    onProject: (String) -> Unit,
+    onProject: (String, PulsePeriod, LocalDate) -> Unit,
     onInfoSaved: () -> Unit,
     modifier: Modifier = Modifier,
     zone: ZoneId = ZoneId.systemDefault(),
     today: LocalDate = LocalDate.now(zone)
 ) {
-    var selected by rememberSaveable { mutableStateOf(PulsePeriod.WEEK) }
-    var anchor by rememberSaveable { mutableStateOf(today.toString()) }
-    val date = remember(anchor) { LocalDate.parse(anchor) }
-    val report = remember(input, selected, date, zone) { calculatePulse(input, selected, date, zone) }
-    LazyColumn(modifier.fillMaxSize().background(bg), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { Text("Pulse", color = ink, fontSize = 34.sp, fontWeight = FontWeight.Bold) }
-        item { PeriodPicker(selected, onSelect = { selected = it }) }
-        item { DateStepper(report, zone, onPrev = { anchor = shift(date, selected, -1).toString() },
-            onNext = { anchor = shift(date, selected, 1).toString() }) }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MetricCard("Useful Focus", report.focusMs.asDuration(), Modifier.weight(1f))
-                MetricCard("External", report.externalMs.asDuration(), Modifier.weight(1f))
-                MetricCard("Estimated time saved", report.savedMs.asDuration(), Modifier.weight(1f))
-            }
-        }
-        item {
-            AllocationChart(
-                report.buckets,
-                when (selected) {
-                    PulsePeriod.TODAY -> "Where today went"
-                    PulsePeriod.WEEK -> "Where your week went"
-                    PulsePeriod.MONTH -> "Where your month went"
-                }
-            )
-        }
-        item { ProjectTreemap(report.projectTotals, onProject) }
-        item { SessionMetrics(report.sessionDurationsMs) }
-        if (report.concurrentFocusMs > 0L) item {
-            Text(
-                "${report.concurrentFocusMs.asDuration()} of this period has more than one focus " +
-                    "record. Virlin counts it once; the overlap is a recording fault, not extra time.",
-                color = muted, fontSize = 12.sp
-            )
-        }
-        item {
-            TextButton(onClick = onInfoSaved) {
-                Text("How is saved time calculated?", color = focusGreen)
-            }
-        }
-    }
+    MomentumScreen(input, onProject, onInfoSaved, modifier, zone, today)
 }
 
 private fun shift(date: LocalDate, period: PulsePeriod, amount: Long): LocalDate = when (period) {
     PulsePeriod.TODAY -> date.plusDays(amount)
     PulsePeriod.WEEK -> date.plusWeeks(amount)
     PulsePeriod.MONTH -> date.plusMonths(amount)
+    PulsePeriod.ALL -> date
 }
 
 @Composable
@@ -501,7 +489,7 @@ fun VirlinPulseProjectScreen(input: PulseInput, report: PulseReport, projectId: 
                         Modifier.padding(top = 12.dp), color = muted, fontSize = 13.sp)
                 }
             }
-            item { ProjectHourlyGraph(input, report, projectId, zone) }
+            if (report.period != PulsePeriod.ALL) item { ProjectHourlyGraph(input, report, projectId, zone) }
             if (p.blockedMs > 0) item { Text("Recorded blocked time · ${p.blockedMs.asDuration()}", color = muted, fontSize = 13.sp) }
         }
     }

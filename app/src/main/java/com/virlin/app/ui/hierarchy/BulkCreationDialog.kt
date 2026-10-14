@@ -20,6 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
@@ -36,6 +37,7 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
     onDismiss: () -> Unit, onSingle: (String) -> Unit,
     taskDestination: CreateTask? = null, startBulk: Boolean = false, embedded: Boolean = false,
     onBusyChanged: (Boolean) -> Unit = {}) {
+    HideProjectOrb()
     var bulk by rememberSaveable { mutableStateOf(startBulk) }
     var input by rememberSaveable { mutableStateOf("") }
     var name by rememberSaveable { mutableStateOf("") }
@@ -60,8 +62,8 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
     // Secondary ink and a main-color wash keep the smaller controls readable.
     val actionColor = if (projectId != null && palette != null) Color(palette.main) else accent
     val actionInk = readableOn(actionColor)
-    val ink = Color(0xFF263247)
-    val muted = Color(0xFF647089)
+    val ink = palette?.let { Color(it.text) } ?: Color(0xFF263247)
+    val muted = palette?.let { Color(it.muted) } ?: Color(0xFF647089)
     val line = Color(0xFFE0E4EB)
     val fieldColors = OutlinedTextFieldDefaults.colors(focusedBorderColor = accent,
         unfocusedBorderColor = if (embedded) Color.Transparent else line, focusedTextColor = ink, unfocusedTextColor = ink,
@@ -69,9 +71,11 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
         unfocusedContainerColor = if (embedded) Color(0xFFF3F4F5) else Color.White)
     val dialogScheme = remember(accent, wash) { lightColorScheme(primary = accent,
         surface = Color.White, onSurface = ink, onSurfaceVariant = muted,
-        primaryContainer = wash, onPrimary = Color.White) }
+        primaryContainer = wash, onPrimary = readableOn(accent)) }
     val content: @Composable () -> Unit = {
-            Surface(shape = RoundedCornerShape(24.dp), color = Color.White) {
+            Surface(modifier = if (embedded) Modifier else Modifier.fillMaxWidth().heightIn(max = 560.dp)
+                .testTag("bulk_creation_dialog"),
+                shape = RoundedCornerShape(24.dp), color = Color.White) {
                 Column(if (embedded) Modifier else Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (!embedded) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -103,6 +107,9 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
                         }
                     }
                     }
+                    // The form alone scrolls; actions stay attached to the card above the IME.
+                    Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
+                        .testTag("bulk_creation_form"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (!bulk) {
                         Text(placeholder, fontSize = 12.sp, color = muted)
                         OutlinedTextField(name, { name = it }, placeholder = { Text("Enter a name", fontSize = 14.sp) },
@@ -141,8 +148,10 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
                             else "Creates new items only. Existing items stay unchanged.", fontSize = 12.sp, color = muted)
                     }
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    }
                     HorizontalDivider(color = line)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Row(Modifier.fillMaxWidth().testTag("bulk_creation_actions"),
+                        horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                         TextButton(enabled = !busy, onClick = { if (preview != null) preview = null else onDismiss() }) { Text(if (preview != null) "Edit input" else "Cancel") }
                         Button(shape = if (embedded) RoundedCornerShape(50) else RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = actionColor, contentColor = actionInk),
@@ -167,7 +176,8 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
             }
     }
     MaterialTheme(colorScheme = dialogScheme) {
-        if (embedded) content() else com.virlin.app.ui.components.SafeDialog(onDismissRequest = { if (!busy) onDismiss() }) { content() }
+        if (embedded) content() else com.virlin.app.ui.components.SafeDialog(
+            onDismissRequest = { if (!busy) onDismiss() }, scrollContent = false) { content() }
         if (help) com.virlin.app.ui.components.SafeDialog(onDismissRequest = { help = false }) {
             Surface(shape = RoundedCornerShape(24.dp), color = Color.White) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

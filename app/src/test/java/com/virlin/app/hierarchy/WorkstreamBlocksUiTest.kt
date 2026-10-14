@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.unit.sp
 import com.virlin.app.ui.hierarchy.*
 import org.junit.Assert.*
 import org.junit.Rule
@@ -31,6 +32,18 @@ class WorkstreamBlocksUiTest {
             ProjectExperienceActions(actions,
                 KnowledgeActions({}, {}, { _, _, _ -> }, {}, {}, {}, {}, {}, { _, _ -> }, { _, _, _ -> }, onMoveMany = { _, _, _ -> }),
                 ActivityActions({}, {}, {}, {}, {})), projectIcon = {}) }
+    }
+
+    @Test fun projectAndWorkstreamTitlesUseCompactTypeSizes() {
+        show()
+        fun fontSize(text: String): androidx.compose.ui.unit.TextUnit {
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            compose.onNodeWithText(text).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            return layouts.single().layoutInput.style.fontSize
+        }
+        assertEquals(23.sp, fontSize("Project"))
+        assertEquals(18.sp, fontSize("Workstreams"))
+        assertEquals(14.sp, fontSize("Stream 0"))
     }
 
     @Test fun handlesAreOptInAndProjectScoped() {

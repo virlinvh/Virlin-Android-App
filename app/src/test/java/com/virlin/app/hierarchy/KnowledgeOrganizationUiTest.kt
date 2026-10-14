@@ -61,8 +61,8 @@ class KnowledgeOrganizationUiTest {
         val overlay = compose.onNodeWithTag("knowledge_overlay").fetchSemanticsNode().boundsInRoot
         val footer = compose.onNodeWithTag("test_footer").fetchSemanticsNode().boundsInRoot
         assertTrue(overlay.bottom <= footer.top)
-        compose.onAllNodesWithText("Move knowledge").assertCountEquals(2)
-        compose.onAllNodesWithText("Move knowledge").onLast().performClick()
+        compose.onAllNodesWithText("Move knowledge").assertCountEquals(1)
+        compose.onNodeWithText("Move").performClick()
         compose.runOnIdle { assertEquals(Triple("note", "w", "sub"), moved) }
     }
     @Test fun deleteRequiresConfirmationAndCancelDoesNothing() {

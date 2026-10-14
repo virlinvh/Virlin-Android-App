@@ -7,6 +7,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,6 +23,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
@@ -29,6 +33,7 @@ import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.domain.action.TaskPageActions
 import com.virlin.app.domain.capture.LinkDocumentCodec
 import com.virlin.app.domain.model.*
+import com.virlin.app.ui.hierarchy.rememberProjectPalette
 import kotlinx.coroutines.launch
 
 const val TaskPageRoute = "task_page/{taskId}"
@@ -45,9 +50,16 @@ data class TaskPageState(
     val task: Task? = null,
     val rows: List<TaskPageRow> = emptyList(),
     val destinations: List<Task> = emptyList(),
+    val branchSections: List<TaskPageSection> = emptyList(),
     val loading: Boolean = true,
     val message: String? = null,
 )
+
+data class TaskPageSection(val task: Task, val rows: List<TaskPageRow>)
+
+/** The root belongs to the branch; unrelated tasks, even in the same project, do not. */
+internal fun taskPageBranchIds(tasks: List<Task>, rootId: String): List<String> =
+    listOf(rootId) + TaskHierarchy.descendants(tasks, rootId).map { it.id }
 
 /** Label registry only. Row projection, icons, and open routing are separate guarded seams below. */
 object TaskPageBlockRegistry {
@@ -83,8 +95,10 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
         if (task == null) { state = TaskPageState(loading = false, message = "Task not found"); return }
         val blocks = repository.getTaskPageBlocks(taskId)
         val captures = repository.captures.value.associateBy { it.id }
-        val steps = repository.getTaskSteps(taskId)
-        val rows = blocks.map { block ->
+        suspend fun rowsFor(ownerId: String): List<TaskPageRow> {
+          val ownerBlocks = if (ownerId == taskId) blocks else repository.getTaskPageBlocks(ownerId)
+          val steps = repository.getTaskSteps(ownerId)
+          return ownerBlocks.map { block ->
             val capture = captures[block.contentId]
             when (block.typeKey) {
                 TaskPageTypeKeys.TODO -> TaskPageRow(block, "To-do", "Checklist",
@@ -103,9 +117,19 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
                     TaskPageRow(block, if (attachmentKind == AttachmentKind.PDF) "PDF" else label, title, preview, attachmentKind)
                 }
             }
+          }
+        }
+        val rows = rowsFor(taskId)
+        val scopeTasks = repository.tasks.value.filter {
+            it.projectId == task.projectId && it.workStreamId == task.workStreamId
+        }
+        val byId = scopeTasks.associateBy { it.id }
+        val branchSections = taskPageBranchIds(scopeTasks, taskId).mapNotNull { id ->
+            val owner = if (id == taskId) task else byId[id] ?: return@mapNotNull null
+            TaskPageSection(owner, if (id == taskId) rows else rowsFor(id))
         }
         val destinations = task.projectId?.let { repository.getTasksByProject(it) }.orEmpty().filter { it.id != task.id }
-        state = TaskPageState(task, rows, destinations, loading = false)
+        state = TaskPageState(task, rows, destinations, branchSections, loading = false)
     }
 
     fun moveBy(blockId: String, delta: Int) = viewModelScope.launch {
@@ -133,10 +157,21 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
 fun TaskPageScreen(taskId: String?, navController: NavController) {
     if (taskId == null) return
     val vm: TaskPageViewModel = viewModel(key = "task-page-$taskId", factory = TaskPageViewModel.factory(taskId))
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, vm) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) vm.refresh()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val s = vm.state
     var organize by remember { mutableStateOf(false) }
+    var acrossBranch by rememberSaveable(taskId) { mutableStateOf(false) }
     var transfer by remember { mutableStateOf<Pair<TaskPageRow, Boolean>?>(null) }
-    val green = Color(0xFF07865B); val ink = Color(0xFF17231E)
+    val palette = rememberProjectPalette(s.task?.projectId)
+    val green = palette?.let { Color(it.secondary) } ?: Color(0xFF07865B)
+    val ink = palette?.let { Color(it.text) } ?: Color(0xFF17231E)
     Scaffold(containerColor = Color(0xFFFCFBF8), topBar = {
         Row(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton({ navController.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
@@ -146,20 +181,57 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
     }) { padding ->
         when {
             s.loading -> Box(Modifier.fillMaxSize().padding(padding), Alignment.Center) { CircularProgressIndicator(color = green) }
-            s.rows.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding).padding(36.dp), Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.Description, null, tint = green, modifier = Modifier.size(44.dp)); Spacer(Modifier.height(14.dp)); Text("This Page is ready", fontWeight = FontWeight.Bold, fontSize = 20.sp); Text("Items added from this task's + menu will appear here.", color = Color.Gray) }
-            }
-            else -> LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                item { Text("Everything attached to this task", color = Color.Gray, fontSize = 14.sp); Spacer(Modifier.height(2.dp)) }
-                items(s.rows, key = { it.block.id }) { row ->
+            else -> Column(Modifier.fillMaxSize().padding(padding)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp)
+                    .background(Color(0xFFE7F4ED), RoundedCornerShape(16.dp)).padding(4.dp)) {
+                    listOf("Added here", "Across branch").forEachIndexed { index, title ->
+                        val selected = acrossBranch == (index == 1)
+                        Box(Modifier.weight(1f)
+                            .background(if (selected) Color.White else Color.Transparent, RoundedCornerShape(13.dp))
+                            .clickable { acrossBranch = index == 1 }.padding(vertical = 13.dp), Alignment.Center) {
+                            Text(title, color = if (selected) green else ink, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+                val sections = if (acrossBranch) s.branchSections else s.branchSections.filter { it.task.id == taskId }
+                if (sections.all { it.rows.isEmpty() } && (!acrossBranch || sections.size == 1)) Box(Modifier.fillMaxSize().padding(28.dp), Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Description, null, tint = green, modifier = Modifier.size(44.dp))
+                        Spacer(Modifier.height(14.dp))
+                        Text(if (acrossBranch) "Nothing across this branch yet" else "This Page is ready",
+                            fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                        Text(if (acrossBranch) "Items added to this task and its subtasks will appear here."
+                             else "Items added from this task's + menu will appear here.", color = Color.Gray)
+                    }
+                } else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                  sections.forEach { section ->
+                    item("heading-${section.task.id}") {
+                        Row(Modifier.fillMaxWidth().then(if (section.task.id == taskId) Modifier
+                            else Modifier.clickable { navController.navigate(taskPage(section.task.id)) }),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (section.task.id == taskId) "Added to ${section.task.title}"
+                                 else "Subtask · ${section.task.title}", color = green,
+                                 fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                                 modifier = Modifier.weight(1f))
+                            if (section.task.id != taskId) Icon(Icons.Default.ChevronRight,
+                                "Open ${section.task.title} page", tint = green)
+                        }
+                    }
+                    if (section.rows.isEmpty()) item("empty-${section.task.id}") {
+                        Text("Nothing added here yet", color = Color.Gray, fontSize = 13.sp)
+                    }
+                    items(section.rows, key = { it.block.id }) { row ->
                     Surface(shape = RoundedCornerShape(18.dp), color = Color.White, tonalElevation = 1.dp) {
                         Row(Modifier.fillMaxWidth().clickable { openBlock(navController, row, vm::notify) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(iconFor(row.block.typeKey), null, tint = green, modifier = Modifier.size(25.dp)); Spacer(Modifier.width(14.dp))
                             Column(Modifier.weight(1f)) { Text(row.label.uppercase(), color = green, fontSize = 11.sp, fontWeight = FontWeight.Bold); Text(row.title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1); Text(row.preview, color = Color.Gray, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                             if (!organize) IconButton({ openBlock(navController, row, vm::notify) }) { Icon(Icons.Default.Edit, "Edit ${row.label}", tint = Color.Gray) }
-                            else Column { Row { IconButton({ vm.moveBy(row.block.id, -1) }) { Icon(Icons.Default.KeyboardArrowUp, "Move up") }; IconButton({ vm.moveBy(row.block.id, 1) }) { Icon(Icons.Default.KeyboardArrowDown, "Move down") } }; Row { IconButton({ transfer = row to false }) { Icon(Icons.Default.DriveFileMove, "Move") }; IconButton({ transfer = row to true }, enabled = row.block.typeKey.startsWith("capture.")) { Icon(Icons.Default.ContentCopy, "Duplicate") } } }
+                            else if (row.block.taskId == taskId) Column { Row { IconButton({ vm.moveBy(row.block.id, -1) }) { Icon(Icons.Default.KeyboardArrowUp, "Move up") }; IconButton({ vm.moveBy(row.block.id, 1) }) { Icon(Icons.Default.KeyboardArrowDown, "Move down") } }; Row { IconButton({ transfer = row to false }) { Icon(Icons.Default.DriveFileMove, "Move") }; IconButton({ transfer = row to true }, enabled = row.block.typeKey.startsWith("capture.")) { Icon(Icons.Default.ContentCopy, "Duplicate") } } }
                         }
                     }
+                    }
+                  }
                 }
             }
         }

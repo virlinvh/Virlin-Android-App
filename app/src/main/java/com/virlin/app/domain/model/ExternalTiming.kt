@@ -11,8 +11,14 @@ object ExternalTiming {
     fun seconds(stream: WorkStream, now: Instant): Long = seconds(TaskExecution.of(stream), now)
     fun seconds(execution: TaskExecution?, now: Instant): Long {
         if (execution == null) return 0
-        val live = execution.processingStartedAt?.takeUnless { execution.externalTrackingPaused }
-            ?.let { Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0
+        // A due check is a hand-off to human review, not more external work. Cap even a stale
+        // PROCESSING row while the alarm/reconciliation is pending. Legacy CHECK rows that still
+        // carry a start timestamp can recover the bounded segment without ticking past checkAt.
+        val live = execution.processingStartedAt?.takeIf {
+            (execution.state == WorkStreamState.PROCESSING ||
+                (execution.state == WorkStreamState.CHECK && execution.checkAt != null)) &&
+                !execution.externalTrackingPaused
+        }?.let { Duration.between(it, minOf(now, execution.checkAt ?: now)).seconds.coerceAtLeast(0) } ?: 0
         return execution.externalTrackedSeconds.coerceAtLeast(0) + live
     }
     fun hasTime(execution: TaskExecution?): Boolean = execution != null &&

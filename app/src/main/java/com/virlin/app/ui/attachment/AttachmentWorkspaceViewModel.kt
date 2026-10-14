@@ -37,6 +37,7 @@ data class AttachmentImportFailure(val displayName: String, val reason: String)
 data class AttachmentWorkspaceState(
     val taskId: String = "",
     val taskTitle: String = "",
+    val ownerProjectId: String? = null,
     val loading: Boolean = true,
     val importing: Boolean = false,
     val importedCount: Int = 0,
@@ -82,6 +83,7 @@ class AttachmentWorkspaceViewModel(
             }
             _state.value = _state.value.copy(
                 taskTitle = (task?.title ?: projectId?.let { repository.getProject(it)?.title }).orEmpty(),
+                ownerProjectId = task?.projectId ?: projectId,
                 rows = rows,
                 loading = false,
             )

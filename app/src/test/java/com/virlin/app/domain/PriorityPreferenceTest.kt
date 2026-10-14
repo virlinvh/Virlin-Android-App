@@ -126,6 +126,20 @@ class PriorityPreferenceTest {
         assertEquals(3, NeedsYouOrder.effectiveRank(repo.streams.value, "E"))
     }
 
+    @Test fun nextReturnsIsConsumedOnlyWhenTheSameItemReentersNeedsYou() = runBlocking {
+        val (repo, actions, prefs) = harness(abcde())
+        actions.setNeedsYouPriority("E", 2, PriorityScope.NextReturns(2))
+        assertEquals(PriorityScope.NextReturns(2), prefs.get("E")!!.scope)
+        actions.continueProcessing("E", t0.plusSeconds(3600)); actions.checkDue("E")
+        assertEquals(2, NeedsYouOrder.effectiveRank(repo.streams.value, "E"))
+        assertEquals(PriorityScope.NextReturns(1), prefs.get("E")!!.scope)
+        actions.continueProcessing("E", t0.plusSeconds(3600)); actions.checkDue("E")
+        assertEquals(2, NeedsYouOrder.effectiveRank(repo.streams.value, "E"))
+        assertNull(prefs.get("E"))
+        actions.continueProcessing("E", t0.plusSeconds(3600)); actions.checkDue("E")
+        assertEquals(5, NeedsYouOrder.effectiveRank(repo.streams.value, "E"))
+    }
+
     @Test fun test9_custom_unexpired_applies() = runBlocking {
         val (repo, actions, _) = harness(abcde())
         actions.setNeedsYouPriority("E", 2, PriorityScope.Until(t0.plus(Duration.ofHours(24))))

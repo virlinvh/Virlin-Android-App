@@ -125,11 +125,16 @@ class RoomWorkStreamRepository private constructor(
     override suspend fun getOpenFocusSession(streamId: String) = db.focusSessions().open(streamId)?.toDomain()
     override suspend fun getCurrentCycle(streamId: String) = db.cycles().current(streamId)?.toDomain()
     override suspend fun getLatestSnapshot(streamId: String) = db.snapshots().latest(streamId)?.toDomain()
+    override suspend fun getSnapshots(streamId: String) = db.snapshots().byWorkStream(streamId).map { it.toDomain() }
     override suspend fun getEvents(streamId: String) = db.events().byWorkStream(streamId).map { it.toDomain() }
     override suspend fun getEventsForStreams(streamIds: List<String>, limit: Int, offset: Int) =
         if (streamIds.isEmpty()) emptyList()
         else db.events().byWorkStreams(streamIds, limit, offset).map { it.toDomain() }
     override suspend fun allFocusSessions() = db.focusSessions().all().map { it.toDomain() }
+    override suspend fun externalRunIntervals() = db.externalRuns().all().map {
+        com.virlin.app.domain.model.ExternalRunInterval(it.ownerId, it.taskId,
+            java.time.Instant.ofEpochMilli(it.startedAt), java.time.Instant.ofEpochMilli(it.endedAt))
+    }
     override suspend fun allCycles() = db.cycles().all().map { it.toDomain() }
     override suspend fun getFocusSessions(streamId: String) = db.focusSessions().byWorkStream(streamId).map { it.toDomain() }
     override suspend fun getCycles(streamId: String) = db.cycles().byWorkStream(streamId).map { it.toDomain() }
@@ -209,6 +214,8 @@ class RoomWorkStreamRepository private constructor(
             val tags = if (report.kind == "project") db.projectTags().byProject(projectId) else emptyList()
             tags.forEach { db.tagLinks().deleteByTag(it.id); db.projectTags().delete(it.id) }
             report.ownerIds.forEach { id ->
+                delete("external_run_intervals", "ownerId", id)
+                delete("external_run_intervals", "taskId", id)
                 delete("tag_links", "targetId", id)
                 delete("priority_preferences", "streamId", id)
                 delete("map_node_previews", "ownerKey", id)
@@ -346,8 +353,23 @@ class RoomWorkStreamRepository private constructor(
         override suspend fun allStreams() = db.workStreams().all().map { it.toDomain() }
 
         override suspend fun saveProject(project: Project) { db.projects().upsert(project.toEntity()); touchedProjects = true }
-        override suspend fun saveTask(task: Task) { db.tasks().upsert(task.toEntity()); touchedTasks = true }
-        override suspend fun saveStream(stream: WorkStream) { db.workStreams().upsert(stream.toEntity()); touchedStreams = true }
+        private suspend fun recordRun(id: String, taskId: String?, old: com.virlin.app.domain.model.TaskExecution?, next: com.virlin.app.domain.model.TaskExecution?, end: java.time.Instant) {
+            val start = old?.processingStartedAt?.takeUnless { old.externalTrackingPaused } ?: return
+            val nextStart = next?.processingStartedAt?.takeUnless { next.externalTrackingPaused }
+            val stoppedAt = minOf(end, old.checkAt ?: end)
+            if (nextStart != start && stoppedAt > start) db.externalRuns().insert(
+                ExternalRunEntity("$id:${start.toEpochMilli()}", id, taskId, start.toEpochMilli(), stoppedAt.toEpochMilli()))
+        }
+        override suspend fun saveTask(task: Task) {
+            recordRun(task.id, task.id, getTask(task.id)?.execution, task.execution, task.updatedAt)
+            db.tasks().upsert(task.toEntity()); touchedTasks = true
+        }
+        override suspend fun saveStream(stream: WorkStream) {
+            val old = getStream(stream.id)
+            recordRun(stream.id, old?.activeTaskId, old?.let { com.virlin.app.domain.model.TaskExecution.of(it) },
+                com.virlin.app.domain.model.TaskExecution.of(stream), stream.updatedAt)
+            db.workStreams().upsert(stream.toEntity()); touchedStreams = true
+        }
         override suspend fun saveCycle(cycle: Cycle) {
             val seq = db.cycles().byId(cycle.id)?.seq ?: (db.cycles().maxSeq() + 1)
             db.cycles().upsert(cycle.toEntity(seq))

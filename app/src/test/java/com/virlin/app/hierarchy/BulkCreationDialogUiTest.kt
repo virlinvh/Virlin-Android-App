@@ -14,6 +14,19 @@ import org.robolectric.annotation.GraphicsMode
 @org.robolectric.annotation.Config(sdk = [28], qualifiers = "w411dp-h891dp")
 class BulkCreationDialogUiTest {
     @get:Rule val compose = createComposeRule()
+    @Test
+    @org.robolectric.annotation.Config(qualifiers = "w360dp-h300dp")
+    fun workstreamBulkKeepsActionsVisibleInKeyboardSizedViewport() {
+        compose.setContent { MaterialTheme {
+            BulkCreationDialog("New workstream in Base", "Workstream name", "base", {}, {}, startBulk = true)
+        } }
+        compose.onNode(hasSetTextAction()).performScrollTo()
+            .performTextInput("""{"version":2,"items":[{"name":"First"}]}""")
+        compose.onNodeWithText("Cancel").assertIsDisplayed()
+        compose.onNodeWithText("Preview").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Edit input").assertIsDisplayed()
+        compose.onNodeWithText("Add 1 items").assertIsDisplayed()
+    }
     @Test fun workstreamPreviewShowsNestedTasksAndSubtasks() {
         compose.setContent { MaterialTheme {
             BulkCreationDialog("New WorkStream in Base", "Workstream name", "base", {}, {}, startBulk = true)

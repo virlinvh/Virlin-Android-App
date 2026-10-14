@@ -40,6 +40,20 @@ class TaskExecutionFoundationTest {
     private fun repo(tasks: List<Task>) = InMemoryWorkStreamRepository(
         listOf(WorkStream("s", "Stream", state = WorkStreamState.READY, createdAt = now, updatedAt = now)), seedTasks = tasks, taskExecutionEnabled = true)
 
+    @Test fun taskNeedsYouRankPersistsAndReordersImmediately() = runTest {
+        val due = now.plusSeconds(300)
+        val repo = repo(listOf(
+            task("a", ExecutionPreference.EXTERNAL).copy(execution = TaskExecution(state = WorkStreamState.CHECK, checkAt = due)),
+            task("b", ExecutionPreference.EXTERNAL).copy(execution = TaskExecution(state = WorkStreamState.CHECK, checkAt = due.plusSeconds(1))),
+        ))
+        val actions = DefaultVirlinActions(repo, FakeClock(due), SequentialIdProvider())
+        assertEquals(listOf("a", "b"), com.virlin.app.domain.attention.NeedsYouOrder.queue(executionItems(repo.streams.value, repo.tasks.value)).map { it.stream.id })
+        assertTrue(actions.reorderNeedsYou("b", 1) is ActionResult.Success)
+        assertEquals(1, repo.getTask("b")!!.execution!!.attentionRank)
+        assertEquals(2, repo.getTask("a")!!.execution!!.attentionRank)
+        assertEquals(listOf("b", "a"), com.virlin.app.domain.attention.NeedsYouOrder.queue(executionItems(repo.streams.value, repo.tasks.value)).map { it.stream.id })
+    }
+
     @Test fun oneFocusAndTwoExternalRuns_coexistAndCompleteIndependently() = runTest {
         val repo = repo(listOf(task("human"), task("e1", ExecutionPreference.EXTERNAL), task("e2", ExecutionPreference.EXTERNAL)))
         val actions = DefaultVirlinActions(repo, FakeClock(now), SequentialIdProvider())
@@ -75,6 +89,22 @@ class TaskExecutionFoundationTest {
         assertTrue(actions.markExternalResultReady("e") is ActionResult.Success)
         assertNull(repo.getTask("e")!!.execution!!.processingStartedAt)
         assertTrue(actions.setTaskExecutionPreference("e", ExecutionPreference.HUMAN) is ActionResult.Success)
+    }
+
+    @Test fun taskCheckStopsItsOwnExternalClockAtDueTime() = runTest {
+        val repository = repo(listOf(task("e", ExecutionPreference.EXTERNAL)))
+        val clock = FakeClock(now)
+        val actions = DefaultVirlinActions(repository, clock, SequentialIdProvider())
+        assertTrue(actions.startExternalWork(StartExternalWork("s", workItemId = "e", checkInMinutes = 5)) is ActionResult.Success)
+        clock.current = now.plusSeconds(900)
+        assertEquals(300L, ExternalTiming.seconds(repository.getTask("e")!!.execution, clock.now()))
+        assertTrue(actions.checkDue("e") is ActionResult.Success)
+        val execution = repository.getTask("e")!!.execution!!
+        assertEquals(WorkStreamState.CHECK, execution.state)
+        assertNull(execution.processingStartedAt)
+        assertEquals(300L, execution.externalTrackedSeconds)
+        clock.current = now.plusSeconds(3600)
+        assertEquals(300L, ExternalTiming.seconds(repository.getTask("e")!!.execution, clock.now()))
     }
 
     @Test fun mixedDescendants_changeInheritedModeWithoutTouchingExplicitExternal() = runTest {

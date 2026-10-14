@@ -29,6 +29,8 @@ class ProjectTimerSettingsUiTest {
                 onDismiss = {}, onRename = {}, onEditIcon = {}, onExecutionDefault = {},
                 onRestoreTask = {}, onCompleteProject = {})
         }
+        compose.onNodeWithText("Save changes").assertDoesNotExist()
+        compose.onNodeWithText("Cancel").assertDoesNotExist()
         compose.onNodeWithText("Timers & display").performScrollTo().performClick()
         compose.onNodeWithText("5 s").performClick()
         compose.onNodeWithText("5 s · selected").assertExists()

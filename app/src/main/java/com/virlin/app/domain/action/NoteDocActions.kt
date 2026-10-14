@@ -74,7 +74,8 @@ internal class NoteDocActions(
             if (previous == null) {
                 val projectId = CaptureNoteBridge.draftProject(ownerKey) ?: return@tx ActionResult.Rejected(DomainError.CaptureNotFound(captureId))
                 when (val created = captureActions.createCaptureIn(this, CreateCapture(CaptureType.NOTE,
-                    content = preview, title = title, context = CaptureContext(projectId = projectId), id = captureId))) {
+                    content = preview, title = title, context = CaptureContext(projectId = projectId,
+                        workStreamId = CaptureNoteBridge.draftWorkstream(ownerKey)), id = captureId))) {
                     is ActionResult.Success -> Unit
                     is ActionResult.Rejected -> return@tx ActionResult.Rejected(created.reason)
                     is ActionResult.NotFound -> return@tx created

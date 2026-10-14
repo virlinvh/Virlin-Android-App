@@ -1,5 +1,8 @@
 package com.virlin.app.ui.hierarchy
 
+import android.graphics.BitmapFactory
+import com.virlin.app.data.attachment.AttachmentFileStore
+
 // Supplied drop-in Knowledge library (two-column gallery for every type, multi-select, bulk
 // move). Adapted where the app already owns what is drawn:
 //  - items carry the managed-storage path of their media, so thumbnails come from the app's
@@ -20,6 +23,11 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
+import androidx.compose.foundation.lazy.staggeredgrid.items as staggeredItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -36,6 +44,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +64,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** One saved source item. Its placement may change; Activity retains its original timestamp. */
 enum class KnowledgeType { PROMPT, IMAGE, AUDIO, DOCUMENT, STEPS, CHECKLIST, TASK }
@@ -151,7 +162,7 @@ object KnowledgeOrbVisibility {
     internal fun enter(owner: Any) { owners.add(owner) }
     internal fun leave(owner: Any) { owners.remove(owner) }
 }
-private const val PROJECT_WIDE_FILTER = "__project_wide__"
+internal const val PROJECT_WIDE_FILTER = "__project_wide__"
 private val dateFormatter = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
 private fun KnowledgeItem.date(zone: ZoneId): String = Instant.ofEpochMilli(updatedAtMillis)
     .atZone(zone).format(dateFormatter)
@@ -190,10 +201,13 @@ private fun knowledgeIcon(item: KnowledgeItem) = when {
  * Provide the application's real image loader as [imagePreview]. The caller must render the
  * supplied asset ID as an actual cropped thumbnail, with loading/error states.
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun VirlinProjectKnowledgeLibrary(
     projectId: String,
     items: List<KnowledgeItem>,
+    fixedScope: String? = null,
+    pageTitle: String? = null,
     projectTasks: List<KnowledgeProjectTask> = emptyList(),
     tags: List<KnowledgeTag> = emptyList(),
     workstreams: List<KnowledgeWorkstream>,
@@ -211,7 +225,7 @@ fun VirlinProjectKnowledgeLibrary(
     // type, grouping, workstream, search, selection and scroll position.
     var typeName by rememberSaveable(projectId) { mutableStateOf("") }
     var groupName by rememberSaveable(projectId) { mutableStateOf("") }
-    var workstream by rememberSaveable(projectId) { mutableStateOf<String?>(null) }
+    var workstream by rememberSaveable(projectId, fixedScope) { mutableStateOf(fixedScope) }
     var query by rememberSaveable(projectId) { mutableStateOf("") }
     var tagCsv by rememberSaveable(projectId) { mutableStateOf("") }
     var tagMatchName by rememberSaveable(projectId) { mutableStateOf(TagMatch.ALL.name) }
@@ -220,7 +234,7 @@ fun VirlinProjectKnowledgeLibrary(
     val tagMatch = TagMatch.entries.firstOrNull { it.name == tagMatchName } ?: TagMatch.ALL
     val type = KnowledgeType.entries.firstOrNull { it.name == typeName }
     val group = KnowledgeGroup.entries.firstOrNull { it.name == groupName } ?: KnowledgeGroup.TYPE
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val listState = rememberLazyStaggeredGridState()
     var groupMenu by remember { mutableStateOf(false) }
     var grid by rememberSaveable(projectId) { mutableStateOf(true) }
     var recentFirst by rememberSaveable(projectId) { mutableStateOf(true) }
@@ -249,7 +263,8 @@ fun VirlinProjectKnowledgeLibrary(
                 else -> type == null || item.type == type
             } }
             .filter { workstream == null || if (workstream == PROJECT_WIDE_FILTER)
-                it.workstreamId == null && it.taskId == null else it.workstreamId == workstream }
+                it.workstreamId == null && it.taskId == null else
+                it.workstreamId == workstream && (fixedScope == null || it.taskId == null) }
             // Tags compose with type, workstream and text: each narrows what the others left.
             .filter { item ->
                 chosenTags.isEmpty() || when (tagMatch) {
@@ -282,15 +297,19 @@ fun VirlinProjectKnowledgeLibrary(
         onDispose { KnowledgeOrbVisibility.leave(owner) }
     }
     Box(modifier.fillMaxSize()) {
-    LazyColumn(Modifier.fillMaxSize().background(LocalProjectPalette.current?.let { Color(it.surface) } ?: Color.White)
-        .testTag(KnowledgeListTag), state = listState, contentPadding = PaddingValues(bottom = 16.dp)) {
-        item(key = "knowledge-controls") { Column {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp),
+    LazyVerticalStaggeredGrid(columns = StaggeredGridCells.Fixed(if (grid) 2 else 1),
+        modifier = Modifier.fillMaxSize().background(LocalProjectPalette.current?.let { Color(it.surface) } ?: Color.White)
+            .testTag(KnowledgeListTag), state = listState,
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalItemSpacing = 10.dp) {
+        item(key = "knowledge-controls", span = StaggeredGridItemSpan.FullLine) { Column {
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(if (selecting) "${selected.size} selected" else "Project knowledge", fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                Text(if (selecting) "${selected.size} selected" else pageTitle ?: "Project knowledge", fontSize = 20.sp, fontWeight = FontWeight.Bold,
                     color = KColor.ink)
-                Text("${projectItems.size} items · One place for your ideas", fontSize = 12.sp, color = KColor.muted)
+                Text("${filtered.size} items · One place for your ideas", fontSize = 12.sp, color = KColor.muted)
             }
             if (selecting) TextButton(onClick = { selecting = false; selected.clear() }) {
                 Text(if (selecting) "Cancel" else "Select", color = KColor.greenInk)
@@ -303,7 +322,7 @@ fun VirlinProjectKnowledgeLibrary(
                 Text("Add")
             }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        Row(Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             TextField(
@@ -320,7 +339,7 @@ fun VirlinProjectKnowledgeLibrary(
                 textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
             )
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             KnowledgeTypeTab("All ${projectItems.size}", typeName.isEmpty(), Modifier.testTag("knowledge_all_fixed")) { typeName = "" }
             val categoryScroll = rememberScrollState()
@@ -348,7 +367,7 @@ fun VirlinProjectKnowledgeLibrary(
             }
             }
         }
-        if (chosenTags.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp),
+        if (chosenTags.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(top = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             KnowledgeOutlineButton(
@@ -364,11 +383,12 @@ fun VirlinProjectKnowledgeLibrary(
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) {
             val name = if (workstream == PROJECT_WIDE_FILTER) "Project-wide" else
                 workstreams.firstOrNull { it.id == workstream }?.title ?: "All workstreams"
-            KnowledgeOutlineButton("$name  ⌄") { workstreamMenu = true }
+            if (fixedScope == null) KnowledgeOutlineButton("$name  ⌄") { workstreamMenu = true }
+            else Text(name, color = KColor.muted, fontSize = 13.sp)
         }
         TextButton(onClick = { recentFirst = !recentFirst }) { Text(if (recentFirst) "Recent ↓" else "Oldest ↑", color = KColor.muted, fontSize = 12.sp) }
         IconButton(onClick = { grid = !grid }) { Icon(if (grid) Icons.Outlined.ViewList else Icons.Outlined.GridView,
@@ -376,7 +396,7 @@ fun VirlinProjectKnowledgeLibrary(
         }
 
         if (selecting) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 5.dp),
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = {
                     val visible = filtered.map { it.id }
@@ -401,7 +421,7 @@ fun VirlinProjectKnowledgeLibrary(
         }
         } }
         if (filtered.isEmpty()) {
-            item { Box(Modifier.fillMaxWidth().heightIn(min = 180.dp), contentAlignment = Alignment.Center) {
+            item(span = StaggeredGridItemSpan.FullLine) { Box(Modifier.fillMaxWidth().heightIn(min = 180.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("No saved items match", color = KColor.ink, fontWeight = FontWeight.SemiBold)
                     Text("Try another type, workstream, or search.", color = KColor.muted,
@@ -410,27 +430,19 @@ fun VirlinProjectKnowledgeLibrary(
             } }
         } else {
                 sections.forEach { (heading, sectionItems) ->
-                    if (heading.isNotBlank()) item(key = "heading-$heading") {
+                    if (heading.isNotBlank()) item(key = "heading-$heading", span = StaggeredGridItemSpan.FullLine) {
                         Text("$heading (${sectionItems.size})", fontWeight = FontWeight.SemiBold,
                             fontSize = 14.sp, color = KColor.ink,
                             modifier = Modifier.padding(top = 14.dp, bottom = 9.dp))
                     }
-                    items(sectionItems.chunked(if (grid) 2 else 1), key = { pair -> pair.joinToString("-") { it.id } }) { pair ->
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                pair.forEach { item ->
-                                    Box(Modifier.weight(1f)) {
-                                        KnowledgeGalleryCard(item, zone, tagNames, imagePreview, actions,
-                                            selecting, item.id in selected,
-                                            onSelect = { if (item.id in selected) selected.remove(item.id) else selected.add(item.id) },
-                                            onStartSelection = { selecting = true; if (item.id !in selected) selected.add(item.id) },
-                                            onMove = { moving = item }, onDelete = { deleting = item },
-                                            onPlaceTask = { placingTask = item })
-                                    }
-                                }
-                                if (grid && pair.size == 1) Spacer(Modifier.weight(1f))
-                            }
-                            Spacer(Modifier.height(10.dp))
-                        }
+                    staggeredItems(sectionItems, key = { it.id }) { item ->
+                        KnowledgeGalleryCard(item, zone, tagNames, imagePreview, actions,
+                            selecting, item.id in selected,
+                            onSelect = { if (item.id in selected) selected.remove(item.id) else selected.add(item.id) },
+                            onStartSelection = { selecting = true; if (item.id !in selected) selected.add(item.id) },
+                            onMove = { moving = item }, onDelete = { deleting = item },
+                            onPlaceTask = { placingTask = item })
+                    }
                 }
             }
         }
@@ -600,6 +612,22 @@ internal fun KnowledgeGalleryCard(item: KnowledgeItem, zone: ZoneId,
     imagePreview: @Composable (String, Modifier) -> Unit, actions: KnowledgeActions,
     selecting: Boolean, selected: Boolean, onSelect: () -> Unit, onStartSelection: () -> Unit,
     onMove: () -> Unit, onDelete: () -> Unit, onPlaceTask: () -> Unit) {
+    val context = LocalContext.current
+    val imagePath = item.mediaPath.takeIf { item.type == KnowledgeType.IMAGE }
+    var imageRatio by remember(imagePath) { mutableFloatStateOf(1f) }
+    LaunchedEffect(imagePath) {
+        if (imagePath == null) return@LaunchedEffect
+        val ratio = withContext(Dispatchers.IO) {
+            runCatching {
+                val file = AttachmentFileStore.resolve(context, imagePath)
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(file.absolutePath, bounds)
+                if (bounds.outWidth > 0 && bounds.outHeight > 0)
+                    bounds.outWidth.toFloat() / bounds.outHeight else 1f
+            }.getOrDefault(1f)
+        }
+        imageRatio = ratio
+    }
     Surface(modifier = Modifier.testTag("knowledge_card_${item.id}").combinedClickable(
         onClick = {
             when {
@@ -612,7 +640,8 @@ internal fun KnowledgeGalleryCard(item: KnowledgeItem, zone: ZoneId,
         shape = RoundedCornerShape(16.dp), color = Color.White,
         border = BorderStroke(if (selected) 2.dp else 1.dp,
             if (selected) KColor.green else KColor.line)) {
-        Column(Modifier.fillMaxWidth().heightIn(min = 200.dp).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column((if (imagePath == null) Modifier.fillMaxWidth().heightIn(min = 200.dp)
+            else Modifier.fillMaxWidth()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Surface(color = KColor.greenInk, shape = RoundedCornerShape(8.dp), modifier = Modifier.weight(1f, fill = false)) {
                 Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -639,7 +668,8 @@ internal fun KnowledgeGalleryCard(item: KnowledgeItem, zone: ZoneId,
                 fontSize = 14.sp, lineHeight = 19.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             when {
                 item.type == KnowledgeType.IMAGE && item.mediaPath != null ->
-                    imagePreview(item.mediaPath, Modifier.fillMaxWidth().height(76.dp).clip(RoundedCornerShape(8.dp)))
+                    imagePreview(item.mediaPath, Modifier.fillMaxWidth().aspectRatio(imageRatio)
+                        .clip(RoundedCornerShape(8.dp)).testTag("knowledge_image_${item.id}"))
                 item.type == KnowledgeType.AUDIO -> Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.PlayCircle, null, tint = KColor.greenInk, modifier = Modifier.size(36.dp))
                     Text(item.durationSeconds?.asTime() ?: "Audio recording", Modifier.padding(start = 8.dp),
@@ -746,12 +776,12 @@ private fun KnowledgePanelHeader(title: String, onDismiss: () -> Unit) {
 private fun KnowledgePanelActions(label: String, onDismiss: () -> Unit, onSave: () -> Unit,
     destructive: Boolean = false) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+        OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f).requiredHeight(48.dp),
             border = BorderStroke(1.dp, KColor.green), colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = KColor.greenWash, contentColor = KColor.greenInk)) { Text("Cancel") }
+                containerColor = KColor.greenWash, contentColor = KColor.greenInk)) { Text("Cancel", maxLines = 1) }
         val color = if (destructive) Color(0xFFB6433D) else KColor.greenInk
-        Button(onClick = onSave, modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = readableOn(color))) { Text(label) }
+        Button(onClick = onSave, modifier = Modifier.weight(1f).requiredHeight(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = readableOn(color))) { Text(label, maxLines = 1) }
     }
 }
 
@@ -761,6 +791,7 @@ private fun KnowledgeMoveSheet(title: String, initialWorkstream: String?, initia
     onSave: (workstreamId: String?, taskId: String?) -> Unit) {
     var destinationWorkstream by remember(title) { mutableStateOf(initialWorkstream) }
     var destinationTask by remember(title) { mutableStateOf(initialTask) }
+    var destinationChosen by remember(title) { mutableStateOf(false) }
     var search by rememberSaveable(title) { mutableStateOf("") }
     val expanded = remember(title) { mutableStateListOf<String>().apply {
         initialWorkstream?.let { add("w:$it") }
@@ -789,11 +820,11 @@ private fun KnowledgeMoveSheet(title: String, initialWorkstream: String?, initia
             placeholder = { Text("Search destinations") }, leadingIcon = { Icon(Icons.Default.Search, null) },
             modifier = Modifier.fillMaxWidth().testTag("knowledge_destination_search"),
             shape = RoundedCornerShape(12.dp))
-        LazyColumn(Modifier.weight(1f, fill = false).heightIn(min = 80.dp).testTag("knowledge_destination_tree"),
+        LazyColumn(Modifier.weight(1f, fill = false).testTag("knowledge_destination_tree"),
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 KnowledgeDestination("Project-wide", "Project", destinationWorkstream == null && destinationTask == null,
-                    "project", 0, null, {}, { destinationWorkstream = null; destinationTask = null })
+                    "project", 0, null, {}, { destinationWorkstream = null; destinationTask = null; destinationChosen = true })
             }
             fun addTasks(parent: String?, streamId: String?, depth: Int, seen: Set<String>, showAll: Boolean) {
                 tasks.filter { it.workstreamId == streamId && it.parentId == parent && it.id !in seen }
@@ -804,7 +835,7 @@ private fun KnowledgeMoveSheet(title: String, initialWorkstream: String?, initia
                             KnowledgeDestination(task.title, if (task.parentId == null) "Task" else "Subtask",
                                 destinationTask == task.id, task.id, depth, if (children) isExpanded else null,
                                 { if (isExpanded) expanded.remove("t:${task.id}") else expanded.add("t:${task.id}") },
-                                { destinationWorkstream = streamId; destinationTask = task.id })
+                                { destinationWorkstream = streamId; destinationTask = task.id; destinationChosen = true })
                         }
                         if (children && (isExpanded || search.isNotBlank()))
                             addTasks(task.id, streamId, depth + 1, seen + task.id, showAll || task.title.contains(search.trim(), true))
@@ -817,7 +848,7 @@ private fun KnowledgeMoveSheet(title: String, initialWorkstream: String?, initia
                     KnowledgeDestination(stream.title, listOfNotNull("Workstream", stream.progress).joinToString(" · "),
                         destinationWorkstream == stream.id && destinationTask == null, stream.id, 0, isExpanded,
                         { if (isExpanded) expanded.remove("w:${stream.id}") else expanded.add("w:${stream.id}") },
-                        { destinationWorkstream = stream.id; destinationTask = null })
+                        { destinationWorkstream = stream.id; destinationTask = null; destinationChosen = true })
                 }
                 if (isExpanded || search.isNotBlank())
                     addTasks(null, stream.id, 1, emptySet(), search.isNotBlank() && stream.title.contains(search.trim(), true))
@@ -827,7 +858,7 @@ private fun KnowledgeMoveSheet(title: String, initialWorkstream: String?, initia
         val selectedName = destinationTask?.let { id -> tasks.firstOrNull { it.id == id }?.title }
             ?: destinationWorkstream?.let { id -> workstreams.firstOrNull { it.id == id }?.title } ?: "Project-wide"
         Text("Destination: $selectedName", color = KColor.muted, fontSize = 12.sp, maxLines = 2)
-        KnowledgePanelActions("Move knowledge", onDismiss, { onSave(destinationWorkstream, destinationTask) })
+        if (destinationChosen) KnowledgePanelActions("Move", onDismiss, { onSave(destinationWorkstream, destinationTask) })
     }
 }
 

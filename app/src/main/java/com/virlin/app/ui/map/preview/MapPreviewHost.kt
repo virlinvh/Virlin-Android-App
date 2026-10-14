@@ -25,7 +25,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.virlin.app.data.mappreview.MapPreviewImageStore
@@ -166,8 +169,8 @@ class MapPreviewHostState(
     fun expandedExtraHeight(): Float {
         val preview = expandedId?.let { previews[it] } ?: return 0f
         var extra = 0f
-        if (!preview.description.isBlank) extra += 34f
-        if (preview.images.isNotEmpty()) extra += 104f
+        if (!preview.description.isBlank) extra += 18f * (preview.description.text.length / 24 + 2)
+        if (preview.images.isNotEmpty()) extra += 190f
         return extra
     }
 }
@@ -216,10 +219,15 @@ fun ExpandedNodeCard(
     onEdit: () -> Unit,
 ) {
     with(density) {
+        val scale = (rect.width / 240.dp.toPx()).coerceAtLeast(.005f)
         Box(
             Modifier
-                .padding(start = rect.left.toDp(), top = rect.top.toDp())
-                .width(rect.width.toDp())
+                .offset { androidx.compose.ui.unit.IntOffset(rect.left.toInt(), rect.top.toInt()) }
+                .requiredSize(240.dp, (rect.height / scale).toDp())
+                .graphicsLayer {
+                    scaleX = scale; scaleY = scale
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+                }
         ) {
             androidx.compose.material3.Surface(
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
@@ -227,53 +235,54 @@ fun ExpandedNodeCard(
                 border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF0E7A54)),
                 shadowElevation = 3.dp,
             ) {
-                Column(Modifier.padding(8.dp)) {
+                Column(Modifier.padding(12.dp)) {
                     // The caret and pencil live IN the card once it is expanded: the Canvas no
                     // longer draws this node, so controls painted there would be invisible and
                     // unhittable. As real composables they also get 48dp targets and semantics.
                     androidx.compose.foundation.layout.Row(
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     ) {
-                        Box(
-                            Modifier
-                                .size(32.dp)
-                                .testTag(MapPreviewCollapseTag)
-                                .semantics {
-                                    contentDescription = "Collapse preview for " + title
-                                    stateDescription = "Expanded"
-                                }
-                                .androidxClickable(onCollapse),
-                            contentAlignment = androidx.compose.ui.Alignment.Center,
-                        ) {
-                            androidx.compose.material3.Icon(
-                                androidx.compose.material.icons.Icons.Outlined.KeyboardArrowDown,
-                                contentDescription = null,
-                                tint = Color(0xFF637283),
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
                         Text(
                             title,
                             color = Color(0xFF192229),
-                            fontSize = 12.sp,
+                            fontSize = 15.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                            maxLines = 1,
+                            maxLines = 3,
                             modifier = Modifier.weight(1f),
                         )
+                        Column {
                         Box(
                             Modifier
-                                .size(32.dp)
+                                .size(48.dp)
                                 .testTag(MapPreviewEditFromCardTag)
-                                .semantics { contentDescription = "Edit preview for " + title }
+                                .semantics {
+                                    contentDescription = "Edit preview for " + title
+                                }
                                 .androidxClickable(onEdit),
                             contentAlignment = androidx.compose.ui.Alignment.Center,
                         ) {
                             androidx.compose.material3.Icon(
                                 androidx.compose.material.icons.Icons.Outlined.Edit,
                                 contentDescription = null,
+                                tint = Color(0xFF637283),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Box(
+                            Modifier
+                                .size(48.dp)
+                                .testTag(MapPreviewCollapseTag)
+                                .semantics { contentDescription = "Collapse preview for " + title; stateDescription = "Expanded" }
+                                .androidxClickable(onCollapse),
+                            contentAlignment = androidx.compose.ui.Alignment.Center,
+                        ) {
+                            androidx.compose.material3.Icon(
+                                androidx.compose.material.icons.Icons.Outlined.KeyboardArrowUp,
+                                contentDescription = null,
                                 tint = Color(0xFF637283).copy(alpha = .65f),
                                 modifier = Modifier.size(15.dp),
                             )
+                        }
                         }
                     }
                     androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 2.dp))

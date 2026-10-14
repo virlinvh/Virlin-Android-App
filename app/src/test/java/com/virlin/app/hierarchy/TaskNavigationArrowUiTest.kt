@@ -3,6 +3,8 @@ package com.virlin.app.hierarchy
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.unit.sp
 import com.virlin.app.ui.hierarchy.*
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -30,6 +32,9 @@ class TaskNavigationArrowUiTest {
             }
         }
         tasks.forEach { compose.onNodeWithTag("task_navigation_arrow_${it.id}", useUnmergedTree = true).assertExists() }
+        val titleLayouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        compose.onNodeWithText("Subtask").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(titleLayouts) }
+        assertEquals(14.sp, titleLayouts.single().layoutInput.style.fontSize)
         compose.onNodeWithText("Subtask").performClick()
         assertEquals("child", opened)
         compose.onNodeWithText("WORK").performClick()

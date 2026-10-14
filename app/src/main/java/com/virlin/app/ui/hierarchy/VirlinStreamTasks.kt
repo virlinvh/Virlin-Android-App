@@ -17,7 +17,10 @@ import com.virlin.app.ui.components.circularOrbCutout
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.verticalScroll
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -28,6 +31,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -134,7 +138,7 @@ internal fun HierarchySectionHeading(
     modifier: Modifier = Modifier
 ) {
     Column(modifier.fillMaxWidth()) {
-        Text(title, Modifier.fillMaxWidth(), fontSize = 28.sp, lineHeight = 36.sp,
+        Text(title, Modifier.fillMaxWidth(), fontSize = 23.sp, lineHeight = 30.sp,
             fontWeight = FontWeight.Bold, color = Ink)
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -194,17 +198,39 @@ fun VirlinStreamTasks(
     }
     val parent = parentId?.let(tasksById::get)
     val rootListTitle = if (ui.standalone) "Standalone tasks" else "Tasks"
+    // Each task/subtask level has its own viewport. Keep it in saveable state so navigating
+    // down a level, returning with Back, or recreating this route restores the same position.
+    var viewports by rememberSaveable(ui.streamId) {
+        mutableStateOf<Map<String, List<Int>>>(emptyMap())
+    }
+    val savedViewport = viewports[pathCsv]
+    val listState = remember(pathCsv) {
+        LazyListState(savedViewport?.getOrNull(0) ?: 0, savedViewport?.getOrNull(1) ?: 0)
+    }
     var headerHeight by remember { mutableFloatStateOf(0f) }
-    var headerOffset by remember(pathCsv) { mutableFloatStateOf(0f) }
+    var headerOffset by remember(pathCsv) {
+        mutableFloatStateOf((savedViewport?.getOrNull(2) ?: 0).toFloat())
+    }
+    LaunchedEffect(pathCsv, listState) {
+        snapshotFlow {
+            listOf(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset,
+                headerOffset.toInt())
+        }.collect { viewport -> viewports = viewports + (pathCsv to viewport) }
+    }
     val density = androidx.compose.ui.platform.LocalDensity.current
     val scrollConnection = remember(pathCsv, headerHeight) {
         ProjectHeaderScrollConnection(enabled = { true }, height = { headerHeight },
             offset = { headerOffset }, updateOffset = { headerOffset = it })
     }
+    // Forward gestures started in the fixed chrome to the same list used below. The surrounding
+    // nested-scroll connection still consumes header motion first, preserving collapse/reveal.
+    val chromeScrollState = rememberScrollableState { delta -> -listState.dispatchRawDelta(-delta) }
+    val chromeScroll = Modifier.scrollable(chromeScrollState, Orientation.Vertical)
     Box(modifier.fillMaxSize()) {
-    Scaffold(modifier = Modifier.testTag(StreamTasksTag), containerColor = palette?.let { Color(it.surface) } ?: Color.White,
+    Scaffold(modifier = Modifier.testTag(StreamTasksTag).nestedScroll(scrollConnection), containerColor = palette?.let { Color(it.surface) } ?: Color.White,
         topBar = {
-            Row(Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().height(76.dp).then(chromeScroll).testTag("hierarchy_top_bar")
+                .padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { if (path.isEmpty()) actions.back() else pathCsv = path.dropLast(1).joinToString(",") }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Ink)
                 }
@@ -217,21 +243,11 @@ fun VirlinStreamTasks(
                     if (parentId == null) ui.externalSeconds else ui.sectionExternalSeconds[parentId], parentId ?: ui.streamId, ui.projectId)
             }
         },
-        bottomBar = {
-            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = OrbClearance, top = 12.dp, bottom = 12.dp)) {
-                if (organize && selected.isNotEmpty()) {
-                    TextButton(onClick = { moveFor = selected.toList() }) { Text("Move") }
-                    TextButton(onClick = { deleteFor = selected.toList() }) { Text("Cancel tasks") }
-                } else Button(onClick = { addFor = parentId; showAdd = true }, modifier = Modifier.fillMaxWidth().testTag(AddTaskButtonTag), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = if(LocalProjectPalette.current==null) Color.White else readableOn(Green))) {
-                    Icon(Icons.Default.Add, null); Text(if (parentId == null) "Task" else "Add subtask")
-                }
-            }
-        }
     ) { insets ->
-        Box(Modifier.fillMaxSize().padding(insets).nestedScroll(scrollConnection)) {
+        Box(Modifier.fillMaxSize().padding(insets)) {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxWidth().height(with(density) { (headerHeight + headerOffset).coerceAtLeast(0f).toDp() })
-                    .clipToBounds().testTag("hierarchy_collapsible_details")) {
+                    .then(chromeScroll).clipToBounds().testTag("hierarchy_collapsible_details")) {
                     Column(Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).onSizeChanged { headerHeight = it.height.toFloat() }
                         .graphicsLayer { translationY = headerOffset }.padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 8.dp)) {
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
@@ -255,7 +271,8 @@ fun VirlinStreamTasks(
                             TaskFilter.entries.forEach { item -> FilterPill(item.name.lowercase().replaceFirstChar(Char::uppercase), filter == item, Modifier.weight(1f)) { filter = item } }
                         }
                         Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (parentId == null) rootListTitle else "Subtasks", Modifier.weight(1f), color = Muted, fontWeight = FontWeight.SemiBold)
+                            Text(if (parentId == null) rootListTitle else "Subtasks", Modifier.weight(1f),
+                                color = Muted, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             TextButton(onClick = { organize = !organize; selected = emptySet() }) { Text(if (organize) "Done" else "↕ Organize", color = DeepGreen) }
                         }
                     }
@@ -264,7 +281,7 @@ fun VirlinStreamTasks(
                         Box(Modifier.fillMaxWidth().height(14.dp).background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(LocalProjectPalette.current?.let { Color(it.surface) } ?: Color.White, Color.Transparent))))
                     }
                 }
-                LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("hierarchy_task_list"), contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("hierarchy_task_list"), state = listState, contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 84.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     if (visible.isEmpty()) item { Text(if (siblings.isEmpty()) "No tasks here yet" else "No matching tasks", color = Muted, modifier = Modifier.padding(20.dp)) }
                     itemsIndexed(visible, key = { _, task -> task.id }) { index, task ->
                         TaskRow(task, index + 1, task.id in ancestorIds, task.id in selected, organize, ui.visualState,
@@ -276,6 +293,24 @@ fun VirlinStreamTasks(
                                 if (to in siblings.indices) actions.move(listOf(task.id), parentId, siblings.filterNot { it.id == task.id }.getOrNull(to - if (to > from) 0 else 1)?.id)
                             })
                     }
+                }
+            }
+            Box(Modifier.align(Alignment.BottomCenter)) {
+                BottomListFeather(palette?.let { Color(it.surface) } ?: Color.White)
+            }
+            Row(Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.End) {
+                if (organize && selected.isNotEmpty()) {
+                    TextButton(onClick = { moveFor = selected.toList() }) { Text("Move") }
+                    TextButton(onClick = { deleteFor = selected.toList() }) { Text("Cancel tasks") }
+                } else FloatingActionButton(
+                    onClick = { addFor = parentId; showAdd = true },
+                    modifier = Modifier.size(56.dp).testTag(AddTaskButtonTag),
+                    shape = RoundedCornerShape(20.dp),
+                    containerColor = LocalProjectPalette.current?.let { Color(it.main) } ?: Green,
+                    contentColor = LocalProjectPalette.current?.let { readableOn(Color(it.main)) } ?: Color.White
+                ) {
+                    Icon(Icons.Default.Add, if (parentId == null) "Add task" else "Add subtask", modifier = Modifier.size(28.dp))
                 }
             }
         }
@@ -392,7 +427,8 @@ private fun executionWash(state: WorkstreamState): Color = when (state) {
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(task.title, color = Ink, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(task.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
             val detail = buildList {
                 if (task.childCount > 0) add("${task.progressPercent?.let { "$it% · " }.orEmpty()}${task.childCount} subtasks")
                 task.focusedLabel?.let { add("$it focused") }
@@ -433,76 +469,16 @@ private fun executionWash(state: WorkstreamState): Color = when (state) {
             else "Add a subtask here. Every subtask can have its own subtasks.",
             color = Muted, modifier = Modifier.padding(18.dp), lineHeight = 21.sp)
         // An empty level shows this instead of the bottom bar's "+ Task"; only one is ever present.
-        Button(onClick = onAdd, colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = if(LocalProjectPalette.current==null) Color.White else readableOn(Green)), modifier = Modifier.fillMaxWidth().testTag(AddTaskButtonTag).padding(horizontal = 20.dp)) { Icon(Icons.Default.Add, null); Text(if (parentId == null) "Add first task" else "Add subtask") }
+        val addColor = LocalProjectPalette.current?.let { Color(it.main) } ?: Green
+        Button(onClick = onAdd, colors = ButtonDefaults.buttonColors(containerColor = addColor, contentColor = if(LocalProjectPalette.current==null) Color.White else readableOn(addColor)), modifier = Modifier.fillMaxWidth().testTag(AddTaskButtonTag).padding(horizontal = 20.dp)) { Icon(Icons.Default.Add, null); Text(if (parentId == null) "Add first task" else "Add subtask") }
         if (parentId == null && !ui.standalone) TextButton(onClick = onKeep) { Text("Keep stream as work item", color = DeepGreen) }
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun AddTaskSheet(parentTitle: String, defaultExecution: StreamExecutionMode, siblings: List<StreamTaskUi>, onDismiss: () -> Unit, onSave: (String, String?, StreamExecutionMode) -> Unit, heading: String = "Add subtask",
     bulkDestination: com.virlin.app.domain.action.CreateTask? = null, bulkProjectId: String? = null, errorMessage: String? = null) {
-    var bulkOpen by rememberSaveable { mutableStateOf(false) }
-    var bulkBusy by remember { mutableStateOf(false) }
-    val dismiss = { if (!bulkBusy) onDismiss() }
-    var after by rememberSaveable { mutableStateOf(siblings.lastOrNull()?.id) }; var mode by rememberSaveable { mutableStateOf(StreamExecutionMode.INHERIT) }; var placement by remember { mutableStateOf(false) }
-    var executionMenu by remember { mutableStateOf(false) }
-    BackHandler(onBack = dismiss)
-    // The host viewport already excludes the real app footer; no second window covers it.
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .32f)).testTag("add_task_overlay")) {
-        Box(Modifier.matchParentSize().clickable(onClick = dismiss))
-        Box(Modifier.fillMaxSize().imePadding().padding(16.dp), contentAlignment = Alignment.Center) {
-        Surface(Modifier.widthIn(max = 480.dp).fillMaxWidth().testTag("add_task_dialog"),
-            shape = RoundedCornerShape(24.dp), color = Color.White,
-            shadowElevation = 8.dp) {
-        TaskCreationCard(parentTitle, heading, dismiss, { onSave(it, after, mode) }, modeSelector = {
-            errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp, modifier = Modifier.testTag("add_task_error")) }
-            if (bulkDestination != null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = !bulkOpen, enabled = !bulkBusy, onClick = { bulkOpen = false }, label = { Text("Single") },
-                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor =
-                        LocalProjectPalette.current?.let { Color(it.main).copy(alpha = .14f) } ?: Color(0xFFE1F4EC),
-                        selectedLabelColor = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF007B58)))
-                FilterChip(selected = bulkOpen, enabled = !bulkBusy, onClick = { bulkOpen = true }, label = { Text("Bulk") },
-                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor =
-                        LocalProjectPalette.current?.let { Color(it.main).copy(alpha = .14f) } ?: Color(0xFFE1F4EC),
-                        selectedLabelColor = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF007B58)))
-            }
-        }, body = if (bulkOpen && bulkDestination != null) { {
-            BulkCreationDialog(parentTitle, "Task name", bulkProjectId, onDismiss = onDismiss,
-                onSingle = { onSave(it, after, mode) },
-                taskDestination = bulkDestination, startBulk = true, embedded = true,
-                onBusyChanged = { bulkBusy = it })
-        } } else null
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.weight(1f)) { OutlinedButton(onClick = { placement = true }, modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Muted)) {
-                Text(siblings.find { it.id == after }?.title?.let { "After $it" } ?: "At beginning", fontSize = 12.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, modifier = Modifier.size(16.dp)) }
-                DropdownMenu(placement, onDismissRequest = { placement = false }) {
-                    DropdownMenuItem(text = { Text("At beginning") }, onClick = { after = null; placement = false })
-                    siblings.forEach { sibling -> DropdownMenuItem(text = { Text(sibling.title) }, onClick = { after = sibling.id; placement = false }) }
-                }
-            }
-            Box(Modifier.weight(1f)) {
-                OutlinedButton(onClick = { executionMenu = true }, modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Muted)) {
-                    val effective = if (mode == StreamExecutionMode.INHERIT) defaultExecution else mode
-                    Text(if (mode == StreamExecutionMode.INHERIT) "Inherit · ${effective.name.lowercase().replaceFirstChar(Char::uppercase)}"
-                        else mode.name.lowercase().replaceFirstChar(Char::uppercase), fontSize = 12.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, modifier = Modifier.size(16.dp))
-                }
-                DropdownMenu(executionMenu, onDismissRequest = { executionMenu = false }) {
-                    StreamExecutionMode.entries.forEach { choice -> DropdownMenuItem(
-                        text = { Text(choice.name.lowercase().replaceFirstChar(Char::uppercase)) },
-                        onClick = { mode = choice; executionMenu = false }) }
-                }
-            }
-            }
-        }
-        }
-        }
-    }
+    TaskCreationSheet(parentTitle, defaultExecution, siblings, onDismiss, onSave, heading,
+        bulkDestination, errorMessage)
 }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun ExecutionSheet(title: String, value: StreamExecutionMode, effective: StreamExecutionMode, source: String, onDismiss: () -> Unit, onChange: (StreamExecutionMode) -> Unit) {

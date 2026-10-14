@@ -2,7 +2,6 @@ package com.virlin.app.ui.screens
 
 import com.virlin.app.domain.model.*
 import java.time.Instant
-import java.time.Duration
 
 data class DirectoryWorkItem(val work: WorkStream, val task: Task?, val project: Project?,
                              val hierarchy: String, val path: List<String>, val timing: String)
@@ -35,8 +34,7 @@ object DirectoryWorkProjection {
             val project = ProjectIdentity.resolveWorkItem(work.id, work.projectId, projects, tasks, streams)
             val hierarchy = WhenFreePresentation.hierarchy(work.id, projects, tasks, streams)
             if (query.isNotBlank() && listOf(work.title, hierarchy, project?.title.orEmpty()).none { it.contains(query, true) }) return@mapNotNull null
-            val seconds = work.externalTrackedSeconds + (work.processingStartedAt?.takeIf { !work.externalTrackingPaused }
-                ?.let { Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0)
+            val seconds = com.virlin.app.domain.model.ExternalTiming.seconds(work, now)
             val timing = if (work.processingStartedAt != null || work.externalTrackingPaused || seconds > 0)
                 "External ${if (seconds == 0L) "0m" else FocusInvestment.formatCompact(seconds)}"
                 else WhenFreePresentation.focusedLabel(work.id, tasks, sessions, now)

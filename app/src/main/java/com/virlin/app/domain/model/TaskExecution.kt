@@ -16,12 +16,14 @@ data class TaskExecution(
     val actorId: String? = null,
     val tool: String? = null,
     val instruction: String? = null,
+    /** Explicit Needs You position for this exact task; null means unranked. */
+    val attentionRank: Int? = null,
 ) {
     companion object {
         fun of(stream: WorkStream) = TaskExecution(stream.state, stream.processingStartedAt,
             stream.externalTrackedSeconds, stream.externalTrackingPaused, stream.checkAt,
             stream.snoozeReason, stream.blockerReason, stream.currentCycleId, stream.cycleCount,
-            stream.externalActorId, stream.tool, stream.waitingFor)
+            stream.externalActorId, stream.tool, stream.waitingFor, stream.attentionRank)
     }
 }
 
@@ -32,6 +34,7 @@ fun Task.executionStream(): WorkStream {
         state = activity.state, activeTaskId = id, createdAt = createdAt, updatedAt = updatedAt,
         processingStartedAt = activity.processingStartedAt, externalTrackedSeconds = activity.externalTrackedSeconds,
         externalTrackingPaused = activity.externalTrackingPaused, checkAt = activity.checkAt,
+        attentionRank = activity.attentionRank,
         snoozedUntil = activity.checkAt.takeIf { activity.state == WorkStreamState.SNOOZED },
         snoozeReason = activity.snoozeReason, blockerReason = activity.blockerReason,
         currentCycleId = activity.currentCycleId, cycleCount = activity.cycleCount,

@@ -16,19 +16,19 @@ object PromptContentParser {
         var cursor = 0
         fenced.findAll(source).forEach { match ->
             if (match.range.first > cursor) {
-                source.substring(cursor, match.range.first).trim('\n', '\r')
-                    .takeIf { it.isNotBlank() }?.let { out += ResponseSegment.Prose(it) }
+                source.substring(cursor, match.range.first)
+                    .takeIf { it.isNotEmpty() }?.let { out += ResponseSegment.Prose(it) }
             }
             out += ResponseSegment.Code(
-                text = match.groupValues[2].trimEnd('\n', '\r'),
+                text = match.groupValues[2],
                 language = match.groupValues[1].takeIf { it.isNotBlank() }?.let(::canonicalLanguage)
                     ?: detectLanguage(match.groupValues[2]).takeUnless { it == "Plain text" }
             )
             cursor = match.range.last + 1
         }
         if (cursor < source.length) {
-            source.substring(cursor).trim('\n', '\r')
-                .takeIf { it.isNotBlank() }?.let { out += ResponseSegment.Prose(it) }
+            source.substring(cursor)
+                .takeIf { it.isNotEmpty() }?.let { out += ResponseSegment.Prose(it) }
         }
         return out.ifEmpty { listOf(ResponseSegment.Prose(source)) }
     }

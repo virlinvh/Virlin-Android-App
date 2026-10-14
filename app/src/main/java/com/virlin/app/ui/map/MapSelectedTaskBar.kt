@@ -57,11 +57,13 @@ internal fun MapSelectedTaskBar(
     onAdd: (MapTopic) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val projectPalette = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+    val hairline = projectPalette?.let { Color(it.main).copy(alpha = .18f) } ?: MapHairline
     Surface(
         modifier = modifier.fillMaxWidth().testTag(MapSelectedTaskBarTag),
         shape = RoundedCornerShape(22.dp),
         color = Color.White,
-        border = BorderStroke(1.dp, MapHairline),
+        border = BorderStroke(1.dp, hairline),
         shadowElevation = 5.dp,
     ) {
         Row(
@@ -78,13 +80,13 @@ internal fun MapSelectedTaskBar(
                 onOpenTask(task)
             }
             Box(Modifier.width(1.dp).height(38.dp)) {
-                Surface(color = MapHairline, modifier = Modifier.width(1.dp).height(38.dp)) {}
+                Surface(color = hairline, modifier = Modifier.width(1.dp).height(38.dp)) {}
             }
             if (task.kind != MapKind.PROJECT) {
                 MapTaskAction(Icons.Outlined.OpenWith, "Move", task.title, Modifier.weight(1f)) { onMove(task) }
             }
             MapTaskAction(Icons.Outlined.Description,
-                if (task.kind == MapKind.TASK) "Page" else "Preview",
+                "Page",
                 task.title, Modifier.weight(1f)) { onPage(task) }
             MapTaskAction(Icons.Outlined.Add, "Add", task.title, Modifier.weight(1f)) { onAdd(task) }
         }
@@ -99,6 +101,7 @@ private fun MapTaskAction(
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
+    val ink = com.virlin.app.ui.hierarchy.LocalProjectPalette.current?.let { Color(it.text) } ?: MapInk
     Column(
         modifier = modifier
             .testTag(mapTaskActionTag(label))
@@ -111,11 +114,11 @@ private fun MapTaskAction(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = MapInk)
+        Icon(icon, contentDescription = null, tint = ink)
         Spacer(Modifier.height(5.dp))
         Text(
             label, fontSize = 11.sp, fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center, color = MapInk, maxLines = 1,
+            textAlign = TextAlign.Center, color = ink, maxLines = 1,
         )
     }
 }

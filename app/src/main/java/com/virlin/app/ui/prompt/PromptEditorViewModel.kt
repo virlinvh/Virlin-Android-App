@@ -16,6 +16,7 @@ import com.virlin.app.domain.note.NoteClipboardImporter
 import com.virlin.app.domain.note.NoteEnterSemantics
 import com.virlin.app.domain.prompt.PromptDocumentCodec
 import com.virlin.app.domain.prompt.PromptContentParser
+import com.virlin.app.domain.prompt.importedPromptText
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.domain.time.VirlinClock
 import kotlinx.coroutines.Job
@@ -137,6 +138,10 @@ class PromptEditorViewModel(
         scheduleAutosave()
     }
 
+    fun pasteSource(html: String?, plain: String) {
+        onSourceTextChange(importedPromptText(html, plain))
+    }
+
     fun setMode(mode: PromptContentMode) {
         _state.update { st ->
             st.copy(
@@ -159,6 +164,10 @@ class PromptEditorViewModel(
     fun onResponseTextChange(text: String) {
         _state.update { it.copy(responseText = text, responseEditorOpen = true) }
         scheduleAutosave()
+    }
+
+    fun pasteResponse(html: String?, plain: String) {
+        onResponseTextChange(importedPromptText(html, plain))
     }
 
     fun removeResponse() {

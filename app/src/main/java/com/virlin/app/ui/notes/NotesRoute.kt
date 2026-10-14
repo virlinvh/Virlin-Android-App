@@ -1,4 +1,6 @@
 package com.virlin.app.ui.notes
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 
 import androidx.compose.foundation.background
@@ -23,12 +25,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +56,17 @@ import com.virlin.app.domain.notedoc.NoteDocBlockType
 import com.virlin.app.domain.notedoc.NoteDocMark
 import com.virlin.app.domain.notedoc.NoteDocTable
 import com.virlin.app.domain.model.TaskPageTypeKeys
+import com.virlin.app.domain.VirlinGraph
+import com.virlin.app.domain.notedoc.CaptureNoteBridge
+import com.virlin.app.domain.notedoc.visibleNoteBlocks
+import com.virlin.app.data.noteimage.NoteImageStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.virlin.app.ui.hierarchy.rememberProjectPalette
+import com.virlin.app.ui.hierarchy.readableOn
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.lightColorScheme
 
 /** Navigation route for the Notes page. */
 const val NOTES_ROUTE: String = "notes/{ownerKey}?title={title}"
@@ -72,11 +89,11 @@ fun notesForProject(projectId: String, title: String): String =
 
 fun globalNotes(): String = notesRoute("global", "Notes")
 
-private val Ink = Color(0xFF17221D)
-private val Green = Color(0xFF087848)
-private val Mint = Color(0xFFE2F5EA)
-private val Border = Color(0xFFE3E9E5)
-private val Muted = Color(0xFF66758A)
+private val Ink: Color @Composable get() = NotesInk
+private val Green: Color @Composable get() = NotesAccent
+private val Mint: Color @Composable get() = NotesWash
+private val Border: Color @Composable get() = NotesBorder
+private val Muted: Color @Composable get() = NotesMuted
 
 /**
  * The Notes page route.
@@ -99,18 +116,52 @@ fun NotesRoute(
         factory = NotesViewModel.factory(ownerKey, title),
     ),
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingImagePicker by remember { mutableStateOf(false) }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            runCatching { withContext(Dispatchers.IO) { NoteImageStore.import(context, uri) } }
+                .onSuccess(vm::insertImage)
+                .onFailure { vm.openDialog(NoteDialog.Message(it.message ?: "Could not add image")) }
+        }
+    }
     val state by vm.state.collectAsState()
+    // Launch only after the add-block dialog has left composition. Launching from its click
+    // callback can race the dialog window being dismissed on Android devices.
+    LaunchedEffect(pendingImagePicker, state.dialog) {
+        if (pendingImagePicker && state.dialog == null) {
+            pendingImagePicker = false
+            runCatching { imagePicker.launch(arrayOf("image/*")) }
+                .onFailure { vm.openDialog(NoteDialog.Message("No image picker is available on this device.")) }
+        }
+    }
+    val pickImage = { pendingImagePicker = true }
+    val tasks by VirlinGraph.repository.tasks.collectAsState()
+    val captures by VirlinGraph.repository.captures.collectAsState()
+    val projectId = when {
+        ownerKey.startsWith("project-") -> ownerKey.removePrefix("project-")
+        ownerKey.startsWith("task-") -> tasks.firstOrNull { it.id == ownerKey.removePrefix("task-") }?.projectId
+        ownerKey.startsWith("capture-") -> captures.firstOrNull { it.id == ownerKey.removePrefix("capture-") }?.projectId
+        else -> CaptureNoteBridge.draftProject(ownerKey)
+    }
+    val palette = rememberProjectPalette(projectId)
     BackHandler { vm.saveAndClose { navController.popBackStack() } }
 
     // The debounce must never eat the last keystrokes when the page goes away.
     DisposableEffect(Unit) { onDispose { vm.flush() } }
 
+    CompositionLocalProvider(LocalNotesPalette provides palette) {
+    MaterialTheme(colorScheme = lightColorScheme(primary = NotesAccent, onPrimary = readableOn(NotesAccent),
+        surface = NotesPaper, onSurface = NotesInk, secondary = NotesAccent)) {
     VirlinNotesScreen(
         taskTitle = state.title.ifBlank { title },
         saveLabel = vm.saveLabel(),
         tools = vm.toolState(),
         onClose = { vm.saveAndClose { navController.popBackStack() } },
-        onTool = vm::onTool,
+        onTool = { tool ->
+            if (tool == NoteTool.IMAGE) pickImage() else vm.onTool(tool)
+        },
         onAddBlock = vm::openAddBlock,
         onPreview = vm::openPreview,
         onExport = vm::onExport,
@@ -118,11 +169,13 @@ fun NotesRoute(
         footer = {},
     )
 
-    state.dialog?.let { NoteDialogHost(it, state, vm) }
+    state.dialog?.let { NoteDialogHost(it, state, vm, pickImage) }
+    } }
 }
 
 @Composable
-private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesViewModel) {
+private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesViewModel,
+                           pickImage: () -> Unit) {
     when (dialog) {
         is NoteDialog.Paragraph -> PickerDialog("Paragraph style", vm::closeDialog) {
             listOf(
@@ -169,6 +222,7 @@ private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesVie
         }
 
         is NoteDialog.AddBlock -> PickerDialog("Add a block", vm::closeDialog) {
+            PickerRow("Image", false) { vm.closeDialog(); pickImage() }
             listOf(
                 NoteDocBlockType.PARAGRAPH to "Paragraph",
                 NoteDocBlockType.HEADING_1 to "Heading 1",
@@ -180,16 +234,15 @@ private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesVie
                 NoteDocBlockType.QUOTE to "Quote",
                 NoteDocBlockType.PROMPT to "Prompt callout",
                 NoteDocBlockType.CODE to "Code",
+                NoteDocBlockType.TOGGLE to "Toggle",
                 NoteDocBlockType.DIVIDER to "Divider",
                 NoteDocBlockType.TABLE to "Table",
             ).forEach { (type, label) ->
                 PickerRow(label, false) { vm.insertBlock(type) }
             }
-            // Image and attachment have no storage in this self-contained feature yet, so they
-            // are stated as absent rather than offered and silently doing nothing.
             Spacer(Modifier.height(6.dp))
             Text(
-                "Image and attachment blocks are not built yet.",
+                "Attachment blocks are not built yet.",
                 color = Muted, fontSize = 11.sp,
             )
         }
@@ -314,11 +367,11 @@ private fun PreviewDialog(state: NotesUiState, vm: NotesViewModel) {
             ) {
                 Text("Preview", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(12.dp))
-                if (state.blocks.all { it.text.isBlank() && it.table == null && it.type != NoteDocBlockType.DIVIDER }) {
+                if (state.blocks.all { it.text.isBlank() && it.table == null && it.type != NoteDocBlockType.DIVIDER && it.type != NoteDocBlockType.IMAGE }) {
                     Text("This note is empty.", color = Muted, fontSize = 13.sp)
                 }
-                state.blocks.forEachIndexed { i, block ->
-                    PreviewBlock(block, state.blocks.take(i))
+                visibleNoteBlocks(state.blocks).forEach { block ->
+                    PreviewBlock(block, state.blocks.takeWhile { it.id != block.id }, vm)
                     Spacer(Modifier.height(8.dp))
                 }
                 Spacer(Modifier.height(6.dp))
@@ -329,8 +382,20 @@ private fun PreviewDialog(state: NotesUiState, vm: NotesViewModel) {
 }
 
 @Composable
-private fun PreviewBlock(block: NoteDocBlock, before: List<NoteDocBlock>) {
+private fun PreviewBlock(block: NoteDocBlock, before: List<NoteDocBlock>, vm: NotesViewModel) {
     when (block.type) {
+        NoteDocBlockType.IMAGE -> NoteImageBlock(block.imagePath,
+            Modifier.padding(start = (block.indent * 14).dp))
+        NoteDocBlockType.TOGGLE -> Row(
+            Modifier.fillMaxWidth().padding(start = (block.indent * 14).dp)
+                .clickable { vm.toggleCollapsed(block.id) }.padding(vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(if (block.isCollapsed) "▸" else "▾", color = Green, fontSize = 18.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(block.text.ifBlank { "Toggle" }, color = Ink, fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold)
+        }
         NoteDocBlockType.DIVIDER ->
             Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
 

@@ -45,6 +45,7 @@ data class ImageWorkspaceState(
     val items: List<ImageWorkspaceItem> = emptyList(),
     val selected: ImageWorkspaceItem? = null,
     val mode: ImageWorkspaceMode = ImageWorkspaceMode.LIBRARY,
+    val editOpenedFromPreview: Boolean = false,
     val edit: ImageEditSnapshot = ImageEditSnapshot(),
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
@@ -100,7 +101,7 @@ class ImageWorkspaceViewModel(
                 loading = false,
                 items = images,
                 selected = selected,
-                mode = if (initialCaptureId != null && selected != null && _state.value.mode == ImageWorkspaceMode.LIBRARY) ImageWorkspaceMode.EDIT else _state.value.mode,
+                mode = if (initialCaptureId != null && selected != null && _state.value.mode == ImageWorkspaceMode.LIBRARY) ImageWorkspaceMode.PREVIEW else _state.value.mode,
             )
             if (selected != null && history.isEmpty()) resetHistory()
         }
@@ -155,10 +156,16 @@ class ImageWorkspaceViewModel(
         }
     }
 
-    fun edit(item: ImageWorkspaceItem) {
-        _state.value = _state.value.copy(selected = item, mode = ImageWorkspaceMode.EDIT)
+    fun preview(item: ImageWorkspaceItem) {
+        _state.value = _state.value.copy(selected = item, mode = ImageWorkspaceMode.PREVIEW)
+    }
+
+    fun edit(item: ImageWorkspaceItem, fromPreview: Boolean = false) {
+        _state.value = _state.value.copy(selected = item, mode = ImageWorkspaceMode.EDIT, editOpenedFromPreview = fromPreview)
         resetHistory()
     }
+
+    fun editSelectedFromPreview() { _state.value.selected?.let { edit(it, fromPreview = true) } }
 
     fun setMode(mode: ImageWorkspaceMode) {
         if (mode != ImageWorkspaceMode.LIBRARY && _state.value.selected == null) return

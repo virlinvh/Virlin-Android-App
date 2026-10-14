@@ -30,6 +30,50 @@ import java.time.Instant
  */
 @RunWith(AndroidJUnit4::class)
 class VirlinMigrationTest {
+    @Test fun migrate22To23AddsReturnCountWithoutChangingSavedRules() {
+        val name = "virlin-priority-returns-migration.db"
+        helper.createDatabase(name, 22).apply {
+            execSQL("INSERT INTO priority_preferences (streamId,preferredPosition,scopeType,createdAt,expiresAt) " +
+                "VALUES ('task',2,'ALWAYS',1000,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 23, true, VirlinDatabase.MIGRATION_22_23).apply {
+            query("SELECT preferredPosition,scopeType,remainingReturns FROM priority_preferences WHERE streamId='task'").use {
+                assertTrue(it.moveToFirst()); assertEquals(2, it.getInt(0)); assertEquals("ALWAYS", it.getString(1))
+                assertTrue(it.isNull(2))
+            }
+            close()
+        }
+    }
+    @Test fun migrate21To22AddsTaskRankWithoutChangingExistingTask() {
+        val name = "virlin-task-rank-migration.db"
+        helper.createDatabase(name, 21).apply {
+            execSQL("INSERT INTO tasks (id,title,status,sortOrder,priority,executionPreference,createdAt,updatedAt,executionState) " +
+                "VALUES ('t','Waiting task','TODO',0,'NORMAL','EXTERNAL',1000,1000,'CHECK')")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 22, true, VirlinDatabase.MIGRATION_21_22).apply {
+            query("SELECT title,executionState,executionAttentionRank FROM tasks WHERE id='t'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Waiting task", it.getString(0))
+                assertEquals("CHECK", it.getString(1))
+                assertTrue(it.isNull(2))
+            }
+            close()
+        }
+    }
+    @Test fun migrate20To21PreservesExistingTables() {
+        val name = "virlin-external-interval-migration.db"
+        helper.createDatabase(name, 20).close()
+        helper.runMigrationsAndValidate(name, 21, true, VirlinDatabase.MIGRATION_20_21).apply {
+            query("SELECT COUNT(*) FROM external_run_intervals").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals(0, cursor.getInt(0))
+            }
+            query("SELECT COUNT(*) FROM tasks").close()
+            query("SELECT COUNT(*) FROM workstreams").close()
+            close()
+        }
+    }
     @Test fun migrate19To20_movesExactActivityWithoutRewritingSessions() {
         val name = "virlin-task-execution-migration.db"
         helper.createDatabase(name, 19).apply {
@@ -593,7 +637,7 @@ class VirlinMigrationTest {
                 assertEquals(0, db.taskPageBlocks().all().size)
                 assertEquals(0, db.mapNodePreviews().count())
             }
-            assertEquals(20, db.openHelper.readableDatabase.version)
+            assertEquals(21, db.openHelper.readableDatabase.version)
         } finally { db.close(); ctx.deleteDatabase("virlin-fresh-test.db") }
     }
 
@@ -667,7 +711,7 @@ class VirlinMigrationTest {
                 assertEquals("Oldest project", db.projects().all().single { it.id == "p-old" }.title)
                 assertEquals(0, db.mapNodePreviews().count())
             }
-            assertEquals(20, db.openHelper.readableDatabase.version)
+            assertEquals(21, db.openHelper.readableDatabase.version)
         } finally { db.close(); ctx.deleteDatabase(dbName) }
     }
 }

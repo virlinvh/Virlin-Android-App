@@ -10,6 +10,44 @@ import java.time.Instant
 
 class ProjectTimerControlTest {
     private val start = Instant.parse("2026-10-09T00:00:00Z")
+    @Test fun organizePauseResumesOnlyItsOwnProjectTimers() = runTest {
+        fun stream(id: String, project: String, state: WorkStreamState) = WorkStream(
+            id, id, projectId = project, state = state,
+            processingStartedAt = if (state == WorkStreamState.PROCESSING) start else null,
+            createdAt = start, updatedAt = start)
+        val repo = InMemoryWorkStreamRepository(listOf(
+            stream("active", "p", WorkStreamState.PROCESSING),
+            stream("manual", "p", WorkStreamState.PAUSED),
+            stream("other", "q", WorkStreamState.PROCESSING)))
+        val clock = FakeClock(start.plusSeconds(60))
+        val actions = DefaultVirlinActions(repo, clock, SequentialIdProvider())
+        assertEquals(ActionResult.Success(1), actions.pauseTimersForOrganize("p"))
+        assertEquals(WorkStreamState.PAUSED, repo.getStream("active")!!.state)
+        assertEquals(WorkStreamState.PROCESSING, repo.getStream("other")!!.state)
+        assertEquals(ActionResult.Success(0), actions.resumeAllTimers("p"))
+        clock.current = start.plusSeconds(3600)
+        assertEquals(ActionResult.Success(1), actions.resumeTimersForOrganize("p"))
+        assertEquals(WorkStreamState.PROCESSING, repo.getStream("active")!!.state)
+        assertEquals(WorkStreamState.PAUSED, repo.getStream("manual")!!.state)
+        assertEquals(WorkStreamState.PROCESSING, repo.getStream("other")!!.state)
+        assertEquals(60L, ExternalTiming.seconds(repo.getStream("active")!!, clock.current))
+        assertEquals(ActionResult.Success(0), actions.resumeTimersForOrganize("p"))
+    }
+
+    @Test fun organizeDoesNotPartiallyResumeWhenAnotherProjectOwnsHumanFocus() = runTest {
+        fun stream(id: String, project: String) = WorkStream(id, id, projectId = project,
+            state = WorkStreamState.READY, createdAt = start, updatedAt = start)
+        val repo = InMemoryWorkStreamRepository(listOf(stream("p-human", "p"), stream("q-human", "q")))
+        val actions = DefaultVirlinActions(repo, FakeClock(start), SequentialIdProvider())
+        actions.focusStream("p-human")
+        assertEquals(ActionResult.Success(1), actions.pauseTimersForOrganize("p"))
+        actions.focusStream("q-human")
+        assertEquals(ActionResult.Rejected(DomainError.AnotherTaskIsExecuting),
+            actions.resumeTimersForOrganize("p"))
+        assertEquals(WorkStreamState.PAUSED, repo.getStream("p-human")!!.state)
+        assertEquals(WorkStreamState.FOCUS, repo.getStream("q-human")!!.state)
+    }
+
     @Test fun scopesNestedAndLegacyTimersAndLeavesOtherProjectUntouched() = runTest {
         fun stream(id: String, project: String) = WorkStream(id, id, projectId = project,
             state = WorkStreamState.READY, createdAt = start, updatedAt = start)

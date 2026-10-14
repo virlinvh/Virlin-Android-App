@@ -179,6 +179,10 @@ interface VirlinActions {
     /** Pause every live human/external timer atomically, preserving recorded history. */
     suspend fun pauseAllTimers(projectId: String? = null): ActionResult<Int>
     suspend fun resumeAllTimers(projectId: String? = null): ActionResult<Int>
+    /** Temporarily pause only live timers in this project for map structure edits. */
+    suspend fun pauseTimersForOrganize(projectId: String): ActionResult<Int>
+    /** Resume only timers paused by Organize, never manually/master-paused timers. */
+    suspend fun resumeTimersForOrganize(projectId: String): ActionResult<Int>
     suspend fun pauseExternalTracking(streamId: String, returnAt: Instant? = null): ActionResult<WorkStream>
     suspend fun resumeExternalTracking(streamId: String, checkAt: Instant? = null): ActionResult<WorkStream>
 
@@ -456,6 +460,7 @@ interface VirlinActions {
     ): ActionResult<Int>
 
     suspend fun addStep(taskId: String, text: String): ActionResult<com.virlin.app.domain.model.TaskStep>
+    suspend fun bulkAddSteps(taskId: String, names: List<String>): ActionResult<List<com.virlin.app.domain.model.TaskStep>>
     suspend fun setStepDone(stepId: String, done: Boolean): ActionResult<com.virlin.app.domain.model.TaskStep>
     suspend fun editStep(stepId: String, text: String): ActionResult<com.virlin.app.domain.model.TaskStep>
     suspend fun deleteStep(stepId: String): ActionResult<String>

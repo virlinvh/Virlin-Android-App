@@ -41,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -55,6 +56,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.virlin.app.domain.attention.AttentionTiming
+import com.virlin.app.domain.attention.PriorityPreference
+import com.virlin.app.domain.attention.PriorityScope
 import com.virlin.app.model.WorkStream
 import com.virlin.app.ui.theme.Charcoal
 import com.virlin.app.ui.theme.CharcoalMuted
@@ -66,7 +69,7 @@ import java.time.Instant
  * Both halves of the card's `[ #n | CHECK → ]` pill open THIS sheet; they differ only in which tab
  * is selected on entry. Inside, the user moves freely between:
  *
- *  - **Priority** — draft queue positions, applied on confirmation through the existing
+ *  - **Priority** — available queue positions apply immediately through the existing
  *    `reorderNeedsYou` path. The sheet deliberately stays open afterwards so a priority change and
  *    a check decision are one visit. Durable policies (Phase 04/07) remain available through the
  *    existing priority editor, one row below the positions.
@@ -81,6 +84,7 @@ enum class NeedsYouControlTab { PRIORITY, CHECK }
 
 /** What the Check tab can offer. Each one maps to an existing action — see `NowScreen` wiring. */
 sealed interface NeedsYouControlAction {
+    data object Complete : NeedsYouControlAction
     /** CHECK → FOCUS: the result is ready (or the return is due) and the human looks now. */
     data object FocusNow : NeedsYouControlAction
     /** CHECK → PROCESSING: the external process is still running; look again in [minutes]. */
@@ -108,15 +112,35 @@ fun NeedsYouControlSheet(
     initialTab: NeedsYouControlTab,
     /** Confirmed move through the existing queue path. */
     onMoveToPosition: (Int) -> Unit,
-    /** Opens the existing priority editor for durable policies (Always / this term / until…). */
-    onOpenPriorityPolicy: () -> Unit = {},
+    existingPreference: PriorityPreference? = null,
+    onSavePreference: (Int, PriorityScope, (Boolean) -> Unit) -> Unit = { _, _, done -> done(false) },
+    onRemovePreference: (() -> Unit)? = null,
     onAction: (NeedsYouControlAction) -> Unit,
     onDismiss: () -> Unit
 ) {
     // Transient UI state: which tab is showing. Survives recomposition, not a new open.
     var tab by rememberSaveable(stream?.id, initialTab) { mutableStateOf(initialTab) }
-    var draftPosition by rememberSaveable(stream?.id) { mutableStateOf(position) }
+    var pendingPosition by remember { mutableStateOf<Int?>(null) }
+    var saved by remember { mutableStateOf(false) }
+    var moveFailed by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(position, total, pendingPosition) {
+        if (pendingPosition != null && position == pendingPosition?.coerceAtMost(total.coerceAtLeast(1))) {
+            pendingPosition = null; moveFailed = false; saved = true
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(saved) {
+        if (saved) { kotlinx.coroutines.delay(1600); saved = false }
+    }
+    androidx.compose.runtime.LaunchedEffect(pendingPosition) {
+        // Re-enable retry if the queue rejects a stale request; never fabricate success.
+        if (pendingPosition != null) {
+            kotlinx.coroutines.delay(5000)
+            if (pendingPosition != null) { pendingPosition = null; moveFailed = true }
+        }
+    }
     val v = NeedsYouPriority.visualsFor(position)
+    val optionsScroll = rememberScrollState()
+    androidx.compose.runtime.LaunchedEffect(tab) { optionsScroll.scrollTo(0) }
     val entrance = remember { androidx.compose.animation.core.Animatable(0f) }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         entrance.animateTo(1f, androidx.compose.animation.core.tween(280,
@@ -134,6 +158,7 @@ fun NeedsYouControlSheet(
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .28f * entrance.value))
         .pointerInput(onDismiss) { detectTapGestures { onDismiss() } }, contentAlignment = Alignment.BottomCenter) {
     Surface(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).widthIn(max = 560.dp).fillMaxWidth()
+        // One responsive shell for both tabs; only the contents change, never its bounds.
         .height(minOf(520.dp, (maxHeight - 16.dp).coerceAtLeast(48.dp)))
         .then(Modifier.graphicsLayer {
             alpha = entrance.value
@@ -145,10 +170,9 @@ fun NeedsYouControlSheet(
         Column(
             Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
-                .padding(top = 20.dp, bottom = 16.dp)
+                .padding(top = 20.dp, bottom = 10.dp)
+                .testTag(NeedsYouControlHeaderTag)
         ) {
             if (stream == null) {
                 Text("This activity is no longer waiting", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Charcoal)
@@ -222,119 +246,247 @@ fun NeedsYouControlSheet(
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
-            Crossfade(targetState = tab, label = "ny_control_tab") { current ->
+        }
+        // Only the choices scroll. White edge gradients soften both clipping boundaries.
+        if (stream != null) Box(Modifier.fillMaxWidth().weight(1f).testTag(NeedsYouControlOptionsTag)) {
+            Column(Modifier.fillMaxSize().verticalScroll(optionsScroll)
+                .padding(horizontal = 20.dp).padding(top = 14.dp, bottom = 24.dp)) {
+            Crossfade(targetState = tab, animationSpec = androidx.compose.animation.core.tween(180), label = "ny_control_tab") { current ->
                 when (current) {
-                    NeedsYouControlTab.PRIORITY -> PriorityTab(draftPosition, total, v, { draftPosition = it }, onOpenPriorityPolicy)
+                    NeedsYouControlTab.PRIORITY -> Column {
+                        PriorityTab(position, total, v, pendingPosition != null, { requested ->
+                            if (position != null && pendingPosition == null) {
+                                val target = requested.coerceIn(1, total.coerceAtLeast(1))
+                                if (target != position) {
+                                    saved = false; moveFailed = false; pendingPosition = target
+                                    onMoveToPosition(target)
+                                }
+                            }
+                        }, existingPreference, onSavePreference, onRemovePreference)
+                        if (pendingPosition != null) Text("Updating position…", color = CharcoalMuted,
+                            fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp).testTag("needs_you_position_pending"))
+                        if (moveFailed) Text("Could not update the position. Tap a position to try again.",
+                            color = Color(0xFFB54335), fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 8.dp).testTag("needs_you_position_error"))
+                        androidx.compose.animation.AnimatedVisibility(saved, enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut()) {
+                            Text("✓ Position updated", color = Color(0xFF07533E), fontSize = 12.sp,
+                                modifier = Modifier.padding(top = 8.dp).background(Color(0xFFE6F7EE), RoundedCornerShape(50))
+                                    .padding(horizontal = 14.dp, vertical = 8.dp).testTag("needs_you_position_saved"))
+                        }
+                    }
                     NeedsYouControlTab.CHECK -> CheckTab(kind, onAction)
                 }
             }
-        }
-        if (stream != null && tab == NeedsYouControlTab.PRIORITY) {
-            HorizontalDivider()
-            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(onClick = onDismiss, colors = ButtonDefaults.outlinedButtonColors(contentColor = CharcoalMuted), modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Cancel") }
-                Button(onClick = { draftPosition?.let(onMoveToPosition); onDismiss() },
-                    enabled = (draftPosition ?: 0) > 0 && draftPosition != position && position != null,
-                    colors = ButtonDefaults.buttonColors(containerColor = v.accent, contentColor = v.onAccent),
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("needs_you_apply_position")) { Text("Apply position") }
             }
+            Box(Modifier.fillMaxWidth().height(16.dp).align(Alignment.TopCenter)
+                .background(Brush.verticalGradient(listOf(Color.White, Color.White.copy(alpha = 0f)))))
+            Box(Modifier.fillMaxWidth().height(24.dp).align(Alignment.BottomCenter)
+                .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0f), Color.White))))
         }
         }
         }
     }
 }
 
-/** Seven quick positions plus validated custom input; callbacks update only the sheet draft. */
+/** Valid queue positions apply on tap; custom positions require a valid number and one Apply. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PriorityTab(
     position: Int?,
     total: Int,
     v: PriorityVisuals,
+    updating: Boolean,
     onMoveToPosition: (Int) -> Unit,
-    onOpenPriorityPolicy: () -> Unit
+    existingPreference: PriorityPreference?,
+    onSavePreference: (Int, PriorityScope, (Boolean) -> Unit) -> Unit,
+    onRemovePreference: (() -> Unit)?
 ) {
-    var selectionMade by rememberSaveable { mutableStateOf(false) }
     var custom by rememberSaveable { mutableStateOf((position ?: 1) > 8) }
     var customText by rememberSaveable { mutableStateOf(if ((position ?: 1) > 8) position.toString() else "") }
+    var policy by rememberSaveable { mutableStateOf("none") }
+    var returnsText by rememberSaveable { mutableStateOf("10") }
+    var policyStatus by remember { mutableStateOf("") }
+    var policySaving by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(existingPreference) {
+        policy = when (val scope = existingPreference?.scope) {
+            PriorityScope.Always -> "always"
+            is PriorityScope.NextReturns -> {
+                returnsText = scope.remaining.toString()
+                if (scope.remaining == 10) "ten" else "returns"
+            }
+            else -> "none"
+        }
+    }
     Column {
         Text("Choose position", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Charcoal)
-        Text("Set where this task appears in Needs You.", fontSize = 12.5.sp, color = CharcoalMuted)
+        Text("Tap a position to move this task in Needs You.", fontSize = 12.5.sp, color = CharcoalMuted)
         Spacer(Modifier.height(10.dp))
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val tileWidth = (maxWidth - 16.dp) / 3 - 1.dp
+        val tileWidth = (maxWidth - 24.dp) / 4 - 1.dp
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        (1..8).forEach { p ->
+        (1..7).forEach { p ->
             val current = p == position && !custom
+            val available = p <= total
             val rank = NeedsYouPriority.visualsFor(p)
             Column(
                 modifier = Modifier
                     .width(tileWidth)
                     .height(48.dp)
-                    .background(if (current) v.surface else Color.White, RoundedCornerShape(12.dp))
+                    .background(if (current) v.surface else if (available) Color.White else Color(0xFFF5F6F7), RoundedCornerShape(12.dp))
                     .border(1.dp, if (current) v.border else Color(0xFFECEEF1), RoundedCornerShape(12.dp))
                     .testTag(priorityPositionTag(p))
-                    .clickable(role = Role.RadioButton) { selectionMade = true; custom = false; onMoveToPosition(p) }
+                    .clickable(enabled = available && !updating, role = Role.RadioButton) {
+                        custom = false; onMoveToPosition(p)
+                    }
                     .semantics {
                         selected = current
                         contentDescription =
-                            if (current) "Current position $p, ${ordinal(p)}." else "Move to position $p, ${ordinal(p)}."
+                            if (current) "Current position $p, ${ordinal(p)}."
+                            else if (!available) "Position $p unavailable; $total items in Needs You."
+                            else "Move to position $p, ${ordinal(p)}."
                     }
                     .padding(horizontal = 4.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
                 , verticalArrangement = Arrangement.Center
             ) {
-                Text("$p · ${ordinal(p)}", fontSize = 12.sp, fontWeight = if (current) FontWeight.Bold else FontWeight.Medium,
-                    color = if (current) NeedsYouPriority.readableInk(v) else Charcoal)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.size(17.dp).background(if (available) rank.accent else Color(0xFFD5D9DC), CircleShape),
+                        contentAlignment = Alignment.Center) {
+                        Text("$p", fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                            color = if (available) rank.onAccent else CharcoalMuted)
+                    }
+                    Text(ordinal(p), fontSize = 10.sp,
+                        fontWeight = if (current) FontWeight.Bold else FontWeight.Medium,
+                        color = if (available) Charcoal else CharcoalMuted, maxLines = 1)
+                }
 
             }
         }
-        Column(Modifier.width(tileWidth).height(60.dp)
+        Column(Modifier.width(tileWidth).height(48.dp)
             .background(if (custom) v.surface else Color.White, RoundedCornerShape(12.dp))
             .border(1.dp, if (custom) v.border else Color(0xFFECEEF1), RoundedCornerShape(12.dp))
-            .testTag("needs_you_custom_position").clickable(role = Role.RadioButton) {
-                selectionMade = true; custom = true; onMoveToPosition(validPriorityPosition(customText) ?: 0)
+            .testTag("needs_you_custom_position").clickable(enabled = !updating, role = Role.RadioButton) {
+                custom = true
             }.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             if (!custom) Text("Custom", fontSize = 12.sp, color = Charcoal)
-            else {
-            BasicTextField(customText, { input ->
-                customText = input
-                onMoveToPosition(validPriorityPosition(input) ?: 0)
-            }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                textStyle = TextStyle(color = Charcoal, fontSize = 20.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center),
-                decorationBox = { inner -> Box(contentAlignment = Alignment.Center) {
-                    inner()
-                } },
-                modifier = Modifier.fillMaxWidth().height(28.dp).testTag("needs_you_custom_position_input")
-                    .semantics { contentDescription = "Custom position, positive whole number" })
-            }
+            else Text("Custom ✎", fontSize = 12.sp, color = Charcoal)
         }
+        }
+        if (custom) {
+            Text("Custom position · 1 to $total", fontSize = 11.sp, color = CharcoalMuted,
+                modifier = Modifier.padding(top = 10.dp))
+            BasicTextField(customText, { customText = it.filter(Char::isDigit).take(4) }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle = TextStyle(color = Charcoal, fontSize = 17.sp),
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                .background(Color(0xFFF5F6F7), RoundedCornerShape(12.dp))
+                .padding(14.dp).testTag("needs_you_custom_position_input")
+                .semantics { contentDescription = "Custom position, 1 to $total" })
         }
         }
         if (custom && customText.isNotEmpty() && validPriorityPosition(customText) == null) {
             Text("Enter a valid positive whole number.",
                 fontSize = 11.sp, color = CharcoalMuted, modifier = Modifier.padding(top = 8.dp))
         }
+        if (custom) {
+            val target = validPriorityPosition(customText)?.takeIf { it in 1..total }
+            Text(
+                if (target == null) "Enter a position from 1 to $total" else "Move to $target",
+                fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                color = if (target == null) CharcoalMuted else Color(0xFF07533E),
+                modifier = Modifier.padding(top = 8.dp).heightIn(min = 44.dp)
+                    .testTag("needs_you_apply_position")
+                    .clickable(enabled = target != null && target != position && !updating, role = Role.Button) {
+                        if (target != null) onMoveToPosition(target)
+                    }
+                    .padding(vertical = 12.dp)
+            )
+        }
         Spacer(Modifier.height(8.dp))
-        if (selectionMade && (position ?: 0) > 0) Text(
-            "Remember this priority…", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CharcoalMuted,
-            modifier = Modifier
-                .heightIn(min = 44.dp)
-                .testTag(NeedsYouControlPolicyTag)
-                .clickable(role = Role.Button, onClick = onOpenPriorityPolicy)
-                .semantics { contentDescription = "Remember this priority. Choose how long it applies." }
-                .padding(vertical = 13.dp)
-        )
+        Spacer(Modifier.height(16.dp))
+        Text("Keep this position", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Charcoal)
+        Text("Choose what happens when this same task returns to Needs You.", fontSize = 12.sp, color = CharcoalMuted)
+        listOf(
+            Triple("once", "This time only", "Move now; do not remember it"),
+            Triple("always", "Always for this task", "Place it here whenever it returns"),
+            Triple("ten", "Next 10 returns", "Use this position for the next 10 returns"),
+            Triple("returns", "Custom number of returns", "Choose how many times to reuse it")
+        ).forEach { (choice, label, hint) ->
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp)
+                .background(if (policy == choice) v.surface else Color(0xFFF8F9F9), RoundedCornerShape(12.dp))
+                .border(1.dp, if (policy == choice) v.border else Color(0xFFE7EAEC), RoundedCornerShape(12.dp))
+                .testTag("needs_you_policy_$choice")
+                .clickable(role = Role.RadioButton) { policy = choice; policyStatus = "Not saved" }
+                .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (policy == choice) "◉" else "○", color = v.accent, fontSize = 20.sp)
+                Spacer(Modifier.width(10.dp))
+                Column { Text(label, color = Charcoal, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(hint, color = CharcoalMuted, fontSize = 11.sp) }
+            }
+        }
+        if (policy == "returns") {
+            Text("Number of future returns · 1 to 9999", fontSize = 11.sp, color = CharcoalMuted,
+                modifier = Modifier.padding(top = 8.dp))
+            BasicTextField(returnsText,
+            { returnsText = it.filter(Char::isDigit).take(4); policyStatus = "Not saved" }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle = TextStyle(color = Charcoal, fontSize = 16.sp),
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                .background(Color(0xFFF5F6F7), RoundedCornerShape(12.dp))
+                .padding(14.dp).testTag("needs_you_policy_returns_input"))
+        }
+        val scope = when (policy) {
+            "once" -> PriorityScope.OneTime
+            "always" -> PriorityScope.Always
+            "ten" -> PriorityScope.NextReturns(10)
+            "returns" -> returnsText.toIntOrNull()?.takeIf { it in 1..9999 }?.let(PriorityScope::NextReturns)
+            else -> null
+        }
+        if (policy != "none" || existingPreference != null) {
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (policySaving) "Saving…" else if (policyStatus.isNotEmpty()) policyStatus
+                    else if (existingPreference != null) "Saved for this task" else "Not saved",
+                    modifier = Modifier.weight(1f).testTag("needs_you_policy_status"), color = CharcoalMuted, fontSize = 12.sp)
+                if (policyStatus == "Not saved") Text("Don't save", color = CharcoalMuted,
+                    fontSize = 12.sp, modifier = Modifier.testTag("needs_you_policy_discard")
+                        .clickable(role = Role.Button) {
+                            policy = when (val savedScope = existingPreference?.scope) {
+                                PriorityScope.Always -> "always"
+                                is PriorityScope.NextReturns -> {
+                                    returnsText = savedScope.remaining.toString()
+                                    if (savedScope.remaining == 10) "ten" else "returns"
+                                }
+                                else -> "none"
+                            }
+                            policyStatus = ""
+                        }.padding(12.dp))
+                Text("Save", color = if (scope != null && !policySaving) v.accent else CharcoalMuted,
+                    fontWeight = FontWeight.Bold, modifier = Modifier.testTag("needs_you_policy_save")
+                        .clickable(enabled = scope != null && !policySaving && position != null, role = Role.Button) {
+                            if (scope != null && position != null) {
+                                policySaving = true
+                                onSavePreference(position, scope) { ok ->
+                                    policySaving = false
+                                    policyStatus = if (!ok) "Could not save. Try again."
+                                        else if (scope == PriorityScope.OneTime) "✓ Applied once" else "✓ Saved"
+                                }
+                            }
+                        }.padding(12.dp))
+            }
+            if (existingPreference != null && onRemovePreference != null) Text("Remove saved rule",
+                color = CharcoalMuted, fontSize = 12.sp,
+                modifier = Modifier.testTag("needs_you_policy_remove")
+                    .clickable(role = Role.Button) { onRemovePreference(); policy = "none"; policyStatus = "Rule removed" }
+                    .padding(vertical = 12.dp))
+        }
     }
 }
 
 /**
  * CHECK: only the transitions the domain already allows out of this item's state
  * (`WorkStreamTransitions`: CHECK → FOCUS · PROCESSING · SNOOZED · READY · BLOCKED).
- * There is deliberately no "Mark as done" here — CHECK → DONE is not a legal transition; the work
- * is completed from Current Focus after FOCUS NOW.
+ * Completion uses the existing task completion intent, without starting human focus.
  */
 @Composable
 private fun CheckTab(kind: AttentionKind?, onAction: (NeedsYouControlAction) -> Unit) {
@@ -388,6 +540,14 @@ private fun CheckTab(kind: AttentionKind?, onAction: (NeedsYouControlAction) -> 
             subtitle = "Keep it available, stop asking",
             chevron = false
         ) { onAction(NeedsYouControlAction.NotNow) }
+
+        if (external) ActionRow(
+            tag = "needs_you_control_complete",
+            icon = "✓",
+            title = "Completed",
+            subtitle = "Mark this work as done",
+            chevron = false
+        ) { onAction(NeedsYouControlAction.Complete) }
 
         ActionRow(
             tag = NeedsYouControlBlockTag,
@@ -537,6 +697,8 @@ internal fun validPriorityPosition(input: String): Int? =
     input.takeIf { it.isNotEmpty() && it.all { c -> c in '0'..'9' } }?.toIntOrNull()?.takeIf { it > 0 }
 
 const val NeedsYouControlSheetTag = "needs_you_control_sheet"
+const val NeedsYouControlHeaderTag = "needs_you_control_header"
+const val NeedsYouControlOptionsTag = "needs_you_control_options"
 const val NeedsYouControlPriorityTabTag = "needs_you_control_tab_priority"
 const val NeedsYouControlCheckTabTag = "needs_you_control_tab_check"
 const val NeedsYouControlTimerTag = "needs_you_control_timer"

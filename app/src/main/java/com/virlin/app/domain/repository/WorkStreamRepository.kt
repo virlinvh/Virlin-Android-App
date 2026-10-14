@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
  * `withTransaction` later without changing any action.
  */
 interface WorkStreamRepository : CaptureRepository {
+    suspend fun externalRunIntervals(): List<com.virlin.app.domain.model.ExternalRunInterval> = emptyList()
     suspend fun pendingProjectDeletions(): List<com.virlin.app.domain.action.ProjectDeletion> = emptyList()
     /** Schema-v20 independent execution; legacy adapters can continue stream-only operation. */
     val taskExecutionEnabled: Boolean get() = false
@@ -37,6 +38,8 @@ interface WorkStreamRepository : CaptureRepository {
     suspend fun getOpenFocusSession(streamId: String): FocusSession?
     suspend fun getCurrentCycle(streamId: String): Cycle?
     suspend fun getLatestSnapshot(streamId: String): ContextSnapshot?
+    /** Project archive history; adapters without history retain their latest snapshot. */
+    suspend fun getSnapshots(streamId: String): List<ContextSnapshot> = listOfNotNull(getLatestSnapshot(streamId))
     suspend fun getEvents(streamId: String): List<WorkStreamEvent>
 
     /**

@@ -38,6 +38,20 @@ class KnowledgeNotesBridgeTest {
         assertNull(repo.getNoteDoc(CaptureNoteBridge.owner("bad")))
         assertTrue(repo.captures.value.isEmpty())
     }
+    @Test fun workstreamDraftKeepsItsExactOwner() = runTest {
+        val now = Instant.EPOCH
+        val repo = InMemoryWorkStreamRepository(
+            seed = listOf(WorkStream("ws", "Workstream", projectId = "p", state = WorkStreamState.READY,
+                createdAt = now, updatedAt = now)),
+            seedProjects = listOf(Project("p", "Project", createdAt = now, updatedAt = now)))
+        val actions = DefaultVirlinActions(repo, FakeClock(now), SequentialIdProvider())
+        val key = CaptureNoteBridge.draftWorkstreamOwner("p", "ws", "new-ws-note")
+        assertEquals("p", CaptureNoteBridge.draftProject(key))
+        assertEquals("ws", CaptureNoteBridge.draftWorkstream(key))
+        assertTrue(actions.saveNoteDoc(key, "Note", listOf(NoteDocBlock("a", text = "Workstream detail"))) is ActionResult.Success)
+        assertEquals("ws", repo.captures.value.single().workStreamId)
+        assertEquals("p", repo.captures.value.single().projectId)
+    }
     @Test fun legacyNotesImportWithoutMutatingAndPreserveExactOriginalOnFirstSave() = runTest {
         val (repo, actions) = setup()
         val source = listOf(NoteBlock("parent", NoteBlockType.TOGGLE, "Parent", collapsed = true,

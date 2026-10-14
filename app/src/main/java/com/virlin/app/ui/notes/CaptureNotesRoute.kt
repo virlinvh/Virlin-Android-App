@@ -16,6 +16,12 @@ fun NewKnowledgeNotesRoute(nav: NavController, projectId: String) {
 }
 
 @Composable
+fun NewWorkstreamNotesRoute(nav: NavController, projectId: String, workStreamId: String) {
+    val id = rememberSaveable(projectId, workStreamId) { VirlinGraph.ids.newId("cap") }
+    NotesRoute(nav, CaptureNoteBridge.draftWorkstreamOwner(projectId, workStreamId, id), "New note")
+}
+
+@Composable
 fun CaptureNotesRoute(nav: NavController, captureId: String) {
     NotesRoute(nav, CaptureNoteBridge.owner(captureId), "Note")
 }

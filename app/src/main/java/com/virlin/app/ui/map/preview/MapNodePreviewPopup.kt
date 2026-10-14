@@ -10,6 +10,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,22 +19,26 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.LayersClear
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,6 +52,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -70,16 +77,26 @@ const val MapPreviewSaveTag = "map_preview_save"
 const val MapPreviewCancelTag = "map_preview_cancel"
 const val MapPreviewClearTag = "map_preview_clear"
 const val MapPreviewCloseTag = "map_preview_close"
+const val MapPreviewEditNameTag = "map_preview_edit_name"
+const val MapPreviewNameFieldTag = "map_preview_name_field"
 const val MapPreviewAddImageTag = "map_preview_add_image"
 const val MapPreviewReplaceTag = "map_preview_replace"
 const val MapPreviewDeleteImageTag = "map_preview_delete_image"
 fun mapPreviewMarkTag(mark: FormatMark) = "map_preview_mark_${mark.name.lowercase()}"
 fun mapPreviewThumbTag(index: Int) = "map_preview_thumb_$index"
 
-private val Emerald = Color(0xFF0E7A54)
-private val PaleMint = Color(0xFFDCF0E6)
-private val Ink = Color(0xFF192229)
-private val Muted = Color(0xFF637283)
+private val Emerald: Color
+    @Composable get() = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+        ?.let { Color(it.secondary) } ?: Color(0xFF0E7A54)
+private val PaleMint: Color
+    @Composable get() = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+        ?.let { Color(it.tertiary) } ?: Color(0xFFDCF0E6)
+private val Ink: Color
+    @Composable get() = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+        ?.let { Color(it.text) } ?: Color(0xFF192229)
+private val Muted: Color
+    @Composable get() = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+        ?.let { Color(it.muted) } ?: Color(0xFF637283)
 private val MutedRed = Color(0xFFB4504C)
 
 /**
@@ -104,10 +121,15 @@ fun MapNodePreviewPopup(
     onReplaceImage: () -> Unit,
     onRequestClear: () -> Unit,
     onCancel: () -> Unit,
-    onSave: () -> Unit,
+    onSave: (String) -> Unit,
+    savingName: Boolean = false,
     imageLoader: @Composable (MapPreviewImage, Modifier) -> Unit,
 ) {
-    BackHandler(onBack = onCancel)
+    var editingName by remember(nodeTitle) { mutableStateOf(false) }
+    var name by remember(nodeTitle) { mutableStateOf(nodeTitle) }
+    val saving = draft.saving || savingName
+    val dismiss = { if (!saving) onCancel() }
+    BackHandler(onBack = dismiss)
     val appear by animateFloatAsState(
         targetValue = 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow),
@@ -122,14 +144,19 @@ fun MapNodePreviewPopup(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = onCancel,
+                onClick = dismiss,
             ),
         contentAlignment = Alignment.Center,
     ) {
+        BoxWithConstraints(
+            Modifier.fillMaxSize().imePadding().padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
+                .heightIn(max = maxHeight)
                 .testTag(MapPreviewPopupTag)
                 // Consumes clicks so a tap inside the card never reaches the dismissing scrim.
                 .clickable(
@@ -142,14 +169,18 @@ fun MapNodePreviewPopup(
             shadowElevation = 16.dp,
         ) {
             Column(Modifier.padding(20.dp)) {
-                Header(nodeTitle, draft.hasContent, onRequestClear, onCancel)
-                Spacer(Modifier.height(14.dp))
-                DescriptionEditor(draft, onDraftChange)
-                Spacer(Modifier.height(16.dp))
-                ImageEditor(draft, onDraftChange, onPickImage, onReplaceImage, imageLoader)
+                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                    Header(name, editingName, { name = it }, { editingName = true },
+                        draft.hasContent, onRequestClear, dismiss)
+                    Spacer(Modifier.height(14.dp))
+                    DescriptionEditor(draft, onDraftChange)
+                    Spacer(Modifier.height(16.dp))
+                    ImageEditor(draft, onDraftChange, onPickImage, onReplaceImage, imageLoader)
+                }
                 Spacer(Modifier.height(18.dp))
-                Footer(draft.saving, onCancel, onSave)
+                Footer(saving, name.isNotBlank(), dismiss) { onSave(name.trim()) }
             }
+        }
         }
     }
 }
@@ -157,38 +188,62 @@ fun MapNodePreviewPopup(
 @Composable
 private fun Header(
     nodeTitle: String,
+    editingName: Boolean,
+    onNameChange: (String) -> Unit,
+    onEditName: () -> Unit,
     hasContent: Boolean,
     onRequestClear: () -> Unit,
     onClose: () -> Unit,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("Preview details", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = Ink)
-            // The node stays identified, so the card can never be mistaken for a global setting.
-            Text(nodeTitle, fontSize = 12.sp, color = Muted, maxLines = 1)
-        }
-        if (hasContent) {
+    val focusRequester = remember { FocusRequester() }
+    androidx.compose.runtime.LaunchedEffect(editingName) {
+        if (editingName) focusRequester.requestFocus()
+    }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Preview details", modifier = Modifier.weight(1f), fontSize = 19.sp,
+                fontWeight = FontWeight.SemiBold, color = Ink)
+            if (hasContent) {
+                IconOnly(
+                    // Clearing the preview and closing the editor must not share a glyph.
+                    icon = Icons.Outlined.LayersClear,
+                    description = "Clear this preview's description and images",
+                    tag = MapPreviewClearTag,
+                    tint = Muted,
+                    background = Color(0xFFF1F3F2),
+                    onClick = onRequestClear,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
             IconOnly(
-                // Deliberately NOT another X: clearing the preview and closing the editor are
-                // different actions and must not share a glyph.
-                icon = Icons.Outlined.LayersClear,
-                // Distinct from "Close" and from deleting the task: it empties the preview only.
-                description = "Clear this preview's description and images",
-                tag = MapPreviewClearTag,
-                tint = Muted,
+                icon = Icons.Outlined.Close,
+                description = "Close preview editor without saving",
+                tag = MapPreviewCloseTag,
+                tint = Ink,
                 background = Color(0xFFF1F3F2),
-                onClick = onRequestClear,
+                onClick = onClose,
             )
-            Spacer(Modifier.width(8.dp))
         }
-        IconOnly(
-            icon = Icons.Outlined.Close,
-            description = "Close preview editor without saving",
-            tag = MapPreviewCloseTag,
-            tint = Ink,
-            background = Color(0xFFF1F3F2),
-            onClick = onClose,
-        )
+        Spacer(Modifier.height(4.dp))
+        // Editing gets the full card width, even on narrow phones.
+        if (editingName) OutlinedTextField(
+            value = nodeTitle, onValueChange = onNameChange,
+            singleLine = true, label = { Text("Name") },
+            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
+                .testTag(MapPreviewNameFieldTag),
+        ) else Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(nodeTitle, modifier = Modifier.weight(1f, fill = false),
+                fontSize = 14.sp, color = Muted, maxLines = 2)
+            Spacer(Modifier.width(8.dp))
+            IconOnly(
+                icon = Icons.Outlined.Edit,
+                description = "Edit ${nodeTitle} name",
+                tag = MapPreviewEditNameTag,
+                tint = Emerald,
+                background = Color(0xFFF1F3F2),
+                onClick = onEditName,
+            )
+        }
     }
 }
 
@@ -363,7 +418,7 @@ private fun ImageEditor(
 }
 
 @Composable
-private fun Footer(saving: Boolean, onCancel: () -> Unit, onSave: () -> Unit) {
+private fun Footer(saving: Boolean, validName: Boolean, onCancel: () -> Unit, onSave: () -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         TextButton(
             onClick = onCancel,
@@ -371,9 +426,10 @@ private fun Footer(saving: Boolean, onCancel: () -> Unit, onSave: () -> Unit) {
         ) { Text("Cancel", color = Ink) }
         Button(
             onClick = onSave,
-            enabled = !saving,
+            enabled = !saving && validName,
             modifier = Modifier.weight(1f).height(48.dp).testTag(MapPreviewSaveTag),
-            colors = ButtonDefaults.buttonColors(containerColor = Emerald),
+            colors = ButtonDefaults.buttonColors(containerColor = Emerald,
+                contentColor = com.virlin.app.ui.hierarchy.readableOn(Emerald)),
             shape = RoundedCornerShape(14.dp),
         ) { Text("Save") }
     }

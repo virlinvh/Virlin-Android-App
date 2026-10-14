@@ -78,11 +78,12 @@ fun ProjectIconEditorSheet(
     onRemoveCustom: () -> Unit,
     onUseAuto: () -> Unit,
     onDismiss: () -> Unit,
-    keepFooterVisible: Boolean = false
+    keepFooterVisible: Boolean = false,
+    inline: Boolean = false
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var error by remember { mutableStateOf<String?>(null) }
-    val picker = rememberProjectImagePicker(project.id, onImported = { error = null; onCustomImported(it) }, onError = { error = it })
+    val picker = rememberProjectImagePicker(project.id, onImported = { error = null; onCustomImported(it) }, onError = { error = it }, preserveExisting = inline)
     val selection = ProjectIconSelection.of(project)
     val hairline = VirlinColors.TextPrimary.copy(alpha = 0.08f)
     val palette = rememberProjectPalette(project.id)
@@ -97,7 +98,7 @@ fun ProjectIconEditorSheet(
                 .padding(bottom = 20.dp)
                 .testTag(ProjectIconEditorTestTag)
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (!inline) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Project icon", fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
                     color = VirlinColors.TextPrimary, modifier = Modifier.weight(1f))
                 TextButton(onClick = onDismiss) { Text("Done", color = accent) }
@@ -173,7 +174,9 @@ fun ProjectIconEditorSheet(
             )
         }
     }
-    if (keepFooterVisible) {
+    if (inline) {
+        content()
+    } else if (keepFooterVisible) {
         BackHandler(onBack = onDismiss)
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .28f)), contentAlignment = Alignment.Center) {
             Surface(Modifier.padding(16.dp).fillMaxWidth().heightIn(max = (maxHeight - 32.dp).coerceAtLeast(48.dp)),

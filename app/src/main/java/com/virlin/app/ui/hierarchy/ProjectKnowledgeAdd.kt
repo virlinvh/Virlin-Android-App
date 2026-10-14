@@ -7,8 +7,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -25,64 +33,56 @@ import kotlinx.coroutines.*
 
 /** Project-owned capture: never silently creates a task or discards the selected project. */
 @Composable
-internal fun ProjectKnowledgeAdd(projectId: String, title: String, nav: NavController, onDismiss: () -> Unit) {
+internal fun ProjectKnowledgeAdd(projectId: String, title: String, nav: NavController,
+    workStreamId: String? = null, onDismiss: () -> Unit) {
     DisposableEffect(Unit) {
         val owner = Any()
         KnowledgeOrbVisibility.enter(owner)
         onDispose { KnowledgeOrbVisibility.leave(owner) }
     }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val palette = rememberProjectPalette(projectId)
-    var choice by rememberSaveable(projectId) { mutableStateOf<MapAddKind?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) busy = false
-        if (uri != null) scope.launch {
-            busy = true
-            val id = VirlinGraph.ids.newId("att")
-            var saved = false
-            try {
-                val file = withContext(Dispatchers.IO) {
-                    com.virlin.app.data.attachment.AttachmentFileStore.importFromUri(context, uri, id)
-                }
-                require(file.sizeBytes > 0) { "The file is empty." }
-                withContext(NonCancellable) {
-                    val result = VirlinGraph.actions.createAttachment(file.displayName, file.mimeType,
-                        file.sizeBytes, file.relativePath, file.kind,
-                        context = CaptureContext(projectId = projectId), attachmentId = id)
-                    if (result !is ActionResult.Success) error("Could not save this file to the project.")
-                    saved = true
-                }
-                onDismiss()
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) { error = failure.message ?: "Import failed. Please try again." }
-            finally {
-                if (!saved) withContext(NonCancellable + Dispatchers.IO) {
-                    com.virlin.app.data.attachment.AttachmentFileStore.deleteAttachmentTree(context, id)
-                }
-                busy = false
-            }
+    var sheetVisible by remember { mutableStateOf(true) }
+    val entrance = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { entrance.animateTo(1f, tween(280, easing = FastOutSlowInEasing)) }
+    val dismissSheet = { if (!busy) sheetVisible = false }
+    LaunchedEffect(sheetVisible) {
+        if (!sheetVisible) {
+            kotlinx.coroutines.delay(230)
+            onDismiss()
         }
     }
     CompositionLocalProvider(LocalProjectPalette provides palette) {
         MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(
             primary = palette?.let { androidx.compose.ui.graphics.Color(it.secondary) } ?: MaterialTheme.colorScheme.primary)) {
-        if (choice == null) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .36f))) {
-            androidx.activity.compose.BackHandler { if (!busy) onDismiss() }
-            Box(Modifier.matchParentSize().clickable { if (!busy) onDismiss() })
-            Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
-                color = androidx.compose.ui.graphics.Color.White, shadowElevation = 8.dp) {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                MapAddPalette(title, knowledgeMode = true, onDismiss = { if (!busy) onDismiss() }, onChoose = { kind ->
+        Box(Modifier.fillMaxSize()) {
+            val scrimAlpha by androidx.compose.animation.core.animateFloatAsState(
+                if (sheetVisible) .36f else 0f, animationSpec = tween(230), label = "knowledge_scrim")
+            androidx.activity.compose.BackHandler { dismissSheet() }
+            Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = scrimAlpha))
+                .clickable { dismissSheet() })
+            AnimatedVisibility(visible = sheetVisible,
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .graphicsLayer { translationY = (1f - entrance.value) * size.height },
+                enter = fadeIn(tween(220)),
+                exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(220)) + fadeOut(tween(180))) {
+            Column {
+                MapAddPalette(title, knowledgeMode = true, onDismiss = dismissSheet,
+                    allowedKinds = if (workStreamId == null) MapAddKind.entries.toSet()
+                        else setOf(MapAddKind.TODO, MapAddKind.NOTE, MapAddKind.TASK, MapAddKind.LINK, MapAddKind.AUDIO),
+                    onChoose = { kind ->
                     if (!busy) {
                         error = null
                         when (kind) {
-                            MapAddKind.AUDIO -> choice = kind
+                            MapAddKind.AUDIO -> {
+                                nav.navigate(if (workStreamId == null) "voice_editor/new/project/${android.net.Uri.encode(projectId)}"
+                                    else "voice_editor/new/workstream/${android.net.Uri.encode(workStreamId)}")
+                                onDismiss()
+                            }
                             else -> {
-                                nav.navigate(projectKnowledgeEditorRoute(kind, projectId))
+                                nav.navigate(if (workStreamId == null) projectKnowledgeEditorRoute(kind, projectId)
+                                    else workstreamKnowledgeEditorRoute(kind, workStreamId))
                                 onDismiss()
                             }
                         }
@@ -91,28 +91,6 @@ internal fun ProjectKnowledgeAdd(projectId: String, title: String, nav: NavContr
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 error?.let { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
             }
-            }
-        }
-        choice?.let { kind ->
-            if (kind == MapAddKind.AUDIO) {
-                AlertDialog(onDismissRequest = { if (!busy) choice = null }, title = { Text("Add audio") },
-                    text = { Column {
-                        Text("Save audio in $title. Organize or attach it later.")
-                        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    } },
-                    confirmButton = { TextButton(enabled = !busy, onClick = {
-                        nav.navigate("voice_editor/new/project/${android.net.Uri.encode(projectId)}")
-                        onDismiss()
-                    }) { Text("Record audio") } },
-                    dismissButton = { Row {
-                        TextButton(enabled = !busy, onClick = { choice = null }) { Text("Back") }
-                        TextButton(enabled = !busy, onClick = {
-                            busy = true; error = null
-                            try { importer.launch(arrayOf("audio/*")) }
-                            catch (failure: Exception) { busy = false; error = "Could not open the file picker." }
-                        }) { Text("Import audio") }
-                    } })
             }
         }
         }
@@ -135,5 +113,17 @@ internal fun projectKnowledgeEditorRoute(kind: MapAddKind, projectId: String): S
         MapAddKind.PDF -> "pdf_workspace/new/project/$owner"
         MapAddKind.ATTACHMENT -> "attachment_workspace/project/$owner"
         else -> error("This option uses its file picker or audio editor, not a text route")
+    }
+}
+
+internal fun workstreamKnowledgeEditorRoute(kind: MapAddKind, workStreamId: String): String {
+    val owner = android.net.Uri.encode(workStreamId)
+    return when (kind) {
+        MapAddKind.NOTE -> "knowledge_note/new/workstream/$owner"
+        MapAddKind.TODO -> "knowledge_todo/new/workstream/$owner"
+        MapAddKind.TASK -> "prompt_editor/new/workstream/$owner"
+        MapAddKind.LINK -> "link_editor/new/workstream/$owner"
+        MapAddKind.AUDIO -> "voice_editor/new/workstream/$owner"
+        else -> error("This option is not available for a workstream")
     }
 }

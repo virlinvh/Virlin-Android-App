@@ -13,7 +13,7 @@ import kotlinx.coroutines.sync.withLock
 
 /** Reuse the checklist UI, but persist Knowledge checkboxes, never task_steps or map nodes. */
 @Composable
-fun KnowledgeTodoScreen(nav: NavController, projectId: String?, captureId: String?) {
+fun KnowledgeTodoScreen(nav: NavController, projectId: String?, captureId: String?, workStreamId: String? = null) {
     val scope = rememberCoroutineScope()
     val projects by VirlinGraph.repository.projects.collectAsState()
     val captures by VirlinGraph.repository.captures.collectAsState()
@@ -54,7 +54,8 @@ fun KnowledgeTodoScreen(nav: NavController, projectId: String?, captureId: Strin
         val nextTitle = newTitle ?: title
         status = "Saving…"
         val result = if (persisted) VirlinGraph.actions.saveTextNote(id, nextTitle, next)
-            else VirlinGraph.actions.createTextNote(nextTitle, next, CaptureContext(projectId = ownerId), captureId = id)
+            else VirlinGraph.actions.createTextNote(nextTitle, next,
+                CaptureContext(projectId = ownerId, workStreamId = workStreamId), captureId = id)
         if (result is ActionResult.Success) {
             undo = blocks
             blocks = result.value.blocks
@@ -74,9 +75,18 @@ fun KnowledgeTodoScreen(nav: NavController, projectId: String?, captureId: Strin
     VirlinTodoScreen(
         taskId = id, taskTitle = project.title, listTitle = title, saveLabel = status,
         items = blocks.filter { it.plainText.isNotBlank() }.mapIndexed { index, block -> TodoItemUi(block.id, block.plainText, block.checked, index) },
+        palette = com.virlin.app.ui.hierarchy.rememberProjectPalette(ownerId),
         canRenameList = true, footer = {},
         actions = TodoActions(
             onBack = { nav.popBackStack() },
+            onBulkImport = { names, complete -> scope.launch {
+                val accepted = withContext(Dispatchers.IO) {
+                    change { list -> list + names.map { name ->
+                        NoteBlock(VirlinGraph.ids.newId("blk"), NoteBlockType.CHECKBOX, plainText = name)
+                    } }
+                }
+                complete(accepted)
+            } },
             onRenameList = { name -> if (name.isNotBlank()) scope.launch(Dispatchers.IO) { change(name) { it } } },
             onAdd = { false }, // This host uses the non-blocking callback below.
             onAddAsync = { text, complete -> scope.launch {

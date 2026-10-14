@@ -87,7 +87,8 @@ object VirlinMappers {
         executionCheckAt = execution?.checkAt, executionReason = execution?.snoozeReason?.name,
         executionBlocker = execution?.blockerReason, executionCycleId = execution?.currentCycleId,
         executionCycleCount = execution?.cycleCount ?: 0,
-        executionActorId = execution?.actorId, executionTool = execution?.tool, executionInstruction = execution?.instruction
+        executionActorId = execution?.actorId, executionTool = execution?.tool, executionInstruction = execution?.instruction,
+        executionAttentionRank = execution?.attentionRank
     )
     fun TaskEntity.toDomain() = Task(
         id = id, title = title, description = description, projectId = projectId, workStreamId = workStreamId,
@@ -98,7 +99,8 @@ object VirlinMappers {
         execution = executionState?.let { com.virlin.app.domain.model.TaskExecution(
             WorkStreamState.valueOf(it), executionStartedAt, executionExternalSeconds, executionPaused,
             executionCheckAt, executionReason?.let(SnoozeReason::valueOf), executionBlocker,
-            executionCycleId, executionCycleCount, executionActorId, executionTool, executionInstruction) }
+            executionCycleId, executionCycleCount, executionActorId, executionTool, executionInstruction,
+            executionAttentionRank) }
     )
 
     fun CaptureItem.toEntity() = CaptureEntity(
@@ -225,10 +227,12 @@ object VirlinMappers {
             PriorityScope.Always -> "ALWAYS"
             PriorityScope.CurrentTerm -> "CURRENT_TERM"
             is PriorityScope.Until -> "UNTIL"
+            is PriorityScope.NextReturns -> "NEXT_RETURNS"
             PriorityScope.OneTime -> error("OneTime is transient and is never stored")
         },
         createdAt = createdAt,
-        expiresAt = (scope as? PriorityScope.Until)?.expiresAt
+        expiresAt = (scope as? PriorityScope.Until)?.expiresAt,
+        remainingReturns = (scope as? PriorityScope.NextReturns)?.remaining
     )
 
     /** Unknown/corrupt scope values read as null so a bad row can never crash attention. */
@@ -237,6 +241,7 @@ object VirlinMappers {
             "ALWAYS" -> PriorityScope.Always
             "CURRENT_TERM" -> PriorityScope.CurrentTerm
             "UNTIL" -> expiresAt?.let { PriorityScope.Until(it) }
+            "NEXT_RETURNS" -> remainingReturns?.takeIf { it > 0 }?.let { PriorityScope.NextReturns(it) }
             else -> null
         } ?: return null
         return PriorityPreference(streamId, preferredPosition, scope, createdAt)

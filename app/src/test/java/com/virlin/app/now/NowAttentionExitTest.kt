@@ -96,6 +96,7 @@ class NowAttentionExitTest {
     @Test fun checkDue_classified_andCheckDoesNotFocus() = runTest {
         clock.advance(Duration.ofSeconds(31))
         vm.checkDue("s4"); advanceUntilIdle()
+        assertNull(s("s4").processingStartedAt)
         assertEquals(AttentionKind.CHECK_DUE, NowPresentation.attention(repo.streams.value)["s4"])
         vm.openCheck("s4"); assertEquals(Chooser.CheckOutcome("s4"), vm.chooser.value)
         assertEquals("s1", repo.getActiveFocus()!!.id)                        // still Psychology

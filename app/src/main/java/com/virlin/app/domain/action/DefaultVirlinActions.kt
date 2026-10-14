@@ -302,6 +302,7 @@ class DefaultVirlinActions(
         projectId: String, tagIds: Set<String>, captureIds: Set<String>, taskIds: Set<String>
     ) = tagging.setTags(projectId, tagIds, captureIds, taskIds)
     override suspend fun addStep(taskId: String, text: String) = tagging.addStep(taskId, text)
+    override suspend fun bulkAddSteps(taskId: String, names: List<String>) = tagging.bulkAddSteps(taskId, names)
     override suspend fun setStepDone(stepId: String, done: Boolean) = tagging.setStepDone(stepId, done)
     override suspend fun editStep(stepId: String, text: String) = tagging.editStep(stepId, text)
     override suspend fun deleteStep(stepId: String) = tagging.deleteStep(stepId)
@@ -537,7 +538,15 @@ class DefaultVirlinActions(
         if (stream.state == PAUSED && !stream.externalTrackingPaused) return@run ActionResult.Rejected(DomainError.NotExternalExecution)
         requireTransition(stream, CHECK)?.let { return@run it }
         val now = clock.now()
-        val updated = stream.copy(state = CHECK, snoozedUntil = null, updatedAt = now)
+        val updated = stream.copy(
+            state = CHECK,
+            // A scheduled external window ends at checkAt even if Android delivers the alarm
+            // late. Needs You measures review waiting separately from that point onward.
+            externalTrackedSeconds = trackedExternalSeconds(stream, now),
+            processingStartedAt = null,
+            snoozedUntil = null,
+            updatedAt = now
+        )
         persist(updated)
         event(stream, EventType.CHECK_DUE, now, from = stream.state, to = CHECK, cycleId = stream.currentCycleId)
         // Phase 04 policy application: an item with an ACTIVE preference re-enters at its preferred
@@ -554,9 +563,13 @@ class DefaultVirlinActions(
             PROCESSING -> Unit // updating the check time in place is not a transition
             else -> requireTransition(stream, PROCESSING)?.let { return@run it }
         }
+        val startNewWindow = stream.state != PROCESSING ||
+            stream.checkAt?.let { !now.isBefore(it) } == true
         val updated = stream.copy(
             state = PROCESSING,
-            processingStartedAt = stream.processingStartedAt ?: now,
+            externalTrackedSeconds = if (startNewWindow) trackedExternalSeconds(stream, now)
+                else stream.externalTrackedSeconds,
+            processingStartedAt = if (startNewWindow) now else stream.processingStartedAt ?: now,
             checkAt = checkAt,
             snoozedUntil = null,
             updatedAt = now
@@ -686,7 +699,13 @@ class DefaultVirlinActions(
         ActionResult.Success(updated)
     }
 
-    override suspend fun pauseAllTimers(projectId: String?): ActionResult<Int> = try {
+    override suspend fun pauseAllTimers(projectId: String?): ActionResult<Int> =
+        pauseTimers(projectId, "All timers paused")
+
+    override suspend fun pauseTimersForOrganize(projectId: String): ActionResult<Int> =
+        pauseTimers(projectId, "Organize timers paused")
+
+    private suspend fun pauseTimers(projectId: String?, provenance: String): ActionResult<Int> = try {
         repository.transaction {
             val now = clock.now()
             val writer = if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this
@@ -710,7 +729,7 @@ class DefaultVirlinActions(
                     saveSnapshot(updated, now, PAUSED)
                     persist(updated)
                     event(item, EventType.PAUSED, now, from = item.state, to = PAUSED,
-                        detail = "All timers paused;remaining=${item.checkAt?.let { Duration.between(now, it).toMillis().coerceAtLeast(0) } ?: -1};reason=${item.snoozeReason?.name ?: "none"}")
+                        detail = "$provenance;remaining=${item.checkAt?.let { Duration.between(now, it).toMillis().coerceAtLeast(0) } ?: -1};reason=${item.snoozeReason?.name ?: "none"}")
                     count++
                 }
             }
@@ -718,7 +737,13 @@ class DefaultVirlinActions(
         }
     } catch (e: Exception) { ActionResult.Failure(e) }
 
-    override suspend fun resumeAllTimers(projectId: String?): ActionResult<Int> = try {
+    override suspend fun resumeAllTimers(projectId: String?): ActionResult<Int> =
+        resumeTimers(projectId, "All timers paused")
+
+    override suspend fun resumeTimersForOrganize(projectId: String): ActionResult<Int> =
+        resumeTimers(projectId, "Organize timers paused")
+
+    private suspend fun resumeTimers(projectId: String?, provenance: String): ActionResult<Int> = try {
         repository.transaction {
             val now = clock.now()
             val writer = if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this
@@ -727,6 +752,14 @@ class DefaultVirlinActions(
             var count = 0
             with(writer) {
                 var humanRunning = items.any { it.state == FOCUS }
+                if (provenance == "Organize timers paused" && humanRunning && items.any { item ->
+                        (projectId == null || belongsToProject(item, projectId)) &&
+                            item.state == PAUSED && !item.externalTrackingPaused &&
+                            executionEvents(item.id).lastOrNull()?.let { pause ->
+                                pause.type == EventType.PAUSED && pause.at == item.updatedAt &&
+                                    pause.detail?.contains(provenance) == true
+                            } == true
+                    }) return@transaction ActionResult.Rejected(DomainError.AnotherTaskIsExecuting)
                 for (item in items.distinctBy { it.id }) {
                     if (projectId != null && !belongsToProject(item, projectId)) continue
                     if (item.state != PAUSED) continue
@@ -735,7 +768,7 @@ class DefaultVirlinActions(
                     val pause = executionEvents(item.id).lastOrNull() ?: continue
                     // Persisted provenance survives app restarts. Never resume an unrelated manual pause.
                     if (pause.type != EventType.PAUSED || pause.at != item.updatedAt ||
-                        pause.detail?.contains("All timers paused") != true) continue
+                        pause.detail?.contains(provenance) != true) continue
                     val external = item.externalTrackingPaused
                     if (!external && humanRunning) continue
                     val remaining = Regex("remaining=(-?\\d+)").find(pause.detail!!)?.groupValues?.get(1)?.toLongOrNull()
@@ -945,6 +978,9 @@ class DefaultVirlinActions(
         val pref = preferences.activeFor(streamId, now) ?: return
         val move = NeedsYouOrder.planMove(allStreams(), streamId, pref.preferredPosition) ?: return
         move.changed.forEach { saveStream(it) }
+        val scope = pref.scope as? PriorityScope.NextReturns ?: return
+        if (scope.remaining == 1) preferences.remove(streamId)
+        else preferences.save(pref.copy(scope = scope.copy(remaining = scope.remaining - 1)))
     }
 
 

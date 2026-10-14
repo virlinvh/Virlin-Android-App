@@ -315,7 +315,7 @@ private fun NeedsYouCard(
             Spacer(Modifier.height(4.dp))
             Text("${task.sourceAndContext} · ${task.statusLabel}", color = Color(0xFF667486),
                 fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            task.externalSeconds?.let { Text("External ${com.virlin.app.domain.model.ExecutionTiming.formatClock(it)}",
+            task.externalSeconds?.let { Text("External work · ${com.virlin.app.domain.model.ExecutionTiming.formatClock(it)}",
                 color = Color(0xFF667486), fontSize = 11.sp) }
         }
         Spacer(Modifier.width(6.dp))
@@ -352,7 +352,7 @@ private fun NeedsActionCapsule(
                 lerp(Color.White, colors.accent, .19f))))
             .border(1.dp, colors.accent.copy(alpha = .18f), shape)
             .semantics(mergeDescendants = true) {
-                contentDescription = "${task.checkLabel.substringBefore(" ")} ${task.title}. $spokenTime"
+                contentDescription = "${task.checkLabel.substringBefore(" ")} ${task.title}. Waiting for your attention. $spokenTime"
             }
             .clickable(role = Role.Button, onClickLabel = "Check ${task.title}", onClick = onCheck),
         contentAlignment = Alignment.Center,
@@ -367,19 +367,22 @@ private fun NeedsActionCapsule(
         }.coerceIn(0f, 1f)
         // Fade through a blank frame instead of painting two clock/action strings on top
         // of one another (particularly illegible with three-digit elapsed hours).
-        if (checkAlpha < .5f) Row(Modifier.graphicsLayer(alpha = 1f - checkAlpha * 2f),
-            verticalAlignment = Alignment.CenterVertically) {
-                Canvas(Modifier.size(15.dp)) {
-                    val r = size.minDimension * .40f
-                    drawCircle(colors.ink, radius = r, style = Stroke(width = 1.6.dp.toPx()))
-                    drawLine(colors.ink, center, Offset(center.x, center.y - r * .57f),
-                        strokeWidth = 1.5.dp.toPx())
-                    drawLine(colors.ink, center, Offset(center.x + r * .48f, center.y + r * .18f),
-                        strokeWidth = 1.5.dp.toPx())
+        if (checkAlpha < .5f) Column(Modifier.graphicsLayer(alpha = 1f - checkAlpha * 2f),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("WAITING", fontWeight = FontWeight.Bold, fontSize = 9.sp, color = colors.ink)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Canvas(Modifier.size(13.dp)) {
+                        val r = size.minDimension * .40f
+                        drawCircle(colors.ink, radius = r, style = Stroke(width = 1.6.dp.toPx()))
+                        drawLine(colors.ink, center, Offset(center.x, center.y - r * .57f),
+                            strokeWidth = 1.5.dp.toPx())
+                        drawLine(colors.ink, center, Offset(center.x + r * .48f, center.y + r * .18f),
+                            strokeWidth = 1.5.dp.toPx())
+                    }
+                    Spacer(Modifier.width(3.dp))
+                    Text(timeText, fontWeight = FontWeight.Bold, fontSize = 12.sp,
+                        color = colors.ink, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
                 }
-                Spacer(Modifier.width(4.dp))
-                Text(timeText, fontWeight = FontWeight.Bold, fontSize = 12.sp,
-                    color = colors.ink, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
         }
         else Text(task.checkLabel, modifier = Modifier.graphicsLayer(alpha = (checkAlpha - .5f) * 2f),
             fontWeight = FontWeight.Bold, fontSize = 12.sp,

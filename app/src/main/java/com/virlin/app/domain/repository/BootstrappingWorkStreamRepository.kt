@@ -132,6 +132,7 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     override suspend fun getOpenFocusSession(streamId: String) = inner?.getOpenFocusSession(streamId)
     override suspend fun getCurrentCycle(streamId: String) = inner?.getCurrentCycle(streamId)
     override suspend fun getLatestSnapshot(streamId: String) = inner?.getLatestSnapshot(streamId)
+    override suspend fun getSnapshots(streamId: String) = inner?.getSnapshots(streamId).orEmpty()
     override suspend fun getEvents(streamId: String) = inner?.getEvents(streamId) ?: emptyList()
     override suspend fun getEventsForStreams(streamIds: List<String>, limit: Int, offset: Int) =
         inner?.getEventsForStreams(streamIds, limit, offset) ?: emptyList()

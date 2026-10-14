@@ -254,13 +254,14 @@ interface TaskPageBlockDao {
         AttachmentDocumentEntity::class, VoiceDocumentEntity::class, PriorityPreferenceEntity::class,
         ExternalStageEntity::class, ProjectTagEntity::class, TagLinkEntity::class,
         TaskStepEntity::class, VirlinNoteEntity::class, TaskPageBlockEntity::class,
-        MapNodePreviewEntity::class
+        MapNodePreviewEntity::class, ExternalRunEntity::class
     ],
-    version = 20,
+    version = 23,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
 abstract class VirlinDatabase : RoomDatabase() {
+    abstract fun externalRuns(): ExternalRunDao
     abstract fun projects(): ProjectDao
     abstract fun workStreams(): WorkStreamDao
     abstract fun tasks(): TaskDao
@@ -284,6 +285,22 @@ abstract class VirlinDatabase : RoomDatabase() {
     abstract fun virlinNotes(): VirlinNoteDao
 
     companion object {
+        val MIGRATION_22_23: Migration = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE priority_preferences ADD COLUMN remainingReturns INTEGER")
+            }
+        }
+        /** Task-level Needs You ranks were previously lost when the stream adapter saved a task. */
+        val MIGRATION_21_22: Migration = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tasks ADD COLUMN executionAttentionRank INTEGER")
+            }
+        }
+        val MIGRATION_20_21: Migration = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS external_run_intervals (id TEXT NOT NULL PRIMARY KEY, ownerId TEXT NOT NULL, taskId TEXT, startedAt INTEGER NOT NULL, endedAt INTEGER NOT NULL)")
+            }
+        }
         const val NAME = "virlin.db"
 
         /** v1 -> v2: add the captures table (additive; every v1 row is untouched). */
@@ -601,7 +618,7 @@ abstract class VirlinDatabase : RoomDatabase() {
                 db.execSQL("UPDATE tasks SET executionState=CASE WHEN status IN ('DONE','CANCELLED') THEN 'DONE' ELSE 'READY' END WHERE executionState IS NULL AND workStreamId IS NOT NULL")
             }
         }
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

@@ -39,9 +39,9 @@ class NowViewModel(
             emit(Unit)
             kotlinx.coroutines.delay(15_000)
         }
-    }.combine(combine(repository.streams, repository.tasks) { streams, tasks -> streams to tasks }) { _, state -> state.second }
-        .map { tasks ->
-            try { tasks to repository.allFocusSessions() }
+    }.combine(combine(repository.streams, repository.tasks) { streams, tasks -> streams to tasks }) { _, state -> state }
+        .map { state ->
+            try { Triple(state, repository.allFocusSessions(), repository.externalRunIntervals()) }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (_: Exception) { null }
         }.combine(kotlinx.coroutines.flow.flow {
@@ -49,21 +49,41 @@ class NowViewModel(
         }) { data, now ->
             if (data == null) NowDaySummaryValues(timeSaved = "Unavailable") else {
                 val zone = java.time.ZoneId.systemDefault()
-                val savings = com.virlin.app.domain.model.DailySavings.calculate(data.first, data.second, now, zone)
+                val live = data.first.first.mapNotNull { stream ->
+                    stream.processingStartedAt?.takeIf {
+                        stream.state == com.virlin.app.domain.model.WorkStreamState.PROCESSING && !stream.externalTrackingPaused
+                    }?.let {
+                        com.virlin.app.domain.model.ExternalRunInterval(stream.id, stream.activeTaskId, it,
+                            minOf(now, stream.checkAt ?: now))
+                    }
+                } + data.first.second.mapNotNull { task ->
+                    val execution = task.execution ?: return@mapNotNull null
+                    execution.processingStartedAt?.takeIf {
+                        execution.state == com.virlin.app.domain.model.WorkStreamState.PROCESSING &&
+                            !execution.externalTrackingPaused
+                    }?.let {
+                        com.virlin.app.domain.model.ExternalRunInterval(task.id, task.id, it,
+                            minOf(now, execution.checkAt ?: now))
+                    }
+                }
+                val totals = com.virlin.app.domain.model.DailyExecution.calculate(data.third + live, data.second, now, zone)
                 NowDaySummaryValues(
                     timeFocused = com.virlin.app.domain.model.DailyFocus.label(
                         com.virlin.app.domain.model.DailyFocus.seconds(data.second, now, zone)),
-                    timeSaved = savings.displayValue,
-                    savedUnit = savings.displayUnit
+                    timeSaved = com.virlin.app.domain.model.DailyFocus.label(totals.freedSeconds),
+                    timeExternal = com.virlin.app.domain.model.DailyFocus.label(totals.externalSeconds),
+                    savedUnit = "Time freed"
                 )
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(0), NowDaySummaryValues(timeSaved = "Loading"))
 
     private val executionRepository = com.virlin.app.domain.repository.ExecutionViewRepository(repository, viewModelScope)
     val timersRunning: StateFlow<Boolean> = combine(repository.streams, repository.tasks) { streams, tasks ->
-        streams.any { !it.state.isTerminal && (it.state == com.virlin.app.domain.model.WorkStreamState.FOCUS || it.processingStartedAt != null) } ||
+        streams.any { !it.state.isTerminal && (it.state == com.virlin.app.domain.model.WorkStreamState.FOCUS ||
+            (it.state == com.virlin.app.domain.model.WorkStreamState.PROCESSING && it.processingStartedAt != null)) } ||
             tasks.any { !it.status.isTerminal && it.execution?.let { e ->
-                e.state == com.virlin.app.domain.model.WorkStreamState.FOCUS || e.processingStartedAt != null
+                e.state == com.virlin.app.domain.model.WorkStreamState.FOCUS ||
+                    (e.state == com.virlin.app.domain.model.WorkStreamState.PROCESSING && e.processingStartedAt != null)
             } == true }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     private val _masterPauseMessage = MutableStateFlow<String?>(null)
@@ -266,6 +286,12 @@ class NowViewModel(
     /** Priority editor SAVE (Phase 04): move now + remember the preference according to its scope. */
     fun setNeedsYouPriority(streamId: String, position: Int, scope: com.virlin.app.domain.attention.PriorityScope) =
         intents.setNeedsYouPriority(streamId, position, scope)
+    fun saveNeedsYouPriority(streamId: String, position: Int,
+        scope: com.virlin.app.domain.attention.PriorityScope, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            onResult(actions.setNeedsYouPriority(streamId, position, scope) is ActionResult.Success)
+        }
+    }
     /** The item's stored durable policy, if any (Room-backed; read off the main thread). */
     suspend fun priorityPreference(streamId: String) = actions.priorityPreference(streamId)
 

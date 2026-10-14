@@ -12,6 +12,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -28,31 +30,41 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.virlin.app.domain.VirlinGraph
+import com.virlin.app.ui.hierarchy.ProjectPalette
+import com.virlin.app.ui.hierarchy.rememberProjectPalette
+import com.virlin.app.ui.hierarchy.readableOn
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.max
 
-private val ImagePaper = Color(0xFFFAF9F6)
-private val ImageInk = Color(0xFF172019)
-private val ImageMuted = Color(0xFF68736C)
-private val ImageGreen = Color(0xFF078A5A)
-private val ImageMint = Color(0xFFE8F7EF)
-private val ImageLine = Color(0xFFDCE4DF)
+private val LocalImagePalette = staticCompositionLocalOf<ProjectPalette?> { null }
+private val ImagePaper: Color @Composable get() = LocalImagePalette.current?.let { Color(it.surface) } ?: Color(0xFFFAF9F6)
+private val ImageInk: Color @Composable get() = LocalImagePalette.current?.let { Color(it.text) } ?: Color(0xFF172019)
+private val ImageMuted: Color @Composable get() = LocalImagePalette.current?.let { Color(it.muted) } ?: Color(0xFF68736C)
+private val ImageGreen: Color @Composable get() = LocalImagePalette.current?.let { Color(it.secondary) } ?: Color(0xFF078A5A)
+private val ImageMint: Color @Composable get() = LocalImagePalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE8F7EF)
+private val ImageLine: Color @Composable get() = LocalImagePalette.current?.let { Color(it.primary).copy(alpha = .25f) } ?: Color(0xFFDCE4DF)
 
 @Composable
 fun ImageWorkspaceScreen(
@@ -66,18 +78,29 @@ fun ImageWorkspaceScreen(
     ),
 ) {
     val state by vm.state.collectAsState()
+    val tasks by VirlinGraph.repository.tasks.collectAsState()
+    val captures by VirlinGraph.repository.captures.collectAsState()
+    val ownerProjectId = projectId
+        ?: taskId?.let { id -> tasks.firstOrNull { it.id == id }?.projectId }
+        ?: captureId?.let { id -> captures.firstOrNull { it.id == id }?.projectId }
+    val palette = rememberProjectPalette(ownerProjectId)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
         vm.importImages(it.orEmpty())
     }
     fun back() {
-        when (imageBackAction(state.mode, hasCaptureOwner = captureId != null)) {
+        when (imageBackAction(state.mode, hasCaptureOwner = captureId != null, editOpenedFromPreview = state.editOpenedFromPreview)) {
             ImageBackAction.EXIT -> navController.popBackStack()
             ImageBackAction.TO_LIBRARY -> vm.setMode(ImageWorkspaceMode.LIBRARY)
+            ImageBackAction.TO_PREVIEW -> vm.setMode(ImageWorkspaceMode.PREVIEW)
             ImageBackAction.TO_EDIT -> vm.setMode(ImageWorkspaceMode.EDIT)
         }
     }
     BackHandler { back() }
 
+    CompositionLocalProvider(LocalImagePalette provides palette) {
+    MaterialTheme(colorScheme = lightColorScheme(primary = ImageGreen, onPrimary = readableOn(ImageGreen),
+        secondary = ImageGreen, onSecondary = readableOn(ImageGreen),
+        surface = ImagePaper, onSurface = ImageInk)) {
     Scaffold(
         containerColor = ImagePaper,
         topBar = { ImageTopBar(state, vm, ::back) },
@@ -85,6 +108,7 @@ fun ImageWorkspaceScreen(
         Box(Modifier.fillMaxSize().padding(padding).testTag(ImageWorkspaceTag)) {
             when (state.mode) {
                 ImageWorkspaceMode.LIBRARY -> ImageLibrary(state, vm) { picker.launch(arrayOf("image/*")) }
+                ImageWorkspaceMode.PREVIEW -> ImagePreview(state, vm)
                 ImageWorkspaceMode.EDIT -> ImageEdit(state, vm)
                 ImageWorkspaceMode.CROP -> ImageCropPanel(state, vm)
                 ImageWorkspaceMode.MARKUP -> ImageMarkupPanel(state, vm)
@@ -103,6 +127,7 @@ fun ImageWorkspaceScreen(
             text = { Text(message) },
         )
     }
+    } }
 }
 
 @Composable
@@ -116,6 +141,7 @@ private fun ImageTopBar(state: ImageWorkspaceState, vm: ImageWorkspaceViewModel,
             Text(
                 when (state.mode) {
                     ImageWorkspaceMode.LIBRARY -> "Images"
+                    ImageWorkspaceMode.PREVIEW -> "Preview image"
                     ImageWorkspaceMode.EDIT -> "Edit image"
                     ImageWorkspaceMode.CROP -> "Crop & rotate"
                     ImageWorkspaceMode.MARKUP -> "Markup"
@@ -125,6 +151,7 @@ private fun ImageTopBar(state: ImageWorkspaceState, vm: ImageWorkspaceViewModel,
             Text(
                 when (state.mode) {
                     ImageWorkspaceMode.LIBRARY -> state.taskTitle.takeIf(String::isNotBlank)?.let { "Attached to · $it" } ?: "Image workspace"
+                    ImageWorkspaceMode.PREVIEW -> state.selected?.document?.displayName.orEmpty()
                     ImageWorkspaceMode.EDIT -> "Original remains unchanged"
                     ImageWorkspaceMode.CROP -> "Freeform"
                     ImageWorkspaceMode.MARKUP -> "Layer 1"
@@ -132,7 +159,13 @@ private fun ImageTopBar(state: ImageWorkspaceState, vm: ImageWorkspaceViewModel,
                 fontSize = 12.sp, color = ImageMuted, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
-        if (state.mode != ImageWorkspaceMode.LIBRARY) {
+        if (state.mode == ImageWorkspaceMode.PREVIEW) {
+            TextButton(vm::editSelectedFromPreview, modifier = Modifier.testTag("image_preview_edit")) {
+                Icon(Icons.Rounded.Edit, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Edit")
+            }
+        } else if (state.mode != ImageWorkspaceMode.LIBRARY) {
             IconButton(vm::undo, enabled = state.canUndo) { Icon(Icons.Rounded.Undo, "Undo") }
             IconButton(vm::redo, enabled = state.canRedo) { Icon(Icons.Rounded.Redo, "Redo") }
         }
@@ -153,7 +186,7 @@ private fun ImageLibrary(state: ImageWorkspaceState, vm: ImageWorkspaceViewModel
             Spacer(Modifier.height(12.dp))
             Button(
                 choose, Modifier.fillMaxWidth().testTag(ImageChooseButtonTag),
-                colors = ButtonDefaults.buttonColors(containerColor = ImageGreen),
+                colors = ButtonDefaults.buttonColors(containerColor = ImageGreen, contentColor = readableOn(ImageGreen)),
                 shape = RoundedCornerShape(13.dp),
             ) { Text("Choose images") }
         }
@@ -167,12 +200,14 @@ private fun ImageLibrary(state: ImageWorkspaceState, vm: ImageWorkspaceViewModel
                 GridCells.Fixed(2), Modifier.weight(1f).padding(horizontal = 14.dp),
                 contentPadding = PaddingValues(bottom = 90.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(state.items, key = { it.capture.id }) { item -> ImageTile(item) { vm.edit(item) } }
+                items(state.items, key = { it.capture.id }) { item ->
+                    ImageTile(item, { vm.preview(item) }, { vm.edit(item) })
+                }
             }
         }
         if (state.items.isNotEmpty()) {
             Box(Modifier.fillMaxWidth().background(ImagePaper).padding(16.dp)) {
-                Button(choose, Modifier.fillMaxWidth().height(50.dp), colors = ButtonDefaults.buttonColors(containerColor = ImageGreen), shape = RoundedCornerShape(14.dp)) {
+                Button(choose, Modifier.fillMaxWidth().height(50.dp), colors = ButtonDefaults.buttonColors(containerColor = ImageGreen, contentColor = readableOn(ImageGreen)), shape = RoundedCornerShape(14.dp)) {
                     Icon(Icons.Rounded.AddPhotoAlternate, null); Spacer(Modifier.width(8.dp)); Text("Add images")
                 }
             }
@@ -181,13 +216,80 @@ private fun ImageLibrary(state: ImageWorkspaceState, vm: ImageWorkspaceViewModel
 }
 
 @Composable
-private fun ImageTile(item: ImageWorkspaceItem, open: () -> Unit) {
-    Column(Modifier.clip(RoundedCornerShape(14.dp)).background(Color.White).border(1.dp, ImageLine, RoundedCornerShape(14.dp)).clickable(onClick = open).padding(6.dp)) {
+private fun ImageTile(item: ImageWorkspaceItem, preview: () -> Unit, edit: () -> Unit) {
+    Column(Modifier.clip(RoundedCornerShape(14.dp)).background(Color.White).border(1.dp, ImageLine, RoundedCornerShape(14.dp)).padding(6.dp)) {
         ManagedBitmap(item.absolutePath, 520) { bitmap ->
-            if (bitmap == null) Box(Modifier.fillMaxWidth().aspectRatio(1.2f).background(ImageMint), Alignment.Center) { Icon(Icons.Rounded.BrokenImage, null, tint = ImageMuted) }
-            else Image(bitmap.asImageBitmap(), null, Modifier.fillMaxWidth().aspectRatio(1.2f).clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+            if (bitmap == null) Box(Modifier.fillMaxWidth().aspectRatio(1.2f).background(ImageMint).clickable(onClick = preview), Alignment.Center) { Icon(Icons.Rounded.BrokenImage, null, tint = ImageMuted) }
+            else Image(bitmap.asImageBitmap(), "Preview ${item.document.displayName}", Modifier.fillMaxWidth().aspectRatio(1.2f).clip(RoundedCornerShape(10.dp)).clickable(onClick = preview), contentScale = ContentScale.Crop)
         }
         Text(item.document.displayName, Modifier.padding(5.dp), fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(preview, Modifier.weight(1f).testTag("image_tile_preview_${item.capture.id}"), contentPadding = PaddingValues(2.dp)) {
+                Icon(Icons.Rounded.Visibility, null, Modifier.size(16.dp)); Spacer(Modifier.width(3.dp)); Text("Preview", fontSize = 11.sp)
+            }
+            TextButton(edit, Modifier.weight(1f).testTag("image_tile_edit_${item.capture.id}"), contentPadding = PaddingValues(2.dp)) {
+                Icon(Icons.Rounded.Edit, null, Modifier.size(16.dp)); Spacer(Modifier.width(3.dp)); Text("Edit", fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImagePreview(state: ImageWorkspaceState, vm: ImageWorkspaceViewModel) {
+    val item = state.selected ?: return
+    var scale by remember(item.capture.id) { mutableFloatStateOf(1f) }
+    var pan by remember(item.capture.id) { mutableStateOf(Offset.Zero) }
+    var viewport by remember(item.capture.id) { mutableStateOf(IntSize.Zero) }
+    fun bounded(value: Offset, zoom: Float): Offset {
+        val limitX = max(0f, (zoom - 1f) * viewport.width / 2f)
+        val limitY = max(0f, (zoom - 1f) * viewport.height / 2f)
+        return Offset(value.x.coerceIn(-limitX, limitX), value.y.coerceIn(-limitY, limitY))
+    }
+    Column(Modifier.fillMaxSize().background(Color(0xFF171923)).testTag(ImagePreviewTag)) {
+        Box(
+            Modifier.fillMaxWidth().weight(1f).clipToBounds().onSizeChanged { viewport = it }
+                .pointerInput(item.capture.id) {
+                    detectTransformGestures { _, gesturePan, gestureZoom, _ ->
+                        scale = (scale * gestureZoom).coerceIn(1f, 5f)
+                        pan = bounded(pan + gesturePan, scale)
+                    }
+                }
+                .pointerInput(item.capture.id) {
+                    detectTapGestures(onDoubleTap = {
+                        scale = if (scale > 1f) 1f else 2.5f
+                        pan = Offset.Zero
+                    })
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            ManagedBitmap(item.absolutePath, 3200) { bitmap ->
+                if (bitmap == null) {
+                    CircularProgressIndicator(color = Color.White)
+                } else {
+                    Image(
+                        bitmap.asImageBitmap(), item.document.displayName,
+                        Modifier.fillMaxSize().graphicsLayer {
+                            scaleX = scale; scaleY = scale
+                            translationX = pan.x; translationY = pan.y
+                        },
+                        contentScale = ContentScale.Fit,
+                    )
+                }
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().background(ImagePaper).padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(item.document.displayName, color = ImageInk, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Pinch to zoom · Drag to move · Double-tap to reset", color = ImageMuted, fontSize = 11.sp)
+            }
+            TextButton({ scale = 1f; pan = Offset.Zero }, enabled = scale > 1f) { Text("Fit") }
+            Button(vm::editSelectedFromPreview, shape = RoundedCornerShape(12.dp)) {
+                Icon(Icons.Rounded.Edit, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("Edit")
+            }
+        }
     }
 }
 
@@ -207,7 +309,7 @@ private fun ImageEdit(state: ImageWorkspaceState, vm: ImageWorkspaceViewModel) {
         else FilterControls(state.edit.adjustments, vm)
         Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(vm::reset, Modifier.weight(1f).height(50.dp), shape = RoundedCornerShape(14.dp)) { Text("Reset") }
-            Button(vm::saveCopy, Modifier.weight(1.4f).height(50.dp).testTag(ImageSaveCopyTag), colors = ButtonDefaults.buttonColors(containerColor = ImageGreen), shape = RoundedCornerShape(14.dp)) { Text("Save copy") }
+            Button(vm::saveCopy, Modifier.weight(1.4f).height(50.dp).testTag(ImageSaveCopyTag), colors = ButtonDefaults.buttonColors(containerColor = ImageGreen, contentColor = readableOn(ImageGreen)), shape = RoundedCornerShape(14.dp)) { Text("Save copy") }
         }
     }
 }
@@ -273,7 +375,7 @@ private fun ImageCropPanel(state: ImageWorkspaceState, vm: ImageWorkspaceViewMod
                 val safeTop = top.coerceAtMost(bottom - .01f)
                 vm.updateCrop(ImageCrop(safeLeft, safeTop, right.coerceAtLeast(safeLeft + .01f), bottom.coerceAtLeast(safeTop + .01f)))
                 vm.setMode(ImageWorkspaceMode.EDIT)
-            }, Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = ImageGreen)) { Text("Apply") }
+            }, Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = ImageGreen, contentColor = readableOn(ImageGreen))) { Text("Apply") }
         }
     }
 }
@@ -322,7 +424,7 @@ private fun ImageMarkupPanel(state: ImageWorkspaceState, vm: ImageWorkspaceViewM
         Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) { Text("Opacity", Modifier.width(80.dp)); Slider(opacity, { opacity = it }, valueRange = .1f..1f, modifier = Modifier.weight(1f), colors = SliderDefaults.colors(activeTrackColor = ImageGreen, thumbColor = ImageGreen)); Text("${(opacity*100).toInt()}%", Modifier.width(42.dp)) }
         Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(vm::clearMarkup, Modifier.weight(1f)) { Text("Clear") }
-            Button({ vm.setMode(ImageWorkspaceMode.EDIT) }, Modifier.weight(1.4f), colors = ButtonDefaults.buttonColors(containerColor = ImageGreen)) { Text("Apply markup") }
+            Button({ vm.setMode(ImageWorkspaceMode.EDIT) }, Modifier.weight(1.4f), colors = ButtonDefaults.buttonColors(containerColor = ImageGreen, contentColor = readableOn(ImageGreen))) { Text("Apply markup") }
         }
     }
     if (textDialog) TextMarkupDialog(
@@ -359,7 +461,7 @@ private fun EditPreview(state: ImageWorkspaceState, modifier: Modifier) {
     // copying. Recycling it here crashed the app with "Canvas: trying to use a recycled bitmap",
     // because a RenderNode display list can be replayed after onDispose runs. Since minSdk is 26,
     // bitmap memory lives on the Java heap and is reclaimed by GC, so no explicit recycle is needed.
-    Box(modifier.background(Color(0xFFF0F2EF)), Alignment.Center) {
+    Box(modifier.background(ImageMint), Alignment.Center) {
         bitmap?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
             ?: CircularProgressIndicator(color = ImageGreen)
     }

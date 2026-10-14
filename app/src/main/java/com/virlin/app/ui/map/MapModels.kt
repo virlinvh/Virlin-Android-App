@@ -11,10 +11,31 @@ import com.virlin.app.domain.model.ProgressResult
 enum class MapKind { PROJECT, WORKSTREAM, TASK }
 enum class MapStatus { NONE, TODO, CURRENT, DONE, BLOCKED }
 
-enum class MapLayout(val label: String) {
-    RIGHT_TREE("Right tree"), BALANCED("Balanced"), RADIAL("Radial"),
-    TOP_DOWN("Top-down"), BRANCH_LANES("Branch lanes"),
-    COMPACT_OUTLINE("Compact outline")
+enum class MapBoxFinish(val label: String) {
+    SMOOTH("Smooth"), FROSTED("Frosted"), PAPER("Fine paper"), LINEN("Linen"),
+    GRAIN("Soft grain"), GLASS("Glass"), OUTLINE("Outline"), EMBOSSED("Embossed"),
+    PENCIL_HATCH("Pencil hatch")
+}
+
+enum class MapLayout(
+    val label: String,
+    val fork: String,
+    val node: String,
+    val endpoint: String,
+) {
+    RIGHT_TREE("Right tree", "Shared trunk", "Rounded cards", "Card tips"),
+    FLOW_FORKS("Flow forks", "S-curves", "Pill cards", "Pill tips"),
+    LOGIC_BRACKETS("Logic brackets", "Single bracket", "Square cards", "Capped tips"),
+    CARD_CASCADE("Card cascade", "Stepped arms", "Offset cards", "Card tips"),
+    STEP_RAIL("Step rail", "Shared rail", "Staggered cards", "Card tips"),
+    SECTION_BANDS("Section bands", "Shared trunk", "Soft bands", "Card tips"),
+    NESTED_BRACKETS("Nested brackets", "Double bracket", "Square cards", "Capped tips"),
+    ROUNDED_FORKS("Capsule forks", "Early curves", "Capsule parents", "Compact leaves"),
+    SCULPTED_BRANCHES("Sculpted branches", "Organic curves", "Sculpted cards", "Sculpted tips"),
+    CLOUD_OUTCOMES("Cloud outcomes", "Diagonal links", "Square cards", "Cloud leaves"),
+    FAN_FORKS("Beaded fan", "Wide fan", "Capsule cards", "Bead tips"),
+    FACETED_PATHS("Faceted paths", "Angled links", "Faceted cards", "Pointed tips"),
+    LOOP_FORKS("Loop & notch", "Looped curves", "Pill parents", "Notched leaves")
 }
 
 /**
@@ -38,6 +59,12 @@ data class MapAppearance(
     /** ARGB keyed by stable entity id. Node override beats branch override beats palette. */
     val nodeColors: Map<String, Long> = emptyMap(),
     val branchColors: Map<String, Long> = emptyMap(),
+    val customPalette: List<Long> = emptyList(),
+    val savedColors: List<Long> = emptyList(),
+    val boxFinish: MapBoxFinish = MapBoxFinish.SMOOTH,
+    val nodeFinishes: Map<String, MapBoxFinish> = emptyMap(),
+    /** Optional box widths in map units, keyed by stable node id. */
+    val nodeWidths: Map<String, Float> = emptyMap(),
 )
 
 /**

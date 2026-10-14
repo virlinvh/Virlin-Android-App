@@ -61,6 +61,8 @@ class MapAppearanceStore(context: Context) {
     private fun prune(appearance: MapAppearance) = appearance.copy(
         nodeColors = appearance.nodeColors - removedOwners,
         branchColors = appearance.branchColors - removedOwners,
+        nodeFinishes = appearance.nodeFinishes - removedOwners,
+        nodeWidths = appearance.nodeWidths - removedOwners,
     )
     suspend fun removeOwners(ids: Set<String>) = mutex.withLock {
         if (file.exists() || File(file.path + ".bak").exists()) JSONObject(android.util.AtomicFile(file).openRead().bufferedReader().use { it.readText() })
@@ -86,6 +88,11 @@ class MapAppearanceStore(context: Context) {
                             paletteIndex = o.optInt("paletteIndex", 0),
                             nodeColors = o.longMap("nodeColors"),
                             branchColors = o.longMap("branchColors"),
+                            customPalette = o.longList("customPalette"),
+                            savedColors = o.longList("savedColors"),
+                            boxFinish = enumValueOrDefault(o.optString("boxFinish")),
+                            nodeFinishes = o.finishMap("nodeFinishes"),
+                            nodeWidths = o.widthMap("nodeWidths"),
                         )
                     )
                 }
@@ -105,6 +112,13 @@ class MapAppearanceStore(context: Context) {
                         .put("paletteIndex", appearance.paletteIndex)
                         .put("nodeColors", appearance.nodeColors.toJson())
                         .put("branchColors", appearance.branchColors.toJson())
+                        .put("customPalette", org.json.JSONArray().also { a -> appearance.customPalette.forEach { a.put(it.toString(16)) } })
+                        .put("savedColors", org.json.JSONArray().also { a -> appearance.savedColors.forEach { a.put(it.toString(16)) } })
+                        .put("boxFinish", appearance.boxFinish.name)
+                        .put("nodeFinishes", JSONObject().also { o -> appearance.nodeFinishes.forEach { (id, finish) -> o.put(id, finish.name) } })
+                        .put("nodeWidths", JSONObject().also { o -> appearance.nodeWidths.forEach { (id, width) ->
+                            if (width.isFinite() && width in 110f..560f) o.put(id, width.toDouble())
+                        } })
                 )
             }
             val atomic = android.util.AtomicFile(file)
@@ -125,6 +139,29 @@ class MapAppearanceStore(context: Context) {
             source.getString(id).toULongOrNull(16)?.let { out[id] = it.toLong() }
         }
         return out
+    }
+
+    private fun JSONObject.longList(field: String): List<Long> {
+        val source = optJSONArray(field) ?: return emptyList()
+        return (0 until source.length()).mapNotNull { source.optString(it).toULongOrNull(16)?.toLong() }.take(32)
+    }
+
+    private fun enumValueOrDefault(value: String): MapBoxFinish =
+        MapBoxFinish.entries.firstOrNull { it.name == value } ?: MapBoxFinish.SMOOTH
+
+    private fun JSONObject.finishMap(field: String): Map<String, MapBoxFinish> {
+        val source = optJSONObject(field) ?: return emptyMap()
+        return buildMap { source.keys().forEach { id ->
+            MapBoxFinish.entries.firstOrNull { it.name == source.optString(id) }?.let { put(id, it) }
+        } }
+    }
+
+    private fun JSONObject.widthMap(field: String): Map<String, Float> {
+        val source = optJSONObject(field) ?: return emptyMap()
+        return buildMap { source.keys().forEach { id ->
+            val width = source.optDouble(id).toFloat()
+            if (width.isFinite() && width in 110f..560f) put(id, width)
+        } }
     }
 
     companion object {

@@ -148,7 +148,8 @@ private val Hairline = VirlinColors.TextPrimary.copy(alpha = 0.08f)
 // =====================================================================================
 
 @Composable
-fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: HierarchyViewModel = viewModel(), settingsPage: Boolean = false) {
+fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: HierarchyViewModel = viewModel(), settingsPage: Boolean = false,
+    openKnowledge: Boolean = false, knowledgeScope: String? = null, pageTitle: String? = null) {
     val s by vm.snapshot.collectAsState()
     val captures by vm.captures.collectAsState()
     val project = s.projects.firstOrNull { it.id == projectId }
@@ -343,7 +344,8 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
     }
     Box(Modifier.fillMaxSize()) {
     if (!settingsOpen) ProjectExperienceHost(project.id, streams, projectTasks, ui, actions, vm, navController,
-        controlsOpen = controlStreamId != null)
+        controlsOpen = controlStreamId != null, openKnowledge = openKnowledge,
+        knowledgeScope = knowledgeScope, pageTitle = pageTitle)
     if (adding) {
         val palette = rememberProjectPalette(project.id)
         CompositionLocalProvider(LocalProjectPalette provides palette) {
@@ -433,17 +435,16 @@ fun ProjectDetailScreen(projectId: String?, navController: NavController, vm: Hi
             onRestoreTask = vm::restoreTask,
             onCompleteProject = { settingsOpen = false; vm.completeProject(project.id); navController.popBackStack() },
             onDeleteProject = { settingsOpen = false; confirmDelete = true; deleteError = null },
+            iconEditor = { close ->
+                ProjectIconSettingsEditor(project,
+                    onSelectBuiltIn = { vm.selectBuiltInIcon(context, project.id, it) },
+                    onCustomImported = { vm.setCustomIcon(project.id, it) },
+                    onUseAuto = { vm.useAutoIcon(context, project.id) },
+                    onClose = close)
+            },
         )
     }
     deletingBranch?.let { target -> HierarchyDeletionHost(target, { deletingBranch = null }, { deletingBranch = null }) }
-    if (editingIcon && settingsOpen) {
-        com.virlin.app.ui.components.ProjectIconEditorSheet(project,
-            onSelectBuiltIn = { vm.selectBuiltInIcon(context, project.id, it) },
-            onCustomImported = { vm.setCustomIcon(project.id, it) },
-            onRemoveCustom = { vm.removeCustomIcon(context, project.id) },
-            onUseAuto = { vm.useAutoIcon(context, project.id) },
-            onDismiss = { editingIcon = false }, keepFooterVisible = true)
-    }
     if (confirmDelete) {
         DeleteProjectDialog(project, deletingProject, deleteError,
             onDismiss = { if (!deletingProject) confirmDelete = false }, onDelete = {
@@ -882,7 +883,7 @@ fun activityRecords(entries: List<ProjectActivityEntry>): List<ActivityRecord> =
     }
 
 /** Captures open in the editor/viewer that already exists for their type. */
-private fun captureRoute(captureId: String, vm: HierarchyViewModel): String {
+internal fun captureRoute(captureId: String, vm: HierarchyViewModel): String {
     val capture = vm.captures.value.firstOrNull { it.id == captureId }
     return when (capture?.type) {
         CaptureType.NOTE -> if (vm.knowledge.value.firstOrNull { it.capture.id == captureId }?.richNote == null && vm.knowledge.value.firstOrNull { it.capture.id == captureId }?.note?.blocks
@@ -1013,7 +1014,10 @@ private fun ProjectExperienceHost(
     projectActions: ProjectPageActions,
     vm: HierarchyViewModel,
     navController: NavController,
-    controlsOpen: Boolean = false
+    controlsOpen: Boolean = false,
+    openKnowledge: Boolean = false,
+    knowledgeScope: String? = null,
+    pageTitle: String? = null,
 ) {
     val entries by vm.knowledge.collectAsState()
     val activity by vm.activity.collectAsState()
@@ -1064,6 +1068,9 @@ private fun ProjectExperienceHost(
 
     VirlinProjectExperience(
         controlsOpen = controlsOpen,
+        openKnowledge = openKnowledge,
+        knowledgeScope = knowledgeScope,
+        pageTitle = pageTitle,
         data = ProjectExperienceData(
             project = ui,
             knowledge = knowledgeItems,
@@ -1126,7 +1133,11 @@ private fun ProjectExperienceHost(
         projectIcon = { ui.icon?.invoke() }
     )
 
-    if (addingKnowledge) ProjectKnowledgeAdd(projectId, ui.title, navController) { addingKnowledge = false }
+    if (addingKnowledge) ProjectKnowledgeAdd(projectId,
+        streams.firstOrNull { it.id == knowledgeScope }?.title ?: ui.title,
+        navController, workStreamId = streams.firstOrNull { it.id == knowledgeScope }?.id) {
+        addingKnowledge = false
+    }
 
     editingTagsFor?.let { (knowledgeIds, taskIds) ->
         // The tags already on every selected item; a mixed selection starts from what they share.
@@ -1187,8 +1198,36 @@ fun ProjectTaskIndexScreen(
     val project = s.projects.firstOrNull { it.id == projectId }
     if (project == null) { Missing("Project"); return }
 
+    val projectStreamsForTiming = s.streams.filter { it.projectId == project.id }
+    val sessionKey = remember(projectStreamsForTiming, s.tasks) {
+        projectStreamsForTiming.map { it.id to it.updatedAt } + s.tasks.map { it.id to it.updatedAt }
+    }
+    var focusSessions by remember { mutableStateOf<List<FocusSession>>(emptyList()) }
+    LaunchedEffect(sessionKey) { focusSessions = vm.allFocusSessions() }
+    val timingNow = rememberTimingNow(
+        s.tasks.any { it.execution?.state == WorkStreamState.FOCUS || it.execution?.processingStartedAt != null } ||
+            projectStreamsForTiming.any { it.state == WorkStreamState.FOCUS || it.processingStartedAt != null ||
+                it.state == WorkStreamState.PROCESSING || it.state == WorkStreamState.SNOOZED }
+    )
+
     val state = remember(s.tasks, s.streams, project.id) {
         val units = ProjectTaskUnits.of(s.tasks, s.streams, project.id)
+        val projectStreams = s.streams.filter { it.projectId == project.id }
+        val projectStreamIds = projectStreams.map { it.id }.toSet()
+        val activeProjectTasks = s.tasks.filter { it.workStreamId in projectStreamIds && !it.status.isTerminal }
+        val projectActivityStates = projectStreams.map { stream ->
+            activityState(s.tasks.filter { it.workStreamId == stream.id }).takeIf { it != WorkstreamState.READY }
+                ?: when (stream.state) {
+                    WorkStreamState.FOCUS -> WorkstreamState.HUMAN_FOCUS
+                    WorkStreamState.PROCESSING -> WorkstreamState.EXTERNAL_RUNNING
+                    WorkStreamState.CHECK -> WorkstreamState.NEEDS_ATTENTION
+                    WorkStreamState.SNOOZED -> WorkstreamState.WAITING
+                    WorkStreamState.READY -> WorkstreamState.READY
+                    WorkStreamState.PAUSED -> WorkstreamState.PAUSED
+                    WorkStreamState.BLOCKED -> WorkstreamState.BLOCKED
+                    WorkStreamState.DONE -> WorkstreamState.COMPLETE
+                }
+        }
         val byId = s.tasks.associateBy { it.id }
         val currentIds = s.streams.filter { it.projectId == project.id }.mapNotNull { it.activeTaskId }.toSet()
         ProjectTaskIndexState(
@@ -1196,6 +1235,10 @@ fun ProjectTaskIndexScreen(
             projectTitle = project.title,
             completedCount = units.count { it.completed },
             totalCount = units.size,
+            humanActiveCount = activeProjectTasks.count { it.execution?.state == WorkStreamState.FOCUS },
+            externalActiveCount = activeProjectTasks.count { it.execution?.processingStartedAt != null },
+            multiRunCount = projectActivityStates.count { it == WorkstreamState.MULTI_RUN },
+            reviewCount = projectActivityStates.count { it == WorkstreamState.NEEDS_ATTENTION },
             tasks = units.mapIndexed { index, unit ->
                 when (unit) {
                     is ProjectTaskUnits.Unit.EmptyWorkStream -> ProjectTaskIndexEntry(
@@ -1210,6 +1253,16 @@ fun ProjectTaskIndexScreen(
                         completed = unit.completed,
                         current = false,
                         order = index,
+                        activityState = when (unit.workStream.state) {
+                            WorkStreamState.FOCUS -> WorkstreamState.HUMAN_FOCUS
+                            WorkStreamState.PROCESSING -> WorkstreamState.EXTERNAL_RUNNING
+                            WorkStreamState.CHECK -> WorkstreamState.NEEDS_ATTENTION
+                            WorkStreamState.SNOOZED -> WorkstreamState.WAITING
+                            WorkStreamState.READY -> WorkstreamState.READY
+                            WorkStreamState.PAUSED -> WorkstreamState.PAUSED
+                            WorkStreamState.BLOCKED -> WorkstreamState.BLOCKED
+                            WorkStreamState.DONE -> WorkstreamState.COMPLETE
+                        },
                         isEmptyWorkStream = true
                     )
                     is ProjectTaskUnits.Unit.TaskUnit -> {
@@ -1229,18 +1282,25 @@ fun ProjectTaskIndexScreen(
                             title = unit.task.title,
                             completed = unit.completed,
                             current = unit.task.id in currentIds,
-                            order = index
+                            order = index,
+                            activityState = activityState(taskScope(s.tasks, unit.task.id))
                         )
                     }
                 }
             }
         )
     }
+    val timedState = remember(state, focusSessions, timingNow) {
+        state.copy(
+            externalSeconds = ExternalTiming.project(project.id, s.streams, s.tasks, timingNow),
+            focusSeconds = ExecutionTiming.projectFocusSeconds(project.id, s.streams, focusSessions, timingNow),
+        )
+    }
 
     val taskIndexPalette = rememberProjectPalette(state.projectId)
     CompositionLocalProvider(LocalProjectPalette provides taskIndexPalette) {
     VirlinProjectTaskIndex(
-        state = state,
+        state = timedState,
         // The app-wide bar is drawn by the host scaffold; a second one here would be a duplicate.
         footer = {},
         actions = object : ProjectTaskIndexActions {

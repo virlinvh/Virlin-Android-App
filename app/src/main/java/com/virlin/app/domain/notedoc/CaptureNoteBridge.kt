@@ -6,12 +6,17 @@ import com.virlin.app.domain.model.*
 object CaptureNoteBridge {
     fun owner(captureId: String) = "capture-$captureId"
     fun draftOwner(projectId: String, captureId: String) = "knowledge/${java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(projectId.toByteArray(Charsets.UTF_8))}/$captureId"
+    fun draftWorkstreamOwner(projectId: String, workStreamId: String, captureId: String) =
+        draftOwner(projectId, captureId) + "/" + java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(workStreamId.toByteArray(Charsets.UTF_8))
     fun captureId(owner: String): String? = when {
         owner.startsWith("capture-") -> owner.removePrefix("capture-").takeIf { it.isNotBlank() }
-        owner.startsWith("knowledge/") -> owner.split('/').takeIf { it.size == 3 }?.last()?.takeIf { it.isNotBlank() }
+        owner.startsWith("knowledge/") -> owner.split('/').takeIf { it.size == 3 || it.size == 4 }?.get(2)?.takeIf { it.isNotBlank() }
         else -> null
     }
-    fun draftProject(owner: String): String? = owner.split('/').takeIf { it.size == 3 && it.first() == "knowledge" }?.get(1)
+    fun draftProject(owner: String): String? = owner.split('/').takeIf { (it.size == 3 || it.size == 4) && it.first() == "knowledge" }?.get(1)
+        ?.let { runCatching { String(java.util.Base64.getUrlDecoder().decode(it), Charsets.UTF_8) }.getOrNull() }
+    fun draftWorkstream(owner: String): String? = owner.split('/').takeIf { it.size == 4 && it.first() == "knowledge" }?.get(3)
         ?.let { runCatching { String(java.util.Base64.getUrlDecoder().decode(it), Charsets.UTF_8) }.getOrNull() }
 
     /** Expand legacy toggles; keep child order, indentation, text, marks and checked states. */
@@ -60,7 +65,8 @@ object CaptureNoteBridge {
         NoteBlock(block.id, type,
             plainText = block.table?.let { table -> (0 until table.rows).joinToString("\n") { row ->
                 (0 until table.cols).joinToString("\t") { column -> table.cell(row, column) }
-            } } ?: block.text, checked = block.checked,
+            } } ?: if (block.type == NoteDocBlockType.IMAGE) "[Image]" else block.text,
+            checked = block.checked,
             marks = block.runs.flatMap { run -> run.marks.map { mark -> TextMark(run.start, run.end, when (mark) {
                 NoteDocMark.BOLD -> InlineStyle.BOLD
                 NoteDocMark.ITALIC -> InlineStyle.ITALIC

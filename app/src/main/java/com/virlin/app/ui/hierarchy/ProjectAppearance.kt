@@ -83,7 +83,8 @@ internal fun readablePalette(p: ProjectPalette): Boolean {
 
 @Composable internal fun ProjectColorsEditor(projectId: String, onDone: () -> Unit) {
     val prefs = LocalContext.current.getSharedPreferences("project_appearance", 0)
-    var draft by remember(projectId) { mutableStateOf(ProjectPalette.decode(prefs.getString(projectId, null))) }
+    val original = remember(projectId) { ProjectPalette.decode(prefs.getString(projectId, null)) }
+    var draft by remember(projectId) { mutableStateOf(original) }
     var role by remember { mutableIntStateOf(0) }
     var customExpanded by remember(projectId) { mutableStateOf(false) }
     val roleValues = draft?.let { listOf(it.main,it.primary,it.secondary,it.tertiary,it.surface,it.text,it.muted) }
@@ -176,12 +177,13 @@ internal fun readablePalette(p: ProjectPalette): Boolean {
                 }
             }
             TextButton(onClick={draft=null}) { Text("Reset to original") }
-        }
-        HorizontalDivider()
+        if (draft != original) {
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement=Arrangement.spacedBy(8.dp)) {
             val accent = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF087848)
             OutlinedButton(onClick=onDone,modifier=Modifier.weight(1f).heightIn(min = 48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = accent), contentPadding = PaddingValues(8.dp)) { Text("Discard preview") }
             Button(onClick={ val edit=prefs.edit(); if(draft==null) edit.remove(projectId) else edit.putString(projectId,draft!!.encode()); edit.apply(); onDone() }, enabled=draft==null || readablePalette(p), modifier=Modifier.weight(1f).heightIn(min = 48.dp).testTag("save_project_colors"), colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = readableOn(accent)), contentPadding = PaddingValues(8.dp)) { Text("Save palette") }
+        }
+        }
         }
     }
 }

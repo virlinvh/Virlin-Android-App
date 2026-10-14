@@ -64,4 +64,24 @@ class KnowledgeRedesignUiTest {
         assertEquals(readableOn(Color(ProjectPalette.from(Color(0xFF2563EB)).secondary)), layouts.single().layoutInput.style.color)
         compose.runOnIdle { assertTrue(KnowledgeOrbVisibility.hidden) }
     }
+    @Test fun mapPagesShowOnlyTheirExactOwnerContent() {
+        val scoped = listOf(
+            KnowledgeItem("project-note", "p", KnowledgeType.DOCUMENT, "Project-only note", workstreamId = null,
+                updatedAtMillis = 1),
+            KnowledgeItem("stream-note", "p", KnowledgeType.DOCUMENT, "Stream-only note", workstreamId = "ws",
+                updatedAtMillis = 2),
+            KnowledgeItem("task-note", "p", KnowledgeType.DOCUMENT, "Task-owned note", workstreamId = "ws",
+                taskId = "task", updatedAtMillis = 3))
+        val actions = KnowledgeActions({}, {}, { _, _, _ -> }, {}, {}, {}, {}, {}, { _, _ -> },
+            { _, _, _ -> }, onMoveMany = { _, _, _ -> })
+        compose.setContent { MaterialTheme {
+            VirlinProjectKnowledgeLibrary("p", scoped, fixedScope = "ws", pageTitle = "Workstream · Page",
+                workstreams = listOf(KnowledgeWorkstream("ws", "Workstream")), tasks = emptyList(),
+                actions = actions, imagePreview = { _, _ -> })
+        } }
+        compose.onNodeWithText("Workstream · Page").assertIsDisplayed()
+        compose.onNodeWithText("Stream-only note").assertExists()
+        compose.onNodeWithText("Project-only note").assertDoesNotExist()
+        compose.onNodeWithText("Task-owned note").assertDoesNotExist()
+    }
 }

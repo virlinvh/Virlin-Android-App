@@ -1,6 +1,7 @@
 package com.virlin.app.map
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.virlin.app.ui.map.*
@@ -15,6 +16,28 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class MapAddPaletteUiTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun allOptionsRestNeutralAndOnlyThePressedOptionUsesProjectColor() {
+        val projectColor = Color(0xFF7F30D8)
+        val idle = addChoiceStyle(MapAddKind.TODO, pressed = false, projectColor)
+        assertEquals(Color.White, idle.background)
+        MapAddKind.entries.forEach { kind ->
+            assertEquals("$kind should not look preselected", idle, addChoiceStyle(kind, false, projectColor))
+            val pressed = addChoiceStyle(kind, true, projectColor)
+            assertEquals(true, pressed.background != idle.background)
+            assertEquals(true, pressed.border != idle.border)
+        }
+    }
+
+    @Test fun knowledgeEntryUsesTheSameNeutralClickableOptions() {
+        val selected = mutableListOf<MapAddKind>()
+        compose.setContent { MaterialTheme {
+            MapAddPalette("Project knowledge", {}, { selected += it }, knowledgeMode = true)
+        } }
+        compose.onNodeWithTag("mind_map_add_todo").performClick()
+        compose.onNodeWithTag("mind_map_add_note").performClick()
+        compose.runOnIdle { assertEquals(listOf(MapAddKind.TODO, MapAddKind.NOTE), selected) }
+    }
 
     @Test fun centeredPaletteKeepsEveryOptionVisibleAndClickable() {
         val selected = mutableListOf<MapAddKind>()

@@ -45,8 +45,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -56,6 +58,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -78,14 +81,23 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.virlin.app.data.voice.VoiceFileStore
+import com.virlin.app.data.attachment.AttachmentFileStore
 import com.virlin.app.domain.VirlinGraph
+import com.virlin.app.domain.action.ActionResult
 import com.virlin.app.domain.action.CaptureContext
 import com.virlin.app.domain.model.VoiceClip
 import com.virlin.app.domain.voice.VoiceDocumentCodec
 import com.virlin.app.ui.theme.VirlinColors
+import com.virlin.app.ui.hierarchy.ProjectPalette
+import com.virlin.app.ui.hierarchy.rememberProjectPalette
+import com.virlin.app.ui.hierarchy.readableOn
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 const val VoiceEditorRoute = "voice_editor"
 fun voiceEditorRoute(captureId: String?) =
@@ -108,11 +120,13 @@ const val VoiceStopTag = "voice_stop_recording"
 const val VoiceRecordAnotherTag = "voice_record_another"
 const val VoiceSaveStatusTag = "voice_save_status"
 
-private val Paper = Color(0xFFFAF8F5)
-private val Forest = Color(0xFF162016)
-private val Hairline = Color(0x1F162016)
-private val Blue = Color(0xFF1D63ED)
-private val BlueSoft = Color(0xFFE9F2FE)
+private val LocalVoicePalette = staticCompositionLocalOf<ProjectPalette?> { null }
+private val Paper @Composable get() = LocalVoicePalette.current?.let { Color(it.surface) } ?: Color(0xFFFAF8F5)
+private val Forest @Composable get() = LocalVoicePalette.current?.let { Color(it.text) } ?: Color(0xFF162016)
+private val Hairline @Composable get() = LocalVoicePalette.current?.let { Color(it.secondary).copy(alpha = .2f) } ?: Color(0x1F162016)
+private val Blue @Composable get() = LocalVoicePalette.current?.let { Color(it.secondary) } ?: Color(0xFF1D63ED)
+private val BlueSoft @Composable get() = LocalVoicePalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE9F2FE)
+private val VoiceMuted @Composable get() = LocalVoicePalette.current?.let { Color(it.muted) } ?: VirlinColors.TextSecondary
 private val RecRed = Color(0xFFE11D48)
 
 @Composable
@@ -130,8 +144,42 @@ fun VoiceEditorScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
+    val palette = rememberProjectPalette(state.context.projectId)
     var menuOpen by remember { mutableStateOf(false) }
     var playingId by remember { mutableStateOf<String?>(null) }
+    var importing by remember { mutableStateOf(false) }
+    var importError by remember { mutableStateOf<String?>(null) }
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) importing = false
+        else scope.launch {
+            val projectId = state.context.projectId
+            val id = VirlinGraph.ids.newId("att")
+            var saved = false
+            try {
+                require(!projectId.isNullOrBlank()) { "Choose a project before importing audio." }
+                val file = withContext(Dispatchers.IO) { AttachmentFileStore.importFromUri(context, uri, id) }
+                require(file.sizeBytes > 0) { "The file is empty." }
+                withContext(NonCancellable) {
+                    val result = VirlinGraph.actions.createAttachment(file.displayName, file.mimeType,
+                        file.sizeBytes, file.relativePath, file.kind,
+                        context = CaptureContext(projectId = projectId,
+                            workStreamId = state.context.workStreamId), attachmentId = id)
+                    if (result !is ActionResult.Success) error("Could not save this file to the project.")
+                    saved = true
+                }
+                val exit = vm.prepareExit()
+                if (exit.navigate) navController.popBackStack()
+                else importError = "Audio imported, but the recording could not be saved. Please try Back again."
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { importError = failure.message ?: "Import failed. Please try again." }
+            finally {
+                if (!saved) withContext(NonCancellable + Dispatchers.IO) {
+                    AttachmentFileStore.deleteAttachmentTree(context, id)
+                }
+                importing = false
+            }
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -165,6 +213,8 @@ fun VoiceEditorScreen(
         }
     }
 
+    CompositionLocalProvider(LocalVoicePalette provides palette) {
+    MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(primary = Blue, onPrimary = readableOn(Blue))) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -191,7 +241,7 @@ fun VoiceEditorScreen(
                             VoiceSaveStatus.Idle -> if (state.hasMeaningfulContent) "Ready" else "No recording"
                         },
                         fontSize = 11.sp,
-                        color = if (state.saveStatus == VoiceSaveStatus.Saved) Blue else VirlinColors.TextSecondary,
+                        color = if (state.saveStatus == VoiceSaveStatus.Saved) Blue else VoiceMuted,
                         modifier = Modifier.testTag(VoiceSaveStatusTag)
                     )
                     if (state.committedToInbox) {
@@ -227,7 +277,7 @@ fun VoiceEditorScreen(
             if (state.contextLabel != null) "Attached to · ${state.contextLabel}" else "Global · Inbox",
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
-            color = if (state.contextLabel != null) VirlinColors.Emerald else VirlinColors.TextTertiary,
+            color = if (state.contextLabel != null) Blue else VoiceMuted,
             modifier = Modifier.padding(horizontal = 16.dp)
         )
 
@@ -241,6 +291,10 @@ fun VoiceEditorScreen(
         state.toast?.let {
             Text(it, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = VirlinColors.Amber, modifier = Modifier.padding(16.dp, 4.dp))
         }
+        importError?.let {
+            Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp, 4.dp))
+        }
+        if (importing) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
 
         Spacer(Modifier.height(10.dp))
         Text(
@@ -248,7 +302,7 @@ fun VoiceEditorScreen(
             fontSize = 10.sp,
             fontWeight = FontWeight.Black,
             letterSpacing = 1.2.sp,
-            color = VirlinColors.TextTertiary,
+            color = VoiceMuted,
             modifier = Modifier.padding(horizontal = 16.dp)
         )
         BasicTextField(
@@ -320,7 +374,7 @@ fun VoiceEditorScreen(
                 Text(
                     if (state.clips.isEmpty()) "Tap below to start" else "Ready",
                     fontSize = 12.sp,
-                    color = VirlinColors.TextSecondary
+                    color = VoiceMuted
                 )
             }
         }
@@ -331,7 +385,7 @@ fun VoiceEditorScreen(
             fontSize = 10.sp,
             fontWeight = FontWeight.Black,
             letterSpacing = 1.2.sp,
-            color = VirlinColors.TextTertiary,
+            color = VoiceMuted,
             modifier = Modifier.padding(horizontal = 16.dp)
         )
         Spacer(Modifier.height(8.dp))
@@ -386,7 +440,24 @@ fun VoiceEditorScreen(
                 }
                 Spacer(Modifier.height(24.dp))
             }
+            if (state.context.projectId != null && captureId == null) item {
+                Box(Modifier.fillMaxWidth()
+                    .background(BlueSoft, RoundedCornerShape(12.dp))
+                    .border(1.dp, Hairline, RoundedCornerShape(12.dp))
+                    .testTag("voice_import_audio")
+                    .clickable(enabled = !importing && state.recordPhase != RecordPhase.Recording) {
+                        importError = null
+                        importing = true
+                        try { importer.launch(arrayOf("audio/*")) }
+                        catch (_: Exception) { importing = false; importError = "Could not open the file picker." }
+                    }.padding(vertical = 14.dp), contentAlignment = Alignment.Center) {
+                    Text("IMPORT AUDIO", color = Blue, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+                Spacer(Modifier.height(24.dp))
+            }
         }
+    }
+    }
     }
 }
 
@@ -471,7 +542,7 @@ private fun ClipRow(
                     )
                 } else {
                     Text(clip.displayName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Forest)
-                    Text(VoiceDocumentCodec.formatDuration(clip.durationMs), fontSize = 11.sp, color = VirlinColors.TextSecondary)
+                    Text(VoiceDocumentCodec.formatDuration(clip.durationMs), fontSize = 11.sp, color = VoiceMuted)
                 }
             }
             Box {
@@ -527,6 +598,7 @@ private fun ClipRow(
 
 @Composable
 private fun AnimatedWaveform(active: Boolean, amplitude: Float, modifier: Modifier = Modifier) {
+    val accent = Blue
     val transition = rememberInfiniteTransition(label = "wave")
     val phase by transition.animateFloat(
         initialValue = 0f,
@@ -549,7 +621,7 @@ private fun AnimatedWaveform(active: Boolean, amplitude: Float, modifier: Modifi
             val x = i * (barW + gap)
             val y = (size.height - h) / 2f
             drawRoundRect(
-                color = if (active) Blue else Color(0xFFC5CDD8),
+                color = if (active) accent else Color(0xFFC5CDD8),
                 topLeft = Offset(x, y),
                 size = Size(barW, h),
                 cornerRadius = CornerRadius(barW / 2f, barW / 2f)
@@ -595,7 +667,7 @@ private fun VoiceContextPicker(onPick: (CaptureContext) -> Unit, onClose: () -> 
             Text(
                 "Project · ${p.title}",
                 fontSize = 12.sp,
-                color = VirlinColors.TextSecondary,
+                color = VoiceMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier

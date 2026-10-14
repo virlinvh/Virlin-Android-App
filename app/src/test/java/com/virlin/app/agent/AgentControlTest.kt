@@ -122,6 +122,40 @@ class AgentControlTest {
         assertEquals(DONE, s("s1").state)
     }
 
+    @Test fun completedFromExternalCheckStopsTimingWithoutStealingOtherFocus() = runTest {
+        assertTrue(actions.startExternalWork(com.virlin.app.domain.action.StartExternalWork("s4", workItemId = "t_daypart", checkInMinutes = 5)) is com.virlin.app.domain.action.ActionResult.Success)
+        clock.advance(Duration.ofMinutes(10))
+        vm.intents.complete("t_daypart"); advanceUntilIdle()
+        val task = repo.getTask("t_daypart")!!
+        assertEquals(TaskStatus.DONE, task.status)
+        assertNotNull(task.completedAt)
+        assertNull(s("s4").processingStartedAt)
+        assertNull(s("s4").checkAt)
+        assertNull(s("s4").activeTaskId)
+        assertEquals(600L, s("s4").externalTrackedSeconds)
+        assertNull(task.execution?.processingStartedAt)
+        assertNull(task.execution?.checkAt)
+        assertEquals(FOCUS, s("s1").state)
+        assertEquals("p_q17", s("s1").activeTaskId)
+        assertFalse(scheduler.current.containsKey("t_daypart"))
+        assertFalse(scheduler.current.containsKey("s4"))
+    }
+
+    @Test fun wholeWorkstreamAtCheckNeedsConfirmationBeforeCompletion() = runTest {
+        actions.startExternalWork(com.virlin.app.domain.action.StartExternalWork("s9", checkInMinutes = 1))
+        clock.advance(Duration.ofMinutes(2)); actions.checkDue("s9")
+        assertEquals(CHECK, s("s9").state)
+        vm.intents.complete("s9"); advanceUntilIdle()
+        assertEquals(CHECK, s("s9").state)
+        assertEquals("s9", vm.intents.pendingWorkStreamCompletion.value)
+        vm.intents.confirmCompleteWorkStream(); advanceUntilIdle()
+        assertEquals(DONE, s("s9").state)
+        assertNull(s("s9").processingStartedAt)
+        assertNull(s("s9").checkAt)
+        assertFalse(scheduler.current.containsKey("s9"))
+        assertEquals(FOCUS, s("s1").state)
+    }
+
     // ------------------------------------------------------------------ external (10–16)
 
     @Test fun agentHandOff_5m_andNoCheck() = runTest {

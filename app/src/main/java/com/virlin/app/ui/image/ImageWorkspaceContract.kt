@@ -16,8 +16,9 @@ fun imageWorkspaceForCapture(captureId: String): String {
 const val ImageWorkspaceTag = "image_workspace"
 const val ImageChooseButtonTag = "image_choose_button"
 const val ImageSaveCopyTag = "image_save_copy"
+const val ImagePreviewTag = "image_preview"
 
-enum class ImageWorkspaceMode { LIBRARY, EDIT, CROP, MARKUP }
+enum class ImageWorkspaceMode { LIBRARY, PREVIEW, EDIT, CROP, MARKUP }
 
 enum class ImageEditTool { ADJUST, CROP, MARKUP, TEXT, FILTERS }
 
@@ -78,7 +79,7 @@ data class ImageMarkupStroke(
 )
 
 /** What a back gesture should do in the Image workspace. */
-enum class ImageBackAction { EXIT, TO_LIBRARY, TO_EDIT }
+enum class ImageBackAction { EXIT, TO_LIBRARY, TO_PREVIEW, TO_EDIT }
 
 /**
  * Resolves one back gesture for the Image workspace.
@@ -88,8 +89,9 @@ enum class ImageBackAction { EXIT, TO_LIBRARY, TO_EDIT }
  * capture directly ([hasCaptureOwner]), and there is no library behind it, so back must leave the
  * screen. Returning EDIT in that case would be a self-loop and would trap the user in the editor.
  */
-fun imageBackAction(mode: ImageWorkspaceMode, hasCaptureOwner: Boolean): ImageBackAction = when (mode) {
+fun imageBackAction(mode: ImageWorkspaceMode, hasCaptureOwner: Boolean, editOpenedFromPreview: Boolean = false): ImageBackAction = when (mode) {
     ImageWorkspaceMode.CROP, ImageWorkspaceMode.MARKUP -> ImageBackAction.TO_EDIT
-    ImageWorkspaceMode.EDIT -> if (hasCaptureOwner) ImageBackAction.EXIT else ImageBackAction.TO_LIBRARY
+    ImageWorkspaceMode.EDIT -> if (editOpenedFromPreview) ImageBackAction.TO_PREVIEW else if (hasCaptureOwner) ImageBackAction.EXIT else ImageBackAction.TO_LIBRARY
+    ImageWorkspaceMode.PREVIEW -> if (hasCaptureOwner) ImageBackAction.EXIT else ImageBackAction.TO_LIBRARY
     ImageWorkspaceMode.LIBRARY -> ImageBackAction.EXIT
 }
