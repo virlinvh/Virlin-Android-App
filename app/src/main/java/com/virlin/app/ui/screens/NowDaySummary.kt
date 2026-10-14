@@ -40,9 +40,10 @@ import java.util.Locale
 /**
  * NOW — greeting + today's achievement summary (presentation only).
  *
- * The four numbers below are **temporary display values**: they live in exactly one place,
+ * Values are supplied by the caller: today's focus is derived from stored sessions;
+ * the remaining achievement metrics stay unavailable until defined. They live in one place,
  * [NowDaySummaryValues], and nothing here reads the domain, the repository or the clock for them.
- * Wiring them later means passing a real instance from the ViewModel — the bar itself
+ * The bar itself
  * ([VirlinProgressBar]) only ever receives formatted strings.
  *
  * The date pill is the only live thing on this surface, and it is device date formatting, not a
@@ -50,14 +51,16 @@ import java.util.Locale
  */
 data class NowDaySummaryValues(
     /** "42m" — time the user did not have to spend. */
-    val timeSaved: String = "42m",
-    val tasksAdvanced: String = "8",
+    val timeSaved: String = "—",
+    val tasksAdvanced: String = "—",
     val tasksAdvancedUnit: String = "tasks",
-    val projectsMoved: String = "3",
+    val projectsMoved: String = "—",
     val projectsMovedUnit: String = "projects",
     /** "22h 18m" — real human attention invested. */
-    val timeFocused: String = "22h 18m",
-    val greetingName: String = "Maya"
+    val timeFocused: String = "—",
+    val greetingName: String = "",
+    val savedUnit: String = "saved",
+    val timeExternal: String = "—"
 )
 
 private val SummaryGreen = Color(0xFF16A34A)
@@ -74,19 +77,22 @@ private val DatePillInk = Color(0xFF14532D)
 // hairline and a soft shadow — enough to read as ONE floating summary, never as a coloured panel.
 
 /** "Tue, 23 Sep 2025" — the device's own date, formatted for display. */
-private val DateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault())
+private val DateFormat: DateTimeFormatter get() = DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.getDefault())
 
 @Composable
 fun NowDaySummary(
     values: NowDaySummaryValues = NowDaySummaryValues(),
-    today: LocalDate = LocalDate.now(),
-    modifier: Modifier = Modifier
+    today: LocalDate = rememberCurrentLocalDate(),
+    modifier: Modifier = Modifier,
+    timersRunning: Boolean = false,
+    pausingTimers: Boolean = false,
+    onPauseAll: (() -> Unit)? = null
 ) {
     Column(modifier = modifier.fillMaxWidth().testTag(NowDaySummaryTag)) {
         // ── greeting · date pill
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             // The accent rule sits ON the segment's left edge — the same edge as the summary
@@ -102,7 +108,7 @@ fun NowDaySummary(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Hi, ${values.greetingName} 👋",
+                        if (values.greetingName.isBlank()) "Hi 👋" else "Hi, ${values.greetingName} 👋",
                         fontSize = 22.sp, fontWeight = FontWeight.Black, color = Charcoal,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
@@ -130,6 +136,10 @@ fun NowDaySummary(
                     maxLines = 1, softWrap = false
                 )
             }
+            if (onPauseAll != null) {
+                MasterTimerButton(timersRunning, pausingTimers, onPauseAll,
+                    runningGradient = listOf(Color(0xFF83CF76), Color(0xFF13A760), Color(0xFF087F5B)))
+            }
         }
 
         Spacer(Modifier.height(14.dp))
@@ -137,18 +147,18 @@ fun NowDaySummary(
         // ── THE SUMMARY BAR — the supplied `VirlinProgressBar`, fed by the same values.
         VirlinProgressBar(
             timeSaved = values.timeSaved,
+            savedUnit = values.savedUnit,
             tasksAdvanced = values.tasksAdvanced,
             projectsMoved = values.projectsMoved,
             timeFocused = values.timeFocused,
+            timeExternal = values.timeExternal,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(72.dp)
                 .testTag(NowSummaryBarTag)
                 .semantics {
-                    contentDescription = "${values.timeSaved} saved, " +
-                        "${values.tasksAdvanced} ${values.tasksAdvancedUnit} advanced, " +
-                        "${values.projectsMoved} ${values.projectsMovedUnit} moved, " +
-                        "${values.timeFocused} focused"
+                    contentDescription = "${values.timeSaved} ${values.savedUnit}, " +
+                        "${values.timeFocused} focused, ${values.timeExternal} combined external task time"
                 }
         )
     }

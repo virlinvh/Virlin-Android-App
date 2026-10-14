@@ -6,14 +6,21 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import com.virlin.app.domain.action.ActionResult
 import com.virlin.app.domain.action.DomainError
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
@@ -25,12 +32,30 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.ui.hierarchy.taskDetail
 import com.virlin.app.ui.hierarchy.workStreamDetail
+import com.virlin.app.ui.hierarchy.ProjectPalette
+
+/** Map chrome follows the project; node/connector colors remain in MapAppearance. */
+internal fun projectMapChromeColors(base: ColorScheme, palette: ProjectPalette?): ColorScheme {
+    val accent = palette?.let { Color(it.main) } ?: base.primary
+    return base.copy(
+        primary = accent,
+        onPrimary = com.virlin.app.ui.hierarchy.readableOn(accent),
+        secondary = palette?.let { Color(it.secondary) } ?: base.secondary,
+        surface = Color.White,
+        surfaceContainerLow = Color.White,
+        surfaceContainer = Color.White,
+        surfaceContainerHigh = Color.White,
+        onSurface = palette?.let { Color(it.text) } ?: base.onSurface,
+        onSurfaceVariant = palette?.let { Color(it.muted) } ?: base.onSurfaceVariant,
+    )
+}
 
 const val ProjectMapRoute = "project_map/{id}"
 fun projectMap(id: String) = "project_map/$id"
@@ -47,7 +72,23 @@ fun projectMap(id: String) = "project_map/$id"
  */
 @androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
-fun ProjectMapScreen(projectId: String?, navController: NavController) {
+fun ProjectMapScreen(projectId: String?, navController: NavController,
+    onFocusModeChange: (Boolean) -> Unit = {}) {
+    val palette = com.virlin.app.ui.hierarchy.rememberProjectPalette(projectId)
+    val chromeColors = projectMapChromeColors(MaterialTheme.colorScheme, palette)
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.virlin.app.ui.hierarchy.LocalProjectPalette provides palette,
+    ) {
+        MaterialTheme(colorScheme = chromeColors) {
+            ProjectMapContent(projectId, navController, onFocusModeChange)
+        }
+    }
+}
+
+@androidx.compose.material3.ExperimentalMaterial3Api
+@Composable
+private fun ProjectMapContent(projectId: String?, navController: NavController,
+    onFocusModeChange: (Boolean) -> Unit) {
     val context = LocalContext.current
     val repository = VirlinGraph.repository
     val projects by repository.projects.collectAsState()
@@ -58,6 +99,11 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
     val saved by store.all.collectAsState()
     var preview by remember { mutableStateOf<VirlinMapSnapshot?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    var creatingUnder by remember { mutableStateOf<Pair<MapTopic, Boolean>?>(null) }
+    var choosingProjectBranch by remember { mutableStateOf<MapTopic?>(null) }
+    var choosingContentOwner by remember { mutableStateOf<MapTopic?>(null) }
+    var containerContentTask by remember { mutableStateOf<MapTopic?>(null) }
 
     if (project == null) {
         Box(Modifier.fillMaxSize()) { Text("This project is no longer available") }
@@ -66,6 +112,20 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
 
     val topics = remember(project, streams, tasks) { projectMapTopics(project, streams, tasks) }
     val appearance = saved[project.id] ?: MapAppearance()
+
+    fun exportDocument(uri: Uri?, label: String, write: (java.io.OutputStream) -> Unit) {
+        if (uri == null) return
+        scope.launch {
+            try {
+                kotlinx.coroutines.runInterruptible(kotlinx.coroutines.Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use(write)
+                        ?: error("The file could not be opened for writing")
+                }
+                Toast.makeText(context, "Exported $label", Toast.LENGTH_SHORT).show()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (e: Exception) { problem = e.message ?: "The export failed" }
+        }
+    }
 
     val exportXmind = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -90,29 +150,82 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
             context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
                 ?: error("The file could not be opened for writing")
         }.onSuccess {
-            Toast.makeText(context, "Exported Virlin map", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Exported VMap", Toast.LENGTH_SHORT).show()
         }.onFailure { problem = it.message ?: "The export failed" }
     }
+
+    val exportPdf = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri: Uri? -> exportDocument(uri, "PDF") { MapExportWriter.writePdf(topics, appearance, it) } }
+
+    val exportPng = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("image/png")
+    ) { uri: Uri? -> exportDocument(uri, "PNG") { MapExportWriter.writePng(topics, appearance, it) } }
+
+    val exportMarkdown = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/markdown")
+    ) { uri: Uri? -> exportDocument(uri, "Markdown") { MapExportWriter.writeMarkdown(topics, it) } }
+
+    val exportJson = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? -> exportDocument(uri, "JSON") {
+        MapExportWriter.writeJson(VirlinMapSnapshot(project.id, project.title, topics, appearance), it)
+    } }
 
     val openVirlin = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
-        runCatching {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: error("The file could not be read")
-            decodeVirlinMap(bytes)
-        }.onSuccess {
-            // A snapshot is shown, never merged: no live record is created or changed by it.
-            preview = it
-        }.onFailure { problem = it.message ?: "That file could not be read as a Virlin map" }
+        scope.launch {
+            try {
+                preview = kotlinx.coroutines.runInterruptible(kotlinx.coroutines.Dispatchers.IO) {
+                    val bytes = context.contentResolver.openInputStream(uri)?.use {
+                        com.virlin.app.domain.attachment.readBoundedImport(it)
+                    } ?: error("The file could not be read")
+                    decodeVirlinMap(bytes)
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (e: Exception) { problem = e.message ?: "That file could not be read as a VMap" }
+        }
     }
 
     // ---- Edit structure -------------------------------------------------------------------
     // Every button below ends in VirlinActions.placeBranch; nothing here writes a parent id.
-    val scope = rememberCoroutineScope()
     var structureMode by remember { mutableStateOf(false) }
+    var structureTransitioning by remember { mutableStateOf(true) }
+    var mapDisposed by remember { mutableStateOf(false) }
+    // The transition must finish even if navigation removes the composition mid-transaction.
+    val timerScope = remember(project.id) { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+    // The pause marker is persisted with each timer. If the process died while Organize was
+    // open, reopening this map restores that project's still-eligible timers.
+    androidx.compose.runtime.LaunchedEffect(project.id) {
+        try {
+            when (VirlinGraph.actions.resumeTimersForOrganize(project.id)) {
+                is ActionResult.Rejected -> problem =
+                    "Some Organize-paused timers could not resume while another task is focused."
+                is ActionResult.Failure -> problem = "Could not restore Organize-paused timers."
+                else -> Unit
+            }
+        } finally {
+            structureTransitioning = false
+        }
+    }
+    // A map can leave composition via back, bottom navigation, or a node link. Never strand
+    // project timers in the temporary Organize pause when that happens.
+    androidx.compose.runtime.DisposableEffect(project.id) {
+        onDispose {
+            mapDisposed = true
+            if (structureMode && !structureTransitioning) timerScope.launch {
+                VirlinGraph.actions.resumeTimersForOrganize(project.id)
+            }
+        }
+    }
     var selectedNode by remember { mutableStateOf<MapTopic?>(null) }
+
+    // --- Mind-map node previews. Entirely separate from the lower action bar's Add.
+    val previewHost = com.virlin.app.ui.map.preview.rememberMapPreviewHostState()
+    val previewContext = androidx.compose.ui.platform.LocalContext.current
+    var replacingImage by remember { mutableStateOf(false) }
     var clipboard by remember { mutableStateOf<MapTopic?>(null) }
     var intent by remember { mutableStateOf<StructureIntent?>(null) }
     var refused by remember { mutableStateOf<String?>(null) }
@@ -120,7 +233,19 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
         mutableStateOf<com.virlin.app.domain.structure.PlacementCommit?>(null)
     }
     val snackbar = remember { SnackbarHostState() }
+    val previewPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            previewHost.addImage(previewContext, uri, replacingImage) { message ->
+                scope.launch { snackbar.showSnackbar(message) }
+            }
+        }
+        replacingImage = false
+    }
     var renaming by remember { mutableStateOf<MapTopic?>(null) }
+    var duplicating by remember { mutableStateOf<MapTopic?>(null) }
+    var previewNameSaving by remember { mutableStateOf(false) }
     // Messages that are not about a placement keep their own copy; reusing the placement
     // dialog's title hid the real reason an edit was refused.
     var notice by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -292,7 +417,7 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
     fun openTopic(topic: MapTopic) {
         when (topic.kind) {
             // The project's own node is where we already are.
-            MapKind.PROJECT -> Unit
+            MapKind.PROJECT -> navController.navigate(com.virlin.app.ui.hierarchy.projectDetail(topic.id))
             MapKind.WORKSTREAM -> navController.navigate(workStreamDetail(topic.id))
             MapKind.TASK -> navController.navigate(taskDetail(topic.id))
         }
@@ -305,18 +430,68 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
         onAppearanceChange = { store.save(project.id, it) },
         onNodeOpen = ::openTopic,
         onBack = { navController.popBackStack() },
+        onFocusModeChange = onFocusModeChange,
         onExportXmind = { exportXmind.launch("${project.title.fileSafe()}.xmind") },
-        onExportVirlin = { exportVirlin.launch("${project.title.fileSafe()}.virlinmap") },
+        onExportVirlin = { exportVirlin.launch("${project.title.fileSafe()}.vmap") },
+        onExportPdf = { exportPdf.launch("${project.title.fileSafe()}.pdf") },
+        onExportPng = { exportPng.launch("${project.title.fileSafe()}.png") },
+        onExportMarkdown = { exportMarkdown.launch("${project.title.fileSafe()}.md") },
+        onExportJson = { exportJson.launch("${project.title.fileSafe()}.json") },
         onOpenVirlinMap = { openVirlin.launch(arrayOf("*/*")) },
         structureMode = structureMode,
         onToggleStructureMode = {
-            structureMode = !structureMode
-            selectedNode = null
-            if (!structureMode) clipboard = null
+            if (!structureTransitioning) {
+                structureTransitioning = true
+                timerScope.launch {
+                    val result = if (structureMode)
+                        VirlinGraph.actions.resumeTimersForOrganize(project.id)
+                    else VirlinGraph.actions.pauseTimersForOrganize(project.id)
+                    when (result) {
+                        is ActionResult.Success -> {
+                            if (mapDisposed) {
+                                if (!structureMode) VirlinGraph.actions.resumeTimersForOrganize(project.id)
+                            } else {
+                                structureMode = !structureMode
+                                if (!structureMode) clipboard = null
+                            }
+                        }
+                        is ActionResult.Failure -> problem = result.cause.message
+                            ?: "Could not change Organize mode. Timers were left unchanged."
+                        is ActionResult.Rejected -> problem =
+                            "Another task is focused. Pause it before leaving Organize mode so this project's timers can resume."
+                        else -> problem = "Could not change Organize mode. Timers were left unchanged."
+                    }
+                    structureTransitioning = false
+                }
+            }
         },
         // One selection id: the map renders the host's value and reports every change here.
         selectedId = selectedNode?.id,
-        onStructureSelect = { selectedNode = it },
+        onStructureSelect = {
+            selectedNode = it
+            // A resting node shows its title only, so deselecting collapses any open preview.
+            previewHost.onSelectionChanged(it?.id)
+        },
+        previewOwners = previewHost.owners(),
+        expandedPreviewId = previewHost.expandedId,
+        expandedPreviewHeight = previewHost.expandedExtraHeight(),
+        onTogglePreview = { previewHost.toggleExpanded(it.id) },
+        onEditPreview = { previewHost.startEditing(it.id) },
+        expandedPreviewContent = { rect ->
+            val id = previewHost.expandedId
+            val preview = id?.let { previewHost.previews[it] }
+            val topic = id?.let { owner -> topics.firstOrNull { it.id == owner } }
+            if (preview != null && topic != null) {
+                com.virlin.app.ui.map.preview.ExpandedNodeCard(
+                    rect = rect,
+                    title = topic.title,
+                    preview = preview,
+                    density = androidx.compose.ui.platform.LocalDensity.current,
+                    onCollapse = { previewHost.toggleExpanded(topic.id) },
+                    onEdit = { previewHost.startEditing(topic.id) },
+                )
+            }
+        },
         isValidTarget = ::canDrop,
         canInsertBeside = ::canInsertBeside,
         branchSizeOf = ::branchSize,
@@ -358,8 +533,14 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
             intent = StructureIntent.MOVE
         },
         onOpenTaskPage = { topic ->
-            navController.navigate(com.virlin.app.ui.page.taskPage(topic.id))
+            if (topic.kind == MapKind.TASK) navController.navigate(com.virlin.app.ui.page.taskPage(topic.id))
+            else navController.navigate("map_container_page/${Uri.encode(project.id)}/${if (topic.kind == MapKind.PROJECT) "project" else Uri.encode(topic.id)}")
         },
+        onAddContainer = { topic ->
+            if (topic.kind == MapKind.PROJECT) choosingProjectBranch = topic
+            else if (topic.kind == MapKind.WORKSTREAM) creatingUnder = topic to false
+        },
+        onAddChildTask = { addingChildTo = it },
         // Add: the palette itself writes nothing. Each choice lands here and runs exactly one
         // real flow, after its own confirmation step.
         onAddChoice = { topic, kind -> addChoice = topic to kind },
@@ -390,8 +571,18 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
                         null -> Unit
                     }
                 },
+                onAddBranch = {
+                    val topic = selectedNode?.let { selected -> topics.firstOrNull { it.id == selected.id } }
+                    when (topic?.kind) {
+                        MapKind.PROJECT -> choosingProjectBranch = topic
+                        MapKind.WORKSTREAM -> creatingUnder = topic to false
+                        MapKind.TASK -> addingChildTo = topic
+                        null -> problem = "This branch is no longer available."
+                    }
+                },
                 onMove = { intent = StructureIntent.MOVE },
                 onCopy = { clipboard = selectedNode; selectedNode = null },
+                onDuplicate = { selectedNode?.takeIf { it.kind == MapKind.TASK }?.let { duplicating = it } },
                 onPaste = {
                     val source = clipboard
                     val into = selectedNode
@@ -411,6 +602,64 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
             )
         },
     )
+
+    previewHost.editing?.let { ownerId ->
+        val draft = previewHost.draft
+        val topic = topics.firstOrNull { it.id == ownerId }
+        if (draft != null && topic != null) {
+            com.virlin.app.ui.map.preview.MapNodePreviewPopup(
+                nodeTitle = topic.title,
+                draft = draft,
+                savingName = previewNameSaving,
+                onDraftChange = { previewHost.draft = it },
+                onPickImage = { replacingImage = false; previewPicker.launch(arrayOf("image/*")) },
+                onReplaceImage = { replacingImage = true; previewPicker.launch(arrayOf("image/*")) },
+                onRequestClear = { previewHost.confirmingClear = true },
+                onCancel = { previewHost.cancelEditing(previewContext) },
+                onSave = { editedName ->
+                    if (!previewNameSaving) {
+                        previewNameSaving = true
+                        scope.launch {
+                        if (editedName != topic.title) {
+                            val result: ActionResult<*> = when (topic.kind) {
+                                MapKind.PROJECT -> VirlinGraph.actions.updateProject(topic.id,
+                                    com.virlin.app.domain.action.ProjectUpdate(
+                                        title = com.virlin.app.domain.action.Field.Set(editedName)))
+                                MapKind.WORKSTREAM -> VirlinGraph.actions.updateContext(topic.id,
+                                    com.virlin.app.domain.action.ContextUpdate(
+                                        title = com.virlin.app.domain.action.Field.Set(editedName)))
+                                MapKind.TASK -> VirlinGraph.actions.updateTask(topic.id,
+                                    com.virlin.app.domain.action.TaskUpdate(
+                                        title = com.virlin.app.domain.action.Field.Set(editedName)))
+                            }
+                            if (result !is ActionResult.Success) {
+                                previewNameSaving = false
+                                snackbar.showSnackbar(editRefusal(result))
+                                return@launch
+                            }
+                        }
+                        previewHost.save(previewContext) { error ->
+                            previewNameSaving = false
+                            if (error != null) scope.launch { snackbar.showSnackbar(error) }
+                        }
+                        }
+                    }
+                },
+                imageLoader = { image, modifier ->
+                    com.virlin.app.ui.map.preview.MapPreviewImageView(image, modifier)
+                },
+            )
+        }
+        if (previewHost.confirmingClear) {
+            com.virlin.app.ui.map.preview.ClearPreviewDialog(
+                onConfirm = {
+                    previewHost.draft = previewHost.draft?.cleared()
+                    previewHost.confirmingClear = false
+                },
+                onDismiss = { previewHost.confirmingClear = false },
+            )
+        }
+    }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         SnackbarHost(snackbar, Modifier.padding(bottom = 96.dp))
@@ -474,7 +723,114 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
         PlacementRefusedDialog(reason) { refused = null }
     }
 
+    choosingProjectBranch?.let { owner ->
+        AlertDialog(
+            onDismissRequest = { choosingProjectBranch = null },
+            title = { Text("Add a branch to ${owner.title}") },
+            text = {
+                androidx.compose.foundation.layout.Column {
+                    TextButton(onClick = {
+                        choosingProjectBranch = null
+                        creatingUnder = owner to true
+                    }) { Text("Workstream") }
+                    TextButton(onClick = {
+                        choosingProjectBranch = null
+                        creatingUnder = owner to false
+                    }) { Text("Task") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { choosingProjectBranch = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    creatingUnder?.let { (owner, workstream) ->
+        if (workstream) com.virlin.app.ui.hierarchy.BulkCreationDialog(
+            "New workstream in ${owner.title}", "Workstream name", project.id,
+            onDismiss = { creatingUnder = null }, onSingle = { name ->
+                creatingUnder = null
+                scope.launch {
+                    val result = VirlinGraph.actions.createWorkStream(com.virlin.app.domain.action.CreateWorkStream(name, project.id))
+                    if (result !is ActionResult.Success) problem = editRefusal(result)
+                }
+            }) else
+        com.virlin.app.ui.hierarchy.BulkCreationDialog(
+            title = owner.title, placeholder = "Task name", projectId = project.id,
+            taskDestination = com.virlin.app.domain.action.CreateTask("",
+                projectId = project.id.takeIf { owner.kind == MapKind.PROJECT },
+                workStreamId = owner.id.takeIf { owner.kind == MapKind.WORKSTREAM }),
+            onDismiss = { creatingUnder = null },
+            onSingle = { name ->
+                creatingUnder = null
+                scope.launch {
+                    val result = if (workstream) {
+                        VirlinGraph.actions.createWorkStream(com.virlin.app.domain.action.CreateWorkStream(
+                            title = name, projectId = project.id))
+                    } else {
+                        VirlinGraph.actions.createTask(com.virlin.app.domain.action.CreateTask(
+                            title = name,
+                            projectId = if (owner.kind == MapKind.PROJECT) project.id else null,
+                            workStreamId = owner.id.takeIf { owner.kind == MapKind.WORKSTREAM }))
+                    }
+                    if (result !is ActionResult.Success) problem = editRefusal(result)
+                }
+            },
+        )
+    }
+
+    choosingContentOwner?.let { owner ->
+        val eligible = topics.filter { topic ->
+            topic.kind == MapKind.TASK && (owner.kind == MapKind.PROJECT ||
+                tasks.firstOrNull { it.id == topic.id }?.workStreamId == owner.id)
+        }
+        AlertDialog(
+            onDismissRequest = { choosingContentOwner = null },
+            title = { Text("Choose a task in ${owner.title}") },
+            text = {
+                androidx.compose.foundation.layout.Column(Modifier
+                    .then(Modifier.heightIn(max = 360.dp))
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                    if (eligible.isEmpty()) Text("Create a task here first. Content is saved against a task.")
+                    eligible.forEach { task ->
+                        TextButton(onClick = {
+                            choosingContentOwner = null; containerContentTask = task
+                        }) { Text(task.title) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { choosingContentOwner = null }) { Text("Cancel") } },
+        )
+    }
+
+    containerContentTask?.let { task ->
+        com.virlin.app.ui.components.SafeDialog(onDismissRequest = { containerContentTask = null }) {
+            MapAddPalette(task.title, dialogMode = true, onDismiss = { containerContentTask = null }, onChoose = { kind ->
+                containerContentTask = null
+                // Re-resolve before routing: deleted owners must never become orphan documents.
+                val live = topics.firstOrNull { it.id == task.id && it.kind == MapKind.TASK }
+                if (live != null) addChoice = live to kind else problem = "This task is no longer available."
+            })
+        }
+    }
+
     addChoice?.let { (topic, kind) ->
+        if (topic.kind != MapKind.TASK) {
+            addChoice = null
+            val live = topics.firstOrNull { it.id == topic.id && it.kind == topic.kind }
+            if (live == null) problem = "This branch is no longer available."
+            else if (topic.kind == MapKind.PROJECT) {
+                val route = if (kind == MapAddKind.AUDIO)
+                    "voice_editor/new/project/${Uri.encode(project.id)}"
+                else com.virlin.app.ui.hierarchy.projectKnowledgeEditorRoute(kind, project.id)
+                navController.navigate(route)
+            } else {
+                val route = runCatching { com.virlin.app.ui.hierarchy.workstreamKnowledgeEditorRoute(kind, topic.id) }.getOrNull()
+                if (route == null) problem = "That option is not available for a workstream."
+                else navController.navigate(route)
+            }
+            return@let
+        }
         when (kind) {
             // A To-do opens the task's own step list as a page; it never creates a task.
             MapAddKind.TODO -> {
@@ -531,10 +887,11 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
     }
 
     addingChildTo?.let { parent ->
-        MapAddSubtaskDialog(
-            parentTitle = parent.title,
+        com.virlin.app.ui.hierarchy.BulkCreationDialog(
+            title = parent.title, placeholder = "Subtask name", projectId = project.id,
+            taskDestination = com.virlin.app.domain.action.CreateTask("", parentTaskId = parent.id),
             onDismiss = { addingChildTo = null },
-            onSave = { title ->
+            onSingle = { title ->
                 addingChildTo = null
                 scope.launch {
                     // addSubtask is THE canonical child creation: it inherits the parent's
@@ -553,6 +910,30 @@ fun ProjectMapScreen(projectId: String?, navController: NavController) {
                     }
                 }
             }
+        )
+    }
+
+    duplicating?.let { topic ->
+        AlertDialog(
+            onDismissRequest = { duplicating = null },
+            title = { Text("Duplicate task branch?") },
+            text = { Text("A copy of this task and its subtasks will be placed beside the original.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    duplicating = null
+                    scope.launch {
+                        when (val result = VirlinGraph.actions.duplicateTask(topic.id)) {
+                            is ActionResult.Success -> {
+                                selectedNode = null
+                                snackbar.currentSnackbarData?.dismiss()
+                                snackbar.showSnackbar("Duplicated " + topic.title, withDismissAction = true)
+                            }
+                            else -> notice = "Can't duplicate this branch" to editRefusal(result)
+                        }
+                    }
+                }) { Text("Duplicate") }
+            },
+            dismissButton = { TextButton(onClick = { duplicating = null }) { Text("Cancel") } },
         )
     }
 

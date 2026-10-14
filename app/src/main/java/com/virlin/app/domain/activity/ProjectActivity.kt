@@ -289,7 +289,10 @@ object NoteBlockShape {
 
     fun checklistProgress(blocks: List<NoteBlock>): Counted? =
         checkboxes(blocks).takeIf { it.isNotEmpty() }
-            ?.let { Counted(it.count { box -> box.checked }, it.size) }
+            ?.let { boxes ->
+                val items = boxes.filter { it.plainText.isNotBlank() }
+                Counted(items.count { it.checked }, items.size)
+            }
 
     fun stepProgress(blocks: List<NoteBlock>): Counted? =
         steps(blocks).takeIf { it.isNotEmpty() }?.let { Counted(0, it.size) }

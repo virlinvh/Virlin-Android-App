@@ -33,7 +33,7 @@ object ProjectIconStore {
      * Any previous icon file of that project is deleted after the new one is safely written.
      * Throws [UnsupportedImage] for a non-image or unsupported type — nothing is written then.
      */
-    fun importFromUri(context: Context, projectId: String, uri: Uri): String {
+    fun importFromUri(context: Context, projectId: String, uri: Uri, preserveExisting: Boolean = false): String {
         val resolver = context.contentResolver
         val mime = resolver.getType(uri) ?: sniffMime(context, uri)
         if (mime !in supportedMimeTypes) throw UnsupportedImage("Unsupported image type: $mime")
@@ -50,7 +50,7 @@ object ProjectIconStore {
             FileOutputStream(dest).use { out -> input.copyTo(out, 64 * 1024); out.fd.sync() }
         } ?: throw UnsupportedImage("Cannot open image")
         // Remove any previous icon of this project (keep the one just written).
-        dest.parentFile?.listFiles()?.filter { it != dest }?.forEach { it.delete() }
+        if (!preserveExisting) dest.parentFile?.listFiles()?.filter { it != dest }?.forEach { it.delete() }
         return relative
     }
 

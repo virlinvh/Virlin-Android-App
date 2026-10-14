@@ -1,5 +1,6 @@
 package com.virlin.app.ui.hierarchy
 
+
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -12,9 +13,11 @@ import com.virlin.app.domain.action.VirlinActions
 import com.virlin.app.domain.model.EffectiveExecutionMode
 import com.virlin.app.domain.model.ExecutionPreference
 import com.virlin.app.domain.model.FocusInvestment
+import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStream
+import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.progress.ProgressCalculator
 import com.virlin.app.domain.repository.WorkStreamRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +42,38 @@ class HierarchyViewModel(
     private val repository: WorkStreamRepository = VirlinGraph.repository,
     private val actions: VirlinActions = VirlinGraph.actions
 ) : ViewModel() {
+    private val _timerControlBusy = MutableStateFlow<Set<String>>(emptySet())
+    val timerControlBusy = _timerControlBusy.asStateFlow()
+    private val _timerControlMessage = MutableStateFlow<Map<String, String>>(emptyMap())
+    val timerControlMessage = _timerControlMessage.asStateFlow()
+
+    fun toggleProjectTimers(projectId: String) {
+        if (projectId in _timerControlBusy.value) return
+        _timerControlBusy.update { it + projectId }
+        viewModelScope.launch {
+            try {
+                val streams = repository.streams.value.filter { it.projectId == projectId }
+                val ids = streams.map { it.id }.toSet()
+                val tasks = repository.tasks.value.filter { task ->
+                    if (task.workStreamId != null) task.workStreamId in ids else task.projectId == projectId
+                }
+                val running = streams.any { !it.state.isTerminal && (it.state == WorkStreamState.FOCUS || it.processingStartedAt != null) } ||
+                    tasks.any { !it.status.isTerminal && (it.execution?.state == WorkStreamState.FOCUS || it.execution?.processingStartedAt != null) }
+                val result = if (running) actions.pauseAllTimers(projectId) else actions.resumeAllTimers(projectId)
+                val message = when (result) {
+                    is ActionResult.Success -> if (running) "Project tasks paused · Time saved"
+                        else if (result.value > 0) "Project tasks resumed · Time preserved"
+                        else "No project timers could resume. Another human focus may be active."
+                    else -> "Could not change project timers. Please try again."
+                }
+                _timerControlMessage.update { it + (projectId to message) }
+            } finally { _timerControlBusy.update { it - projectId } }
+        }
+    }
+
+    val workstreamIntents = com.virlin.app.ui.screens.AttentionIntentController(
+        actions, VirlinGraph.clock, repository, viewModelScope, "ProjectWorkstreamControls"
+    )
 
     /** UI-only: expanded parent task ids. Not domain state. */
     private val expanded = MutableStateFlow<Set<String>>(emptySet())
@@ -92,7 +127,8 @@ class HierarchyViewModel(
         val attachment: com.virlin.app.domain.model.AttachmentDocument? = null,
         val voice: com.virlin.app.domain.model.VoiceDocument? = null,
         val note: com.virlin.app.domain.model.NoteDocument? = null,
-        val prompt: com.virlin.app.domain.model.PromptDocument? = null
+        val prompt: com.virlin.app.domain.model.PromptDocument? = null,
+        val richNote: com.virlin.app.domain.notedoc.VirlinNoteDoc? = null,
     )
 
     private val knowledgeProject = MutableStateFlow<String?>(null)
@@ -114,7 +150,8 @@ class HierarchyViewModel(
                     val notes = repository.getNotesByCaptureIds(ids)
                     val prompts = repository.getPromptsByCaptureIds(ids)
                     emit(mine.map {
-                        KnowledgeEntry(it, attachments[it.id], voices[it.id], notes[it.id], prompts[it.id])
+                        KnowledgeEntry(it, attachments[it.id], voices[it.id], notes[it.id], prompts[it.id],
+                            if (it.type == com.virlin.app.domain.model.CaptureType.NOTE) repository.getNoteDoc("capture-${it.id}") else null)
                     })
                 }
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -231,7 +268,7 @@ class HierarchyViewModel(
                 entry.prompt != null -> actions.createPrompt(
                     title, entry.prompt.description, entry.prompt.tags, entry.prompt.blocks, where
                 )
-                entry.note != null -> actions.createTextNote(title, entry.note.blocks, where)
+                entry.note != null -> actions.duplicateCaptureNote(source.id, title)
                 entry.attachment != null -> {
                     val newId = "copy-" + java.util.UUID.randomUUID().toString().take(8)
                     val original = com.virlin.app.data.attachment.AttachmentFileStore
@@ -278,7 +315,8 @@ class HierarchyViewModel(
         parentId: String?,
         title: String,
         afterId: String?,
-        preference: ExecutionPreference
+        preference: ExecutionPreference,
+        onResult: (String?) -> Unit = {}
     ) {
         viewModelScope.launch {
             val created = actions.createTask(
@@ -288,12 +326,15 @@ class HierarchyViewModel(
                 )
             )
             if (created !is ActionResult.Success) {
-                _knowledgeMessage.value = "Task not added"
+                val error = taskCreationError(created)
+                _knowledgeMessage.value = error
+                onResult(error)
                 return@launch
             }
             // Placement is a move, so one rule decides sibling order everywhere.
             val placed = actions.moveTasks(listOf(created.value.id), parentId, afterId, streamId)
             if (placed !is ActionResult.Success) _knowledgeMessage.value = "Added, but not placed where you asked"
+            onResult(null)
         }
     }
 
@@ -306,6 +347,51 @@ class HierarchyViewModel(
                 )
             )
         }
+
+    fun addProjectTask(projectId: String, parentId: String?, title: String, afterId: String?, preference: ExecutionPreference, onResult: (String?) -> Unit = {}) {
+        viewModelScope.launch {
+            val created = actions.createTask(CreateTask(title = title, projectId = projectId,
+                parentTaskId = parentId, executionPreference = preference))
+            if (created !is ActionResult.Success) { val error = taskCreationError(created); _knowledgeMessage.value = error; onResult(error); return@launch }
+            placeStandaloneTasks(projectId, listOf(created.value.id), parentId, afterId)
+            onResult(null)
+        }
+    }
+
+    fun moveStandaloneTasks(projectId: String, taskIds: List<String>, parentId: String?, afterId: String?) {
+        viewModelScope.launch { placeStandaloneTasks(projectId, taskIds, parentId, afterId) }
+    }
+
+    private suspend fun placeStandaloneTasks(projectId: String, taskIds: List<String>, parentId: String?, afterId: String?) {
+        val own = repository.tasks.value.filter { it.projectId == projectId && it.workStreamId == null }
+        if (taskIds.any { id -> own.none { it.id == id } } ||
+            (parentId != null && own.none { it.id == parentId })) {
+            _knowledgeMessage.value = "Nothing moved: task ownership changed"; return
+        }
+        val siblings = own.filter { it.parentTaskId == parentId && it.id !in taskIds }.sortedWith(compareBy({ it.order }, { it.id }))
+        if (afterId != null && siblings.none { it.id == afterId }) {
+            _knowledgeMessage.value = "Nothing moved: placement changed"; return
+        }
+        val before = if (afterId == null) siblings.firstOrNull()?.id else siblings.getOrNull(siblings.indexOfFirst { it.id == afterId } + 1)?.id
+        var moved = 0
+        for (id in taskIds.distinct()) {
+            val result = actions.placeBranch(projectId, com.virlin.app.domain.structure.Placement(
+                sourceId = id, targetParentId = parentId ?: projectId, insertBeforeId = before,
+                expectedRevision = actions.hierarchyRevision(projectId)))
+            val alreadyPlaced = result is ActionResult.Rejected &&
+                (result.reason as? com.virlin.app.domain.action.DomainError.PlacementRejected)?.reason == com.virlin.app.domain.structure.HierarchyRules.ALREADY_IN_PLACE
+            if (result !is ActionResult.Success && !alreadyPlaced) {
+                _knowledgeMessage.value = "Moved $moved of ${taskIds.distinct().size}: remaining tasks were not moved"
+                return
+            }
+            moved++
+        }
+        _knowledgeMessage.value = null
+    }
+
+    fun renameWorkstream(id: String, title: String) = dispatch("renameWorkstream") {
+        actions.updateContext(id, com.virlin.app.domain.action.ContextUpdate(title = com.virlin.app.domain.action.Field.Set(title)))
+    }
 
     fun moveTasks(taskIds: List<String>, destinationParentId: String?, afterId: String?, streamId: String) {
         viewModelScope.launch {
@@ -533,6 +619,9 @@ class HierarchyViewModel(
         return total.takeIf { !it.isZero && !it.isNegative }
     }
 
+    /** Batched timing history for hierarchy projections; no UI surface reads Room directly. */
+    suspend fun allFocusSessions(): List<FocusSession> = repository.allFocusSessions()
+
     suspend fun nextCandidate(streamId: String): Task? = actions.nextTaskCandidate(streamId).let {
         (it as? ActionResult.Success)?.value
     }
@@ -545,6 +634,12 @@ class HierarchyViewModel(
     // ------------------------------------------------------------------ intents → VirlinActions
 
     fun completeTask(id: String) = dispatch("completeTask") { actions.completeTask(id) }
+    fun restoreTask(id: String) = dispatch("restoreTask") { actions.restoreTask(id) }
+
+    fun renameProject(projectId: String, title: String) = dispatch("renameProject") {
+        actions.updateProject(projectId, com.virlin.app.domain.action.ProjectUpdate(
+            title = com.virlin.app.domain.action.Field.Set(title)))
+    }
 
     /**
      * PHASE 10 — delegate this work item to an external actor. The same WorkStream becomes the
@@ -573,7 +668,15 @@ class HierarchyViewModel(
 
     /** The existing whole-project completion. Virlin has no separate archive state. */
     fun completeProject(id: String) = dispatch("completeProject") { actions.completeProject(id) }
-    fun setActiveTask(streamId: String, taskId: String?) = dispatch("setActiveTask") { actions.setActiveTask(streamId, taskId) }
+    fun setActiveTask(streamId: String, taskId: String?) {
+        val stream = snapshot.value.streams.firstOrNull { it.id == streamId }
+        // On a focused stream, Current is a real attention switch and must use the same preview /
+        // confirmation path as Focus. The domain action also protects non-UI callers.
+        if (taskId != null && stream?.state == com.virlin.app.domain.model.WorkStreamState.FOCUS &&
+            stream.activeTaskId != taskId) {
+            focusWorkItem(taskId)
+        } else dispatch("setActiveTask") { actions.setActiveTask(streamId, taskId) }
+    }
 
     /**
      * PHASE 09 — start human focus on this work item. Resolving is a pure read, so an active focus
@@ -583,23 +686,44 @@ class HierarchyViewModel(
     val pendingSwitch: StateFlow<PendingSwitch?> = _pendingSwitch.asStateFlow()
 
     /** A focus request that would displace work the user is already doing. */
-    data class PendingSwitch(val target: com.virlin.app.domain.action.FocusTarget, val currentTitle: String)
+    data class PendingSwitch(val target: com.virlin.app.domain.action.FocusTarget?, val currentTitle: String,
+        val streamId: String? = null, val streamTitle: String? = null) {
+        val nextTitle: String get() = target?.workItem?.title ?: streamTitle.orEmpty()
+    }
 
     fun focusWorkItem(workItemId: String) {
+        if (repository.taskExecutionEnabled && !com.virlin.app.domain.model.ExecutionEligibility.isLeaf(workItemId, repository.tasks.value)) {
+            workstreamIntents.reportFeedback("Select a task with no children to start focus.")
+            return
+        }
         viewModelScope.launch {
-            when (val r = actions.resolveFocusTarget(workItemId)) {
+            val stream = repository.getStream(workItemId)
+            val taskId = stream?.activeTaskId?.let { id -> repository.getTask(id)?.takeIf { !it.status.isTerminal }?.id } ?: stream?.let { ws ->
+                (actions.nextTaskCandidate(ws.id) as? ActionResult.Success)?.value?.id
+            }
+            if (stream != null && taskId == null) {
+                val current = repository.streams.value.firstOrNull { it.state == WorkStreamState.FOCUS && it.id != stream.id }
+                if (current != null) _pendingSwitch.value = PendingSwitch(null, current.title, stream.id, stream.title)
+                else dispatch("focusStream") { actions.focusStream(stream.id) }
+                return@launch
+            }
+            val resolvedId = taskId ?: workItemId
+            when (val r = actions.resolveFocusTarget(resolvedId)) {
                 is com.virlin.app.domain.action.ActionResult.Success -> {
                     val target = r.value
                     val currentTitle = target.displacedWorkItemId?.let { id -> repository.getTask(id)?.title }
                         ?: target.displacedStreamId?.let { id -> repository.getStream(id)?.title }
                     if (target.isSwitch && currentTitle != null) _pendingSwitch.value = PendingSwitch(target, currentTitle)
-                    else start(workItemId)
+                    else start(resolvedId)
                 }
-                else -> android.util.Log.d("HierarchyViewModel", "focus rejected: $r")
+                else -> workstreamIntents.reportFeedback("Cannot focus this item: $r")
             }
         }
     }
-    fun confirmSwitch() { _pendingSwitch.value?.let { p -> _pendingSwitch.value = null; start(p.target.workItem.id) } }
+    fun confirmSwitch() { _pendingSwitch.value?.let { p ->
+        _pendingSwitch.value = null
+        p.target?.let { start(it.workItem.id) } ?: p.streamId?.let { id -> dispatch("focusStream") { actions.focusStream(id) } }
+    } }
     fun cancelSwitch() { _pendingSwitch.value = null }
     private fun start(workItemId: String) = dispatch("startFocus") { actions.startFocus(workItemId) }
 
@@ -660,11 +784,22 @@ class HierarchyViewModel(
 
     private fun dispatch(name: String, block: suspend () -> ActionResult<*>) {
         viewModelScope.launch {
+            workstreamIntents.clearFeedback()
             when (val r = block()) {
-                is ActionResult.Success -> Log.d(TAG, "$name: ok")
-                is ActionResult.Rejected -> Log.d(TAG, "$name: rejected ${r.reason}")
+                is ActionResult.Success -> {
+                    Log.d(TAG, "$name: ok")
+                    when (name) {
+                        "duplicateCapture" -> _knowledgeMessage.value = "Added to knowledge"
+                        "moveCapture" -> _knowledgeMessage.value = "Knowledge moved"
+                        "archiveCapture" -> _knowledgeMessage.value = "Knowledge removed (archived)"
+                    }
+                }
+                is ActionResult.Rejected -> { Log.d(TAG, "$name: rejected ${r.reason}"); workstreamIntents.reportFeedback(
+                    if (r.reason == com.virlin.app.domain.action.DomainError.CannotChangeExecutionWhileProcessing)
+                        "Pause external tracking first, then choose Human. Your recorded time will stay saved."
+                    else "Action unavailable: ${r.reason}") }
                 is ActionResult.NotFound -> Log.w(TAG, "$name: not found ${r.streamId}")
-                is ActionResult.Failure -> Log.e(TAG, "$name: failure", r.cause)
+                is ActionResult.Failure -> { Log.e(TAG, "$name: failure", r.cause); workstreamIntents.reportFeedback("Could not save the change. Please try again.") }
             }
         }
     }

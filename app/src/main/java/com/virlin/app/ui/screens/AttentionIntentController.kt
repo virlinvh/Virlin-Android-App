@@ -1,5 +1,7 @@
 package com.virlin.app.ui.screens
 
+import com.virlin.app.domain.model.executionStream
+
 import android.util.Log
 import com.virlin.app.domain.action.ActionResult
 import com.virlin.app.domain.action.VirlinActions
@@ -55,6 +57,7 @@ class AttentionIntentController(
     private val _feedback = MutableStateFlow<String?>(null)
     val feedback: StateFlow<String?> = _feedback.asStateFlow()
     fun clearFeedback() { _feedback.value = null }
+    fun reportFeedback(message: String) { _feedback.value = message }
 
     /** Stream id awaiting the user's explicit "complete the whole WorkStream" confirmation. */
     private val _pendingWorkStreamCompletion = MutableStateFlow<String?>(null)
@@ -70,7 +73,9 @@ class AttentionIntentController(
     override fun dismissChooser() { _chooser.value = null }
 
     private fun at(minutes: Long) = clock.now().plus(Duration.ofMinutes(minutes))
-    private suspend fun title(streamId: String) = repository.getStream(streamId)?.title ?: "WorkStream"
+    private suspend fun activity(streamId: String) = repository.getTask(streamId)?.executionStream()
+        ?: repository.getStream(streamId)
+    private suspend fun title(streamId: String) = activity(streamId)?.title ?: "WorkStream"
 
     override fun leave(streamId: String, minutes: Long?) { dismissChooser(); run(streamId, { t -> if (minutes == null) "Left $t" else "Left $t · back in ${minutes}m" }) { actions.leaveFocus(streamId, minutes?.let(::at)) } }
     override fun handOff(streamId: String, minutes: Long?) { dismissChooser(); run(streamId, { t -> if (minutes == null) "Handed off $t" else "Handed off $t · check in ${minutes}m" }) { actions.handOffStream(streamId, checkAt = minutes?.let(::at)) } }
@@ -81,10 +86,40 @@ class AttentionIntentController(
     override fun block(streamId: String) { dismissChooser(); run(streamId, { t -> "$t blocked" }) { actions.blockStream(streamId) } }
     /** "Not now": keep the item, stop asking — the existing READY transition, nothing new. */
     fun markReady(streamId: String) { dismissChooser(); run(streamId, { t -> "$t is ready when you are" }) { actions.markReady(streamId) } }
-    fun focus(streamId: String) = run(streamId, { t -> "Focused $t" }) { actions.focusStream(streamId) }
+    fun focus(streamId: String) = run(streamId, { t -> "Resumed $t" }) {
+        if (activity(streamId)?.externalTrackingPaused == true) actions.resumeExternalTracking(streamId)
+        else actions.focusStream(streamId)
+    }
+    fun pauseExternal(streamId: String, minutes: Long?) = run(streamId, { t -> "$t · external tracking paused" }) {
+        actions.pauseExternalTracking(streamId, minutes?.let { at(it) })
+    }
+    fun resumeExternal(streamId: String) = run(streamId, { t -> "$t · external tracking resumed" }) {
+        actions.resumeExternalTracking(streamId)
+    }
     fun checkDue(streamId: String) = run(streamId, { null }) { actions.checkDue(streamId) }
     fun continueProcessing(streamId: String, minutes: Long) = run(streamId, { t -> "$t · check in ${minutes}m" }) { actions.continueProcessing(streamId, at(minutes)) }
     fun completeStream(streamId: String) = run(streamId, { t -> "$t completed" }) { actions.completeStream(streamId) }
+    fun pauseWorkstream(streamId: String) = run(streamId, { t -> "$t paused" }) { actions.pauseStream(streamId) }
+    fun confirmExternalResult(streamId: String) = run(streamId, { t -> "$t result ready · review next" }) { actions.markExternalResultReady(streamId) }
+    fun unblockWorkstream(streamId: String) = run(streamId, { t -> "$t unblocked · ready" }) { actions.unblockStream(streamId) }
+    fun resumeLater(streamId: String, minutes: Long) = run(streamId, { t -> "$t · return in ${minutes}m" }) { actions.snoozeStream(streamId, at(minutes)) }
+    fun editBlockReason(streamId: String, reason: String) = run(streamId, { "Block reason saved" }) {
+        actions.updateContext(streamId, com.virlin.app.domain.action.ContextUpdate(
+            blockerReason = com.virlin.app.domain.action.Field.Set(reason.trim())))
+    }
+    fun startExternalRun(streamId: String, minutes: Long?, taskId: String? = null) = run(streamId, { t -> "$t running externally" }) {
+        val stream = activity(streamId) ?: return@run ActionResult.NotFound(streamId)
+        val projectDefault = stream.projectId?.let { repository.getProject(it)?.defaultExecutionMode }
+        val task = (taskId ?: stream.activeTaskId)?.let { repository.getTask(it) }
+        val owner = task?.workStreamId?.let { repository.getStream(it) } ?: stream
+        val effective = if (task != null) com.virlin.app.domain.model.ExecutionModeResolver.resolveTask(
+            task, repository.tasks.value.associateBy { it.id }, owner, projectDefault)
+        else com.virlin.app.domain.model.ExecutionModeResolver.resolveWorkStream(stream, projectDefault)
+        if (effective != com.virlin.app.domain.model.EffectiveExecutionMode.EXTERNAL) {
+            ActionResult.Rejected(com.virlin.app.domain.action.DomainError.NotExternalExecution)
+        } else actions.startExternalWork(com.virlin.app.domain.action.StartExternalWork(
+            workStreamId = streamId, workItemId = taskId ?: stream.activeTaskId, checkInMinutes = minutes))
+    }
     /** Needs You queue position (Phase 1 `reorderNeedsYou`): ordering only — never timers, urgency or `updatedAt`. */
     fun reorderNeedsYou(streamId: String, position: Int) = run(streamId, { t -> "$t → #$position" }) { actions.reorderNeedsYou(streamId, position) }
     /** Priority editor SAVE: the same Phase 03 move, plus the typed preference for later occurrences. */
@@ -109,6 +144,12 @@ class AttentionIntentController(
      */
     fun complete(streamId: String) {
         scope.launch {
+            // Now's queue also contains task execution projections, whose id is the task id.
+            // Complete that exact task, not its owner or the currently focused task elsewhere.
+            if (repository.getTask(streamId) != null) {
+                completeTaskNow(streamId)
+                return@launch
+            }
             val stream = repository.getStream(streamId)
             val active = stream?.activeTaskId
             if (active != null) {
@@ -172,7 +213,10 @@ class AttentionIntentController(
     private fun report(subject: String, r: ActionResult<*>, success: (String) -> String?) {
         when (r) {
             is ActionResult.Success -> { Log.d(tag, "ok"); _feedback.value = success(subject) }
-            is ActionResult.Rejected -> { Log.d(tag, "rejected ${r.reason}"); _feedback.value = "Couldn't do that — $subject has changed" }
+            is ActionResult.Rejected -> { Log.d(tag, "rejected ${r.reason}"); _feedback.value =
+                if (r.reason == com.virlin.app.domain.action.DomainError.AnotherTaskIsExecuting)
+                    "Another task is active in this workstream. Its activity has not been changed."
+                else "Couldn't do that — $subject has changed" }
             is ActionResult.NotFound -> { Log.w(tag, "not found ${r.streamId}"); _feedback.value = "$subject no longer exists" }
             is ActionResult.Failure -> { Log.e(tag, "failure", r.cause); _feedback.value = "Something went wrong" }
         }

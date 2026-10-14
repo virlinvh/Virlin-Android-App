@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -39,9 +40,13 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -77,6 +82,9 @@ import com.virlin.app.domain.model.PromptContentMode
 import com.virlin.app.domain.prompt.PromptContentParser
 import com.virlin.app.domain.prompt.ResponseSegment
 import com.virlin.app.ui.note.ClipboardNoteReader
+import com.virlin.app.ui.hierarchy.ProjectPalette
+import com.virlin.app.ui.hierarchy.rememberProjectPalette
+import com.virlin.app.ui.hierarchy.readableOn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -97,15 +105,16 @@ const val PromptSourceTag = "prompt_source_editor"
 const val PromptAddResponseTag = "prompt_add_response"
 const val PromptResponseEditorTag = "prompt_response_editor"
 
-private val Paper = Color(0xFFFAF9F6)
+private val LocalPromptPalette = staticCompositionLocalOf<ProjectPalette?> { null }
+private val Paper: Color @Composable get() = LocalPromptPalette.current?.let { Color(it.surface) } ?: Color(0xFFFAF9F6)
 private val White = Color.White
-private val Ink = Color(0xFF142019)
-private val Muted = Color(0xFF66736B)
-private val Green = Color(0xFF078653)
-private val Mint = Color(0xFFE7F7EF)
-private val Line = Color(0xFFD9E3DD)
-private val CodeSurface = Color(0xFF202A27)
-private val CodeInk = Color(0xFFF1F7F3)
+private val Ink: Color @Composable get() = LocalPromptPalette.current?.let { Color(it.text) } ?: Color(0xFF142019)
+private val Muted: Color @Composable get() = LocalPromptPalette.current?.let { Color(it.muted) } ?: Color(0xFF66736B)
+private val Green: Color @Composable get() = LocalPromptPalette.current?.let { Color(it.secondary) } ?: Color(0xFF078653)
+private val Mint: Color @Composable get() = LocalPromptPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE7F7EF)
+private val Line: Color @Composable get() = LocalPromptPalette.current?.let { Color(it.primary).copy(alpha = .25f) } ?: Color(0xFFD9E3DD)
+private val CodeSurface: Color @Composable get() = LocalPromptPalette.current?.let { Color(it.tertiary) } ?: Color(0xFF202A27)
+private val CodeInk: Color @Composable get() = LocalPromptPalette.current?.let { Color(it.text) } ?: Color(0xFFF1F7F3)
 private val languages = listOf("Kotlin", "Java", "TypeScript", "JavaScript", "Python", "SQL", "JSON", "HTML", "CSS", "Shell", "Plain text")
 
 @Composable
@@ -119,18 +128,29 @@ fun PromptEditorScreen(
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val tasks by VirlinGraph.repository.tasks.collectAsState()
+    val streams by VirlinGraph.repository.streams.collectAsState()
+    val captures by VirlinGraph.repository.captures.collectAsState()
+    val savedContext = captures.firstOrNull { it.id == state.captureId }
+    val contextProjectId = state.context.projectId ?: savedContext?.projectId
+    val contextTaskId = state.context.taskId ?: savedContext?.taskId
+    val contextStreamId = state.context.workStreamId ?: savedContext?.workStreamId
+    val projectId = contextProjectId
+        ?: contextTaskId?.let { taskId -> tasks.firstOrNull { it.id == taskId }?.projectId }
+        ?: contextStreamId?.let { streamId -> streams.firstOrNull { it.id == streamId }?.projectId }
+    val projectPalette = rememberProjectPalette(projectId)
     var menuOpen by remember { mutableStateOf(false) }
 
     fun goBack() {
         scope.launch { if (vm.prepareExit().navigate) navController.popBackStack() }
     }
     fun pasteSource() {
-        val clip = ClipboardNoteReader.read(context).plain
-        if (clip.isNotEmpty()) vm.onSourceTextChange(clip)
+        val clip = ClipboardNoteReader.read(context)
+        if (clip.plain.isNotEmpty() || !clip.html.isNullOrBlank()) vm.pasteSource(clip.html, clip.plain)
     }
     fun pasteResponse() {
-        val clip = ClipboardNoteReader.read(context).plain
-        if (clip.isNotEmpty()) vm.onResponseTextChange(clip)
+        val clip = ClipboardNoteReader.read(context)
+        if (clip.plain.isNotEmpty() || !clip.html.isNullOrBlank()) vm.pasteResponse(clip.html, clip.plain)
     }
 
     BackHandler { goBack() }
@@ -138,6 +158,9 @@ fun PromptEditorScreen(
         if (state.toast != null) { delay(1400); vm.clearToast() }
     }
 
+    CompositionLocalProvider(LocalPromptPalette provides projectPalette) {
+    MaterialTheme(colorScheme = lightColorScheme(primary = Green, onPrimary = readableOn(Green),
+        surface = Paper, onSurface = Ink, secondary = Green, onSecondary = readableOn(Green))) {
     Column(
         Modifier.fillMaxSize().background(Paper).statusBarsPadding().navigationBarsPadding().imePadding()
             .testTag(PromptScreenTag)
@@ -227,14 +250,14 @@ fun PromptEditorScreen(
         }
         Text(
             if (state.responseText.isNotBlank()) "Save response" else "Save",
-            color = White,
+            color = readableOn(Green),
             fontWeight = FontWeight.Bold,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
                 .background(Green, RoundedCornerShape(14.dp)).clickable { vm.saveToInbox() }
                 .padding(vertical = 15.dp).testTag(PromptInboxActionTag),
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
-    }
+    } } }
 }
 
 @Composable
@@ -279,17 +302,18 @@ private fun LanguagePicker(selected: String, detected: Boolean, onSelect: (Strin
 @Composable
 private fun SourceEditor(state: PromptUiState, vm: PromptEditorViewModel, onPaste: () -> Unit, onCopy: () -> Unit) {
     var wrap by remember { mutableStateOf(true) }
-    Column(Modifier.fillMaxWidth().background(White, RoundedCornerShape(16.dp)).border(1.dp, Line, RoundedCornerShape(16.dp))) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(White).border(1.dp, Line, RoundedCornerShape(16.dp))) {
         BasicTextField(
             value = state.sourceText,
             onValueChange = vm::onSourceTextChange,
             textStyle = TextStyle(color = Ink, fontSize = 14.sp, lineHeight = 21.sp, fontFamily = if (state.mode == PromptContentMode.CODE) FontFamily.Monospace else FontFamily.Default),
             cursorBrush = SolidColor(Green),
-            visualTransformation = if (state.mode == PromptContentMode.CODE) CodeHighlightTransformation else VisualTransformation.None,
+            visualTransformation = if (state.mode == PromptContentMode.CODE) CodeHighlightTransformation else PromptMarkupTransformation(Green),
             modifier = Modifier.fillMaxWidth().heightIn(min = 300.dp).padding(16.dp).testTag(PromptSourceTag).semantics { contentDescription = "Prompt source editor" },
             decorationBox = { inner -> Box { if (state.sourceText.isEmpty()) Text(if (state.mode == PromptContentMode.CODE) "Paste or write your code…" else "Paste or write your prompt…", color = Color(0xFF8A9690), fontSize = 14.sp); inner() } }
         )
-        Row(Modifier.fillMaxWidth().border(1.dp, Line).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.fillMaxWidth().padding(horizontal = 1.dp).height(1.dp).background(Line))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Utility(Icons.Rounded.ContentPaste, "Paste", onPaste); Utility(Icons.Rounded.ContentCopy, "Copy", onCopy, Modifier.testTag(PromptBodyCopyTag))
             Spacer(Modifier.weight(1f))
             if (state.mode == PromptContentMode.CODE) {
@@ -310,11 +334,13 @@ private fun Utility(icon: androidx.compose.ui.graphics.vector.ImageVector, label
 private fun ResponsePasteEditor(value: String, onChange: (String) -> Unit, onPaste: () -> Unit, done: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) { Text("Response", color = Ink, fontWeight = FontWeight.Bold, fontSize = 19.sp); Text("Pasted by you", color = Green, fontSize = 11.sp, modifier = Modifier.padding(start = 9.dp).background(Mint, RoundedCornerShape(20.dp)).padding(horizontal = 9.dp, vertical = 4.dp)) }
-        Column(Modifier.fillMaxWidth().background(White, RoundedCornerShape(16.dp)).border(1.dp, Line, RoundedCornerShape(16.dp))) {
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(White).border(1.dp, Line, RoundedCornerShape(16.dp))) {
             BasicTextField(value, onChange, textStyle = TextStyle(color = Ink, fontSize = 14.sp, lineHeight = 21.sp), cursorBrush = SolidColor(Green),
+                visualTransformation = PromptMarkupTransformation(Green),
                 modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp).padding(16.dp).testTag(PromptResponseEditorTag),
                 decorationBox = { inner -> Box { if (value.isEmpty()) Text("Paste the response you received…", color = Color(0xFF8A9690)); inner() } })
-            Row(Modifier.fillMaxWidth().border(1.dp, Line).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.fillMaxWidth().padding(horizontal = 1.dp).height(1.dp).background(Line))
+            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Utility(Icons.Rounded.ContentPaste, "Paste", onPaste); Spacer(Modifier.weight(1f)); Text("Done", color = Green, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(onClick = done).padding(8.dp))
             }
         }
@@ -331,7 +357,7 @@ private fun ResponseViewer(response: String, copyAll: () -> Unit, copyBlock: (St
         }
         PromptContentParser.responseSegments(response).forEach { segment ->
             when (segment) {
-                is ResponseSegment.Prose -> Text(segment.text, color = Ink, fontSize = 14.sp, lineHeight = 21.sp,
+                is ResponseSegment.Prose -> Text(styledPromptMarkup(segment.text, Green), color = Ink, fontSize = 14.sp, lineHeight = 21.sp,
                     modifier = Modifier.fillMaxWidth().background(White, RoundedCornerShape(14.dp)).border(1.dp, Line, RoundedCornerShape(14.dp)).padding(14.dp))
                 is ResponseSegment.Code -> CodeBlock(segment, copyBlock)
             }
@@ -367,8 +393,8 @@ private fun InfoStrip(text: String) {
 
 @Composable
 private fun PromptContextPicker(vm: PromptEditorViewModel) {
-    val projects = VirlinGraph.repository.projects.value
-    val streams = VirlinGraph.repository.streams.value
+    val projects by VirlinGraph.repository.projects.collectAsState()
+    val streams by VirlinGraph.repository.streams.collectAsState()
     Column(Modifier.fillMaxWidth().background(White, RoundedCornerShape(14.dp)).border(1.dp, Line, RoundedCornerShape(14.dp)).padding(8.dp)) {
         Text("Global · Inbox", color = Ink, modifier = Modifier.fillMaxWidth().clickable { vm.setContext(CaptureContext.None) }.padding(10.dp))
         projects.forEach { p -> Text(p.title, color = Ink, modifier = Modifier.fillMaxWidth().clickable { vm.setContext(CaptureContext(projectId = p.id)) }.padding(10.dp)) }

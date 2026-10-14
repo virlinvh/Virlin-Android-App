@@ -2,7 +2,9 @@ package com.virlin.app.ui.screens
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -91,13 +93,15 @@ object WaitingTime {
 @Composable
 fun rememberSecondTicker(clock: VirlinClock = VirlinGraph.clock): State<Instant> {
     val lifecycleOwner = LocalLifecycleOwner.current
-    return produceState(initialValue = clock.now(), lifecycleOwner, clock) {
+    val state = remember(clock) { mutableStateOf(clock.now()) }
+    LaunchedEffect(lifecycleOwner, clock) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
                 val now = clock.now()
-                value = now
+                state.value = now
                 delay(1_000L - (now.toEpochMilli() % 1_000L))
             }
         }
     }
+    return state
 }

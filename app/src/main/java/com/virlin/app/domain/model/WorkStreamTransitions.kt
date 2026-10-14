@@ -20,12 +20,12 @@ object WorkStreamTransitions {
 
     private val allowed: Map<WorkStreamState, Set<WorkStreamState>> = mapOf(
         FOCUS      to setOf(PROCESSING, READY, SNOOZED, PAUSED, BLOCKED, DONE),
-        PROCESSING to setOf(CHECK, READY, BLOCKED, DONE),
-        CHECK      to setOf(PROCESSING, FOCUS, SNOOZED, READY, BLOCKED),
+        PROCESSING to setOf(CHECK, READY, BLOCKED, DONE, PAUSED),
+        CHECK      to setOf(PROCESSING, FOCUS, SNOOZED, READY, BLOCKED, PAUSED, DONE),
         READY      to setOf(FOCUS, PROCESSING, SNOOZED, BLOCKED, PAUSED, DONE),
-        SNOOZED    to setOf(CHECK, READY, FOCUS),
+        SNOOZED    to setOf(CHECK, READY, FOCUS, PAUSED, PROCESSING),
         BLOCKED    to setOf(READY, FOCUS, DONE),
-        PAUSED     to setOf(READY, FOCUS, DONE),
+        PAUSED     to setOf(READY, FOCUS, SNOOZED, DONE, PROCESSING, BLOCKED, CHECK),
         DONE       to emptySet()
     )
 

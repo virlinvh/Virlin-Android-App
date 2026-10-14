@@ -39,15 +39,18 @@ import androidx.navigation.NavController
 import com.virlin.app.data.attachment.AttachmentFileStore
 import com.virlin.app.domain.attachment.AttachmentKindResolver
 import com.virlin.app.domain.model.AttachmentKind
+import com.virlin.app.ui.hierarchy.LocalProjectPalette
+import com.virlin.app.ui.hierarchy.rememberProjectPalette
+import com.virlin.app.ui.hierarchy.readableOn
 import com.virlin.app.ui.file.UniversalFileViewer
 import java.io.File
 
-private val Ink = Color(0xFF17221D)
-private val Green = Color(0xFF087848)
-private val Mint = Color(0xFFE2F5EA)
-private val Border = Color(0xFFE3E9E5)
-private val Muted = Color(0xFF66758A)
-private val Canvas = Color(0xFFFCFBF8)
+private val Ink: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.text) } ?: Color(0xFF17221D)
+private val Green: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF087848)
+private val Mint: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE2F5EA)
+private val Border: Color @Composable get() = Green.copy(alpha = .18f)
+private val Muted: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.muted) } ?: Color(0xFF66758A)
+private val Canvas: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.surface) } ?: Color(0xFFFCFBF8)
 
 /**
  * The task's universal file space.
@@ -59,13 +62,15 @@ private val Canvas = Color(0xFFFCFBF8)
 fun AttachmentWorkspaceScreen(
     navController: NavController,
     taskId: String,
+    projectId: String? = null,
     vm: AttachmentWorkspaceViewModel = viewModel(
-        key = "attachments-$taskId",
-        factory = AttachmentWorkspaceViewModel.factory(taskId, LocalContext.current),
+        key = "attachments-$taskId-${projectId.orEmpty()}",
+        factory = AttachmentWorkspaceViewModel.factory(taskId, LocalContext.current, projectId),
     ),
 ) {
     val state by vm.state.collectAsState()
     val context = LocalContext.current
+    val palette = rememberProjectPalette(state.ownerProjectId ?: projectId)
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -73,9 +78,13 @@ fun AttachmentWorkspaceScreen(
 
     fun choose() = runCatching { picker.launch(arrayOf("*/*")) }
 
+    CompositionLocalProvider(LocalProjectPalette provides palette) {
+    MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(primary = Green,
+        onPrimary = readableOn(Green), surface = Canvas, onSurface = Ink,
+        surfaceVariant = Mint, outline = Border)) {
     state.openDetail?.let { row ->
         AttachmentDetail(row, vm, navController, onClose = vm::closeDetail)
-        return
+        return@MaterialTheme
     }
 
     Scaffold(
@@ -166,6 +175,8 @@ fun AttachmentWorkspaceScreen(
         )
     }
     state.renaming?.let { row -> RenameDialog(row, vm) }
+    }
+    }
 }
 
 @Composable
@@ -257,7 +268,7 @@ private fun AttachmentRowItem(row: AttachmentRow, onOpen: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(badgeColor(row.kind)),
+            Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(Green),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -288,16 +299,6 @@ private fun AttachmentRowItem(row: AttachmentRow, onOpen: () -> Unit) {
 private fun badgeText(name: String, kind: AttachmentKind): String {
     val ext = name.substringAfterLast('.', "").uppercase()
     return if (ext.isNotEmpty() && ext.length <= 4) ext else AttachmentKindResolver.formatLabel(kind).take(4).uppercase()
-}
-
-private fun badgeColor(kind: AttachmentKind): Color = when (kind) {
-    AttachmentKind.PDF -> Color(0xFFD64545)
-    AttachmentKind.IMAGE -> Color(0xFF2E7D32)
-    AttachmentKind.VIDEO -> Color(0xFF7E57C2)
-    AttachmentKind.AUDIO -> Color(0xFFE05252)
-    AttachmentKind.ARCHIVE -> Color(0xFFE0A52E)
-    AttachmentKind.DOCX, AttachmentKind.XLSX, AttachmentKind.PPTX -> Color(0xFF2B6CB0)
-    else -> Color(0xFF6B7A72)
 }
 
 /** Full-screen view of one attachment, plus its action sheet. */

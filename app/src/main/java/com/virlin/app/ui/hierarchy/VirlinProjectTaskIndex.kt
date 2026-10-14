@@ -1,4 +1,6 @@
 package com.virlin.app.ui.hierarchy
+import com.virlin.app.ui.components.avoidOrbCircle
+import com.virlin.app.ui.components.circularOrbCutout
 
 // Supplied drop-in project Task Index. Adapted to the app's own rules:
 //  - the rows ARE the units `ProgressCalculator.ofProject` counted (see ProjectTaskUnits), so a
@@ -20,6 +22,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.CloudQueue
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -27,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -39,6 +45,12 @@ data class ProjectTaskIndexState(
     val completedCount: Int,
     val totalCount: Int,
     val tasks: List<ProjectTaskIndexEntry>,
+    val externalSeconds: Long = 0,
+    val focusSeconds: Long = 0,
+    val humanActiveCount: Int = 0,
+    val externalActiveCount: Int = 0,
+    val multiRunCount: Int = 0,
+    val reviewCount: Int = 0,
     val loading: Boolean = false,
     val error: String? = null,
 )
@@ -57,6 +69,7 @@ data class ProjectTaskIndexEntry(
     val completed: Boolean,
     val current: Boolean,
     val order: Int,
+    val activityState: WorkstreamState = WorkstreamState.READY,
     /**
      * True when this row IS a WorkStream that holds no tasks. Project progress counts such a
      * stream as one unit, so the index lists it rather than quietly dropping it.
@@ -84,11 +97,11 @@ interface ProjectTaskIndexActions {
 private val Ink = Color(0xFF17202C)
 private val Muted = Color(0xFF66758A)
 private val Line = Color(0xFFE4E9ED)
-private val Green = Color(0xFF65BB31)
-private val DeepGreen = Color(0xFF176B45)
-private val Mint = Color(0xFFEAF7EC)
-private val Amber = Color(0xFFE5A000)
-private val AmberWash = Color(0xFFFFF5DB)
+private val Green: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.primary) } ?: Color(0xFF65BB31)
+private val DeepGreen: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF176B45)
+private val Mint: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFEAF7EC)
+private val Amber: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.primary) } ?: Color(0xFFE5A000)
+private val AmberWash: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFFFF5DB)
 private val Neutral = Color(0xFFF5F7F7)
 
 /** Place inside the current project Overview progress block; the whole area is tappable. */
@@ -107,7 +120,7 @@ fun ProjectProgressEntry(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(66.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(progress = { percent / 100f }, modifier = Modifier.fillMaxSize(), color = Green, trackColor = Color(0xFFE0EDDB), strokeWidth = 5.dp)
+            CircularProgressIndicator(progress = { percent / 100f }, modifier = Modifier.fillMaxSize(), color = Green, trackColor = Mint, strokeWidth = 5.dp)
             Text("$percent%", color = Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
         Spacer(Modifier.width(16.dp))
@@ -163,7 +176,7 @@ fun VirlinProjectTaskIndex(
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = OrbClearance),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item(key = "progress") { ProjectTaskIndexProgress(state.completedCount, state.totalCount) }
+                item(key = "progress") { ProjectTaskIndexProgress(state.completedCount, state.totalCount, state.externalSeconds, state.focusSeconds) }
                 item(key = "filters") {
                     Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                         ProjectTaskIndexFilter.entries.forEach { value ->
@@ -175,6 +188,15 @@ fun VirlinProjectTaskIndex(
                             IndexFilterChip(value.name.lowercase().replaceFirstChar(Char::uppercase) + " $count", value == filter, Modifier.weight(1f)) { filterName = value.name }
                         }
                     }
+                }
+                item(key = "execution") {
+                    ExecutionLegend(
+                        state.humanActiveCount,
+                        state.externalActiveCount,
+                        state.multiRunCount,
+                        state.reviewCount,
+                        state.projectId,
+                    )
                 }
                 if (state.loading) item(key = "loading") { Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Green) } }
                 else if (state.error != null) item(key = "error") {
@@ -213,11 +235,21 @@ fun VirlinProjectTaskIndex(
     }
 }
 
-@Composable private fun ProjectTaskIndexProgress(completed: Int, total: Int) {
+@Composable private fun ProjectTaskIndexProgress(completed: Int, total: Int, externalSeconds: Long, focusSeconds: Long) {
     val remaining = (total - completed).coerceAtLeast(0)
     Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 12.dp)) {
-        Text("$completed of $total tasks complete", color = Ink, fontWeight = FontWeight.Bold, fontSize = 22.sp)
-        Text("$remaining remaining", color = Muted, fontSize = 15.sp)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text("$completed of $total tasks complete", color = Ink, fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 27.sp)
+                Text("$remaining remaining", color = Muted, fontSize = 15.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp), horizontalAlignment = Alignment.End,
+                modifier = Modifier.testTag("project_task_timers")) {
+                ProjectTaskTimerRow(Icons.Outlined.CloudQueue, "External", externalSeconds)
+                ProjectTaskTimerRow(Icons.Outlined.Timer, "Focused", focusSeconds)
+            }
+        }
         Spacer(Modifier.height(18.dp))
         if (total in 1..30) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
@@ -229,6 +261,16 @@ fun VirlinProjectTaskIndex(
     }
 }
 
+@Composable private fun ProjectTaskTimerRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, seconds: Long) {
+    val time = com.virlin.app.domain.model.ExecutionTiming.formatClock(seconds)
+    Row(verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.semantics(mergeDescendants = true) { contentDescription = "$label $time" }) {
+        Icon(icon, contentDescription = null, tint = DeepGreen, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(5.dp))
+        Text(time, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
 @Composable private fun IndexFilterChip(text: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Box(modifier.background(if (selected) Mint else Neutral, RoundedCornerShape(13.dp)).clickable(onClick = onClick).padding(vertical = 13.dp), contentAlignment = Alignment.Center) {
         Text(text, color = if (selected) DeepGreen else Muted, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, maxLines = 1)
@@ -237,10 +279,13 @@ fun VirlinProjectTaskIndex(
 
 @Composable private fun ProjectIndexTaskRow(entry: ProjectTaskIndexEntry, onClick: () -> Unit) {
     val bg = if (entry.current && !entry.completed) AmberWash else Neutral
-    Row(Modifier.fillMaxWidth().background(bg, RoundedCornerShape(18.dp)).clickable(onClick = onClick).padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(38.dp).background(if (entry.completed) Green else if (entry.current) Amber else Color(0xFFE9EDEF), CircleShape), contentAlignment = Alignment.Center) {
-            if (entry.completed) Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(22.dp))
-            else if (entry.current) Box(Modifier.size(15.dp).background(Color.White, CircleShape))
+    val visibleState = if (entry.completed) WorkstreamState.COMPLETE else entry.activityState
+    val hasActivity = visibleState != WorkstreamState.READY && visibleState != WorkstreamState.COMPLETE
+    Row(Modifier.fillMaxWidth().circularOrbCutout().background(bg, RoundedCornerShape(18.dp)).clickable(onClick = onClick).avoidOrbCircle().padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (hasActivity) ExecutionDial(visibleState, Modifier.size(38.dp))
+        else Box(Modifier.size(38.dp).background(if (entry.completed) DeepGreen else if (entry.current) Amber else Mint, CircleShape), contentAlignment = Alignment.Center) {
+            if (entry.completed) Icon(Icons.Default.Check, null, tint = readableOn(DeepGreen), modifier = Modifier.size(22.dp))
+            else if (entry.current) Box(Modifier.size(15.dp).background(readableOn(Amber), CircleShape))
             else Box(Modifier.size(15.dp).background(Color.White, CircleShape))
         }
         Spacer(Modifier.width(13.dp))
@@ -249,12 +294,16 @@ fun VirlinProjectTaskIndex(
                 Text(entry.title, color = Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (entry.current && !entry.completed) {
                     Spacer(Modifier.width(8.dp))
-                    Text("Current", color = Color(0xFF805A00), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Current", color = DeepGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
             val path = if (entry.isEmptyWorkStream) "Workstream · no tasks yet"
             else (listOfNotNull(entry.workstreamTitle) + entry.ancestorTitles).joinToString(" › ")
             if (path.isNotEmpty()) Text(path, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
+            if (hasActivity) {
+                Spacer(Modifier.height(5.dp))
+                StatePill(visibleState)
+            }
         }
         Spacer(Modifier.width(6.dp))
         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Open ${entry.title} in hierarchy", tint = Ink)

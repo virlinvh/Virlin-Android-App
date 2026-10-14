@@ -33,6 +33,71 @@ import java.util.zip.ZipInputStream
  */
 @RunWith(RobolectricTestRunner::class)
 class ProjectMapTest {
+    @Test fun wideningABoxReflowsItsTextAndEveryLaterColumn() {
+        val nodes = listOf(
+            com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("a", "p",
+                "A moderately long task title that should wrap across multiple lines",
+                kind = MapKind.TASK),
+            com.virlin.app.ui.map.MapTopic("b", "a", "Next step", kind = MapKind.TASK),
+        )
+        MapLayout.entries.forEach { layout ->
+            val original = com.virlin.app.ui.map.arrange(nodes, layout)
+            val widened = com.virlin.app.ui.map.arrange(nodes, layout,
+                nodeWidths = mapOf("a" to 500f))
+            val card = widened.frames.getValue("a")
+            val child = widened.frames.getValue("b")
+            assertEquals(500f, card.w, .01f)
+            assertTrue("$layout did not reflow the text", card.h <= original.frames.getValue("a").h)
+            assertTrue("$layout overlaps the widened card", child.x >= card.x + card.w + 28f)
+            assertTrue("$layout did not move the next column", child.x > original.frames.getValue("b").x)
+        }
+    }
+
+    @Test fun expandedPreviewGrowsDownwardWithoutCoveringSiblingCards() {
+        val nodes = listOf(
+            com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("a", "p", "Voice", kind = MapKind.TASK),
+            com.virlin.app.ui.map.MapTopic("b", "p", "File", kind = MapKind.TASK),
+            com.virlin.app.ui.map.MapTopic("c", "p", "Image", kind = MapKind.TASK),
+        )
+        val closed = com.virlin.app.ui.map.arrange(nodes, MapLayout.RIGHT_TREE)
+        for (id in listOf("b", "c")) {
+            val open = com.virlin.app.ui.map.arrange(nodes, MapLayout.RIGHT_TREE, id to 220f)
+            assertEquals(closed.frames.getValue(id).y, open.frames.getValue(id).y, .01f)
+            val siblings = listOf("a", "b", "c").map { open.frames.getValue(it) }
+            siblings.zipWithNext().forEach { (above, below) ->
+                assertTrue(above.y + above.h <= below.y)
+            }
+        }
+    }
+
+    @Test fun everyAvailableLayoutKeepsTheHierarchyReadableFromLeftToRight() {
+        val nodes = listOf(
+            com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("a", "p", "Plan", kind = MapKind.WORKSTREAM),
+            com.virlin.app.ui.map.MapTopic("b", "p", "Build", kind = MapKind.WORKSTREAM),
+            com.virlin.app.ui.map.MapTopic("c", "a", "Draft", kind = MapKind.TASK),
+            com.virlin.app.ui.map.MapTopic("d", "a", "Review", kind = MapKind.TASK),
+            com.virlin.app.ui.map.MapTopic("e", "b", "Release", kind = MapKind.TASK),
+        )
+        assertEquals(13, MapLayout.entries.size)
+        assertEquals(MapLayout.entries.size,
+            MapLayout.entries.map { Triple(it.fork, it.node, it.endpoint) }.distinct().size)
+        MapLayout.entries.forEach { layout ->
+            val geometry = com.virlin.app.ui.map.arrange(nodes, layout)
+            assertEquals(nodes.size, geometry.frames.size)
+            nodes.filter { it.parentId != null }.forEach { child ->
+                val parent = geometry.frames.getValue(child.parentId!!)
+                val frame = geometry.frames.getValue(child.id)
+                assertTrue("$layout must flow right at ${child.id}", frame.x > parent.x + parent.w)
+            }
+            val leaves = listOf("c", "d", "e").map { geometry.frames.getValue(it) }
+            leaves.zipWithNext().forEach { (above, below) ->
+                assertTrue("$layout overlaps sibling rows", above.y + above.h <= below.y)
+            }
+        }
+    }
 
     private val now = Instant.parse("2026-09-27T09:00:00Z")
     private val project = Project(id = "p1", title = "Psychology", createdAt = now, updatedAt = now)
@@ -122,13 +187,92 @@ class ProjectMapTest {
         val streams = listOf(stream("s1", "Unit 22"))
         val topics = projectMapTopics(project, streams, listOf(task("t1", "A", "s1")))
         val appearance = MapAppearance(
-            layout = MapLayout.RADIAL, paletteIndex = 2,
-            nodeColors = mapOf("t1" to 0xFF52A887L), branchColors = mapOf("s1" to 0xFF438FADL)
+            layout = MapLayout.LOGIC_BRACKETS, paletteIndex = 2,
+            nodeColors = mapOf("t1" to 0xFF52A887L), branchColors = mapOf("s1" to 0xFF438FADL),
+            nodeWidths = mapOf("t1" to 360f),
         )
         val decoded = decodeVirlinMap(
             encodeVirlinMap(VirlinMapSnapshot("p1", "Psychology", topics, appearance))
         )
         assertEquals(topics, decoded.topics)
+        assertEquals(appearance, decoded.appearance)
+    }
+
+    @Test fun everyLayoutSurvivesExportAndCanRender() {
+        val topics = listOf(
+            com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("a", "p", "Plan", kind = MapKind.WORKSTREAM),
+            com.virlin.app.ui.map.MapTopic("b", "p", "Build", kind = MapKind.WORKSTREAM),
+            com.virlin.app.ui.map.MapTopic("c", "a", "Brief", kind = MapKind.TASK),
+            com.virlin.app.ui.map.MapTopic("d", "b", "Ship", kind = MapKind.TASK),
+        )
+        MapLayout.entries.forEach { layout ->
+            val appearance = MapAppearance(layout = layout)
+            val decoded = decodeVirlinMap(
+                encodeVirlinMap(VirlinMapSnapshot("p", "Project", topics, appearance))
+            )
+            assertEquals(layout, decoded.appearance.layout)
+            val geometry = com.virlin.app.ui.map.arrange(decoded.topics, layout)
+            val bitmap = android.graphics.Bitmap.createBitmap(1200, 900,
+                android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+            canvas.translate(40f, 120f)
+            com.virlin.app.ui.map.paintMap(canvas, geometry,
+                appearance, android.graphics.RectF(-40f, -120f, 1160f, 780f), null)
+            bitmap.recycle()
+        }
+    }
+
+    @Test fun layoutPreviewPreservesTheRealProjectBranch() {
+        val topics = listOf(
+            com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("a", "p", "Plan", kind = MapKind.WORKSTREAM),
+            com.virlin.app.ui.map.MapTopic("b", "p", "Build", kind = MapKind.WORKSTREAM),
+            com.virlin.app.ui.map.MapTopic("c", "a", "Brief", kind = MapKind.TASK),
+            com.virlin.app.ui.map.MapTopic("d", "b", "Test", kind = MapKind.TASK),
+        )
+        val preview = com.virlin.app.ui.map.layoutPreviewTopics(topics)
+        assertEquals(topics.map { it.id }.toSet(), preview.map { it.id }.toSet())
+        assertEquals(5, com.virlin.app.ui.map.layoutPreviewTopics(topics.take(1)).size)
+    }
+
+    @Test fun previewPrefersDistinctBranchNamesWhenProjectHasDuplicates() {
+        val topics = listOf(
+            com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("a", "p", "Claude", kind = MapKind.WORKSTREAM, order = 0),
+            com.virlin.app.ui.map.MapTopic("b", "p", "Claude", kind = MapKind.WORKSTREAM, order = 1),
+            com.virlin.app.ui.map.MapTopic("c", "p", "Release", kind = MapKind.WORKSTREAM, order = 2),
+            com.virlin.app.ui.map.MapTopic("task", "b", "Build", kind = MapKind.TASK),
+        )
+        val preview = com.virlin.app.ui.map.layoutPreviewTopics(topics)
+        assertEquals(listOf("p", "b", "task", "c"), preview.map { it.id })
+    }
+
+    @Test fun aSnapshotWithRetiredLayoutFallsBackToRightTreeWithoutLosingTopics() {
+        val topics = listOf(
+            com.virlin.app.ui.map.MapTopic("p1", null, "Psychology", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("t1", "p1", "Review", kind = MapKind.TASK),
+        )
+        val bytes = encodeVirlinMap(VirlinMapSnapshot("p1", "Psychology", topics, MapAppearance()))
+        val old = bytes.toString(Charsets.UTF_8).replace("RIGHT_TREE", "RADIAL")
+        val decoded = decodeVirlinMap(old.toByteArray(Charsets.UTF_8))
+        assertEquals(MapLayout.RIGHT_TREE, decoded.appearance.layout)
+        assertEquals(topics, decoded.topics)
+    }
+
+    @Test fun mapStudioColoursAndFinishesSurvivePortableRoundTrip() {
+        val topics = listOf(
+            com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("t", "p", "Task", kind = MapKind.TASK),
+        )
+        val appearance = MapAppearance(
+            customPalette = listOf(0xFF123456, 0xFFABCDEF),
+            savedColors = listOf(0xFF765432),
+            boxFinish = com.virlin.app.ui.map.MapBoxFinish.LINEN,
+            nodeFinishes = mapOf("t" to com.virlin.app.ui.map.MapBoxFinish.GLASS),
+            nodeColors = mapOf("t" to 0xFF765432),
+        )
+        val decoded = decodeVirlinMap(encodeVirlinMap(VirlinMapSnapshot("p", "Project", topics, appearance)))
         assertEquals(appearance, decoded.appearance)
     }
 

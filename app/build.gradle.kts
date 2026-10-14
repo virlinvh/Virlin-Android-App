@@ -8,12 +8,12 @@ plugins {
 
 android {
     namespace = "com.virlin.app"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.virlin.app"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
         vectorDrawables { useSupportLibrary = true }
@@ -23,6 +23,20 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Secrets belong to the local/CI environment, never the repository.
+            val signingValues = listOf("VIRLIN_KEYSTORE", "VIRLIN_STORE_PASSWORD", "VIRLIN_KEY_ALIAS", "VIRLIN_KEY_PASSWORD")
+                .map { providers.environmentVariable(it).orNull }
+            require(signingValues.all { it == null } || signingValues.all { !it.isNullOrBlank() }) {
+                "Provide all four VIRLIN signing environment variables, or none for an unsigned development build."
+            }
+            if (signingValues.all { !it.isNullOrBlank() }) {
+                signingConfig = signingConfigs.create("production") {
+                    storeFile = file(signingValues[0]!!)
+                    storePassword = signingValues[1]
+                    keyAlias = signingValues[2]
+                    keyPassword = signingValues[3]
+                }
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -43,6 +57,13 @@ android {
             isReturnDefaultValues = true
         }
     }
+}
+
+// Native Robolectric resources must not accumulate across the whole multi-SDK suite.
+tasks.withType<Test>().configureEach {
+    maxHeapSize = "2g"
+    maxParallelForks = 1
+    forkEvery = 40
 }
 
 dependencies {

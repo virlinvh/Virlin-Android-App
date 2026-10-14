@@ -22,9 +22,11 @@ data class ContextUpdate(
     val waitingFor: Field<String> = Field.Keep,
     val nextHumanAction: Field<String> = Field.Keep,
     /** A note is additive history, not a field; it becomes a NOTE_ADDED event. */
-    val note: String? = null
+    val note: String? = null,
+    val blockerReason: Field<String> = Field.Keep,
+    val title: Field<String> = Field.Keep
 ) {
     val isEmpty: Boolean
         get() = lastHumanAction == Field.Keep && waitingFor == Field.Keep &&
-            nextHumanAction == Field.Keep && note.isNullOrBlank()
+            nextHumanAction == Field.Keep && blockerReason == Field.Keep && title == Field.Keep && note.isNullOrBlank()
 }

@@ -21,6 +21,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -49,6 +55,8 @@ fun VirlinProgressBar(
     timeFocused: String,
     modifier: Modifier = Modifier,
     animateSparkles: Boolean = true,
+    savedUnit: String = "saved",
+    timeExternal: String = "—",
 ) {
     val shape = RoundedCornerShape(18.dp)
     val pulse by rememberInfiniteTransition(label = "sparkle").animateFloat(
@@ -68,7 +76,6 @@ fun VirlinProgressBar(
         val narrow = maxWidth < 370.dp
         val leftWidth = if (narrow) 92.dp else 104.dp
         val ornamentWidth = if (narrow) 36.dp else 42.dp
-        val firstLineSize = if (narrow) 9.sp else 10.sp
 
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width
@@ -125,22 +132,32 @@ fun VirlinProgressBar(
         ) {
             Box(Modifier.width(leftWidth).fillMaxHeight(), contentAlignment = Alignment.Center) {
                 androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(timeSaved, fontSize = if (narrow) 29.sp else 32.sp, lineHeight = 32.sp,
+                    Text(timeSaved, fontSize = if (timeSaved.length > 8) 12.sp else if (timeSaved.length > 5) 20.sp else if (narrow) 29.sp else 32.sp, lineHeight = 32.sp,
                         fontWeight = FontWeight.Black, color = Color(0xFF102322), maxLines = 1)
-                    Text("saved", fontSize = 12.sp, lineHeight = 14.sp,
+                    Text(savedUnit, fontSize = 12.sp, lineHeight = 14.sp,
                         fontWeight = FontWeight.Medium, color = Color(0xFF4F5B5B))
                 }
             }
             Spacer(Modifier.width(if (narrow) 19.dp else 24.dp))
-            androidx.compose.foundation.layout.Column(Modifier.weight(1f), verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center) {
-                Text("$tasksAdvanced tasks advanced  ·  $projectsMoved projects moved",
-                    fontSize = firstLineSize, lineHeight = 14.sp, fontWeight = FontWeight.Medium,
-                    color = Color(0xFF46515D), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("$timeFocused focused", fontSize = 14.sp, lineHeight = 18.sp,
-                    fontWeight = FontWeight.Bold, color = Color(0xFF25303A), maxLines = 1)
+            androidx.compose.foundation.layout.Column(Modifier.weight(1f), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
+                SummaryTimeRow(Icons.Outlined.Schedule, "Focus", timeFocused)
+                SummaryTimeRow(Icons.Outlined.Layers, "External", timeExternal)
             }
             Spacer(Modifier.width(ornamentWidth))
         }
+    }
+}
+
+@Composable
+private fun SummaryTimeRow(icon: ImageVector, label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = Color(0xFF568577))
+        Spacer(Modifier.width(5.dp))
+        Text(label, modifier = Modifier.width(49.dp), fontSize = 11.sp, lineHeight = 18.sp,
+            fontWeight = FontWeight.Medium, color = Color(0xFF65756F), maxLines = 1)
+        Text(value, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold,
+            color = Color(0xFF203D34), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = TextStyle(fontFeatureSettings = "tnum"))
     }
 }
 

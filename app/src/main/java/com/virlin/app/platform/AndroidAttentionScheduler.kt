@@ -54,6 +54,7 @@ class AndroidAttentionScheduler(private val context: Context) : AttentionSchedul
     }
 
     override fun cancel(streamId: String) {
+        AttentionNotifications.cancel(context, streamId)
         pendingIntent(streamId, null, create = false)?.let { alarms.cancel(it); it.cancel(); Log.d(TAG, "cancelled $streamId") }
     }
 

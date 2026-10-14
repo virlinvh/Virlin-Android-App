@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class PdfWorkspaceState(
     val captureId: String? = null,
@@ -37,6 +39,7 @@ data class PdfWorkspaceState(
     val currentPage: Int = 0,
     val selectedPages: Set<Int> = emptySet(),
     val crops: Map<Int, PdfCrop> = emptyMap(),
+    val annotations: List<PdfAnnotation> = emptyList(),
     val mode: PdfWorkspaceMode = PdfWorkspaceMode.HOME,
     val showPreviews: Boolean = true,
     val committed: Boolean = false,
@@ -55,8 +58,11 @@ class PdfWorkspaceViewModel(
     private val appContext: Context,
     private val actions: VirlinActions = VirlinGraph.actions,
     private val repository: WorkStreamRepository = VirlinGraph.repository,
-    private val ids: IdProvider = VirlinGraph.ids
+    private val ids: IdProvider = VirlinGraph.ids,
+    private val projectId: String? = null,
 ) : ViewModel() {
+    private val annotationWriteMutex = Mutex()
+    private val annotationUndo = ArrayDeque<List<PdfAnnotation>>()
     private val draftCaptureId = initialCaptureId ?: ids.newId("cap")
     private val draftAttachmentId = ids.newId("att")
     private val _state = MutableStateFlow(
@@ -64,7 +70,7 @@ class PdfWorkspaceViewModel(
             captureId = initialCaptureId,
             attachmentId = if (initialCaptureId == null) draftAttachmentId else null,
             taskId = initialTaskId,
-            context = CaptureContext(taskId = initialTaskId),
+            context = CaptureContext(projectId = projectId, taskId = initialTaskId),
             committed = initialCaptureId != null,
             busy = initialCaptureId != null || initialTaskId != null
         )
@@ -73,8 +79,11 @@ class PdfWorkspaceViewModel(
 
     init {
         viewModelScope.launch {
-            val title = initialTaskId?.let { repository.getTask(it)?.title }
-            _state.update { it.copy(taskTitle = title) }
+            val task = initialTaskId?.let { repository.getTask(it) }
+            val title = task?.title ?: projectId?.let { repository.getProject(it)?.title }
+            _state.update { it.copy(taskTitle = title,
+                context = it.context.copy(projectId = task?.projectId ?: projectId,
+                    workStreamId = task?.workStreamId)) }
             if (initialCaptureId != null) loadExisting(initialCaptureId)
             else _state.update { it.copy(busy = false) }
         }
@@ -92,6 +101,10 @@ class PdfWorkspaceViewModel(
             if (!file.exists()) 0 else runCatching { PdfDocumentEngine.pageCount(file) }.getOrDefault(0)
         }
         val taskTitle = capture.taskId?.let { repository.getTask(it)?.title }
+        val annotations = withContext(Dispatchers.IO) {
+            if (file.exists()) PdfAnnotationStore.read(file) else emptyList()
+        }
+        annotationUndo.clear()
         _state.update {
             it.copy(
                 attachmentId = attachment.id,
@@ -102,6 +115,7 @@ class PdfWorkspaceViewModel(
                 sizeBytes = attachment.sizeBytes,
                 absolutePath = file.takeIf(File::exists)?.absolutePath,
                 pageCount = count,
+                annotations = annotations,
                 committed = true,
                 busy = false,
                 message = if (count == 0) "Stored PDF is missing or invalid" else null
@@ -135,6 +149,7 @@ class PdfWorkspaceViewModel(
             }
             imported.fold(
                 onSuccess = { file ->
+                    annotationUndo.clear()
                     val count = withContext(Dispatchers.IO) { PdfDocumentEngine.pageCount(file.absoluteFile) }
                     _state.update {
                         it.copy(
@@ -146,6 +161,7 @@ class PdfWorkspaceViewModel(
                             currentPage = 0,
                             selectedPages = emptySet(),
                             crops = emptyMap(),
+                            annotations = emptyList(),
                             busy = false
                         )
                     }
@@ -183,6 +199,47 @@ class PdfWorkspaceViewModel(
     fun setShowPreviews(show: Boolean) = _state.update { it.copy(showPreviews = show) }
     fun setCurrentPage(page: Int) = _state.update {
         it.copy(currentPage = page.coerceIn(0, (it.pageCount - 1).coerceAtLeast(0)))
+    }
+
+    fun addAnnotation(annotation: PdfAnnotation) = changeAnnotations { it + annotation }
+
+    fun eraseAnnotation(page: Int, point: PdfAnnotationPoint) = changeAnnotations { items ->
+        val index = items.indices.reversed().firstOrNull { index ->
+            val item = items[index]
+            item.page == page && item.points.any { p ->
+                val dx = p.x - point.x
+                val dy = p.y - point.y
+                dx * dx + dy * dy < .0025f
+            }
+        }
+        if (index == null) items else items.toMutableList().apply { removeAt(index) }
+    }
+
+    fun undoAnnotation() {
+        if (annotationUndo.isEmpty()) return
+        val previous = annotationUndo.removeLast()
+        _state.update { it.copy(annotations = previous) }
+        persistAnnotations(previous)
+    }
+
+    private fun changeAnnotations(change: (List<PdfAnnotation>) -> List<PdfAnnotation>) {
+        val before = _state.value.annotations
+        val after = change(before)
+        if (after == before) return
+        annotationUndo.addLast(before)
+        if (annotationUndo.size > 30) annotationUndo.removeFirst()
+        _state.update { it.copy(annotations = after) }
+        persistAnnotations(after)
+    }
+
+    private fun persistAnnotations(annotations: List<PdfAnnotation>) {
+        val path = _state.value.absolutePath ?: return
+        viewModelScope.launch {
+            annotationWriteMutex.withLock {
+                runCatching { withContext(Dispatchers.IO) { PdfAnnotationStore.write(File(path), annotations) } }
+                    .onFailure { error -> _state.update { it.copy(message = error.message ?: "Could not save annotations") } }
+            }
+        }
     }
 
     fun togglePage(page: Int) = _state.update {
@@ -331,11 +388,11 @@ class PdfWorkspaceViewModel(
     }
 
     companion object {
-        fun factory(captureId: String?, taskId: String?, context: Context): ViewModelProvider.Factory =
+        fun factory(captureId: String?, taskId: String?, context: Context, projectId: String? = null): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    PdfWorkspaceViewModel(captureId, taskId, context.applicationContext) as T
+                    PdfWorkspaceViewModel(captureId, taskId, context.applicationContext, projectId = projectId) as T
             }
     }
 }

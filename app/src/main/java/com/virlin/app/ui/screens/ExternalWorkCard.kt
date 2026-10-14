@@ -76,7 +76,7 @@ fun ExternalWorkRow(
                 item.actorName, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Charcoal,
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
-            val context = listOfNotNull(item.workItemTitle ?: item.stream.title, item.instruction)
+            val context = listOfNotNull(listOf(item.stream.title).plus(item.taskPath).joinToString(" › "), item.instruction)
                 .joinToString(" · ")
             Text(
                 context, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted,

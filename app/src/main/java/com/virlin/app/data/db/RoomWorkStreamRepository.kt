@@ -48,6 +48,12 @@ class RoomWorkStreamRepository private constructor(
 ) : WorkStreamRepository {
 
     private val lock = Mutex()
+    // Process-local fences stop an already-open editor's delayed autosave after deletion.
+    private val deletedPreviewOwners = mutableSetOf<String>()
+    private val deletedNoteOwners = mutableSetOf<String>()
+    override suspend fun pendingProjectDeletions() = db.meta().pendingProjectDeletions().map {
+        com.virlin.app.domain.action.ProjectDeletion.decode(it.value)
+    }
 
     private val _streams = MutableStateFlow(initialStreams)
     private val _projects = MutableStateFlow(initialProjects)
@@ -72,6 +78,19 @@ class RoomWorkStreamRepository private constructor(
     override suspend fun getTaskPageBlocks(taskId: String) = db.taskPageBlocks().byTask(taskId).map { it.toDomain() }
 
     override suspend fun getNoteDoc(ownerKey: String) = db.virlinNotes().byOwner(ownerKey)?.toDomain()
+
+    override suspend fun getMapNodePreview(ownerId: String) =
+        db.mapNodePreviews().byOwner(ownerId)?.let {
+            com.virlin.app.domain.mappreview.MapPreviewCodec.decode(it.ownerKey, it.documentJson)
+                .copy(createdAt = it.createdAt, updatedAt = it.updatedAt)
+        }
+
+    override suspend fun allMapNodePreviews() =
+        db.mapNodePreviews().all().associate { row ->
+            row.ownerKey to com.virlin.app.domain.mappreview.MapPreviewCodec
+                .decode(row.ownerKey, row.documentJson)
+                .copy(createdAt = row.createdAt, updatedAt = row.updatedAt)
+        }
     override suspend fun getStages(workStreamId: String) = db.externalStages().byStream(workStreamId).map { it.toDomain() }
     override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()
     override suspend fun getNoteByCaptureId(captureItemId: String) =
@@ -101,15 +120,21 @@ class RoomWorkStreamRepository private constructor(
         else db.voiceDocuments().byCaptureIds(captureItemIds).associate { it.captureItemId to it.toDomain() }
 
     override suspend fun getStream(id: String) = db.workStreams().byId(id)?.toDomain()
+    override val taskExecutionEnabled = true
     override suspend fun getActiveFocus() = db.workStreams().activeFocus()?.toDomain()
     override suspend fun getOpenFocusSession(streamId: String) = db.focusSessions().open(streamId)?.toDomain()
     override suspend fun getCurrentCycle(streamId: String) = db.cycles().current(streamId)?.toDomain()
     override suspend fun getLatestSnapshot(streamId: String) = db.snapshots().latest(streamId)?.toDomain()
+    override suspend fun getSnapshots(streamId: String) = db.snapshots().byWorkStream(streamId).map { it.toDomain() }
     override suspend fun getEvents(streamId: String) = db.events().byWorkStream(streamId).map { it.toDomain() }
     override suspend fun getEventsForStreams(streamIds: List<String>, limit: Int, offset: Int) =
         if (streamIds.isEmpty()) emptyList()
         else db.events().byWorkStreams(streamIds, limit, offset).map { it.toDomain() }
     override suspend fun allFocusSessions() = db.focusSessions().all().map { it.toDomain() }
+    override suspend fun externalRunIntervals() = db.externalRuns().all().map {
+        com.virlin.app.domain.model.ExternalRunInterval(it.ownerId, it.taskId,
+            java.time.Instant.ofEpochMilli(it.startedAt), java.time.Instant.ofEpochMilli(it.endedAt))
+    }
     override suspend fun allCycles() = db.cycles().all().map { it.toDomain() }
     override suspend fun getFocusSessions(streamId: String) = db.focusSessions().byWorkStream(streamId).map { it.toDomain() }
     override suspend fun getCycles(streamId: String) = db.cycles().byWorkStream(streamId).map { it.toDomain() }
@@ -129,6 +154,10 @@ class RoomWorkStreamRepository private constructor(
     override suspend fun <T> transaction(block: suspend WorkStreamWriter.() -> T): T = lock.withLock {
         val writer = Writer()
         val result = db.withTransaction { writer.block() }   // throws → rolled back, nothing published
+        writer.deletedProjects.forEach {
+            deletedPreviewOwners += it.ownerIds
+            deletedNoteOwners += it.noteOwners
+        }
         // Commit succeeded: publish. Re-read only what the block touched.
         if (writer.touchedStreams) _streams.value = db.workStreams().all().map { it.toDomain() }
         if (writer.touchedProjects) _projects.value = db.projects().all().map { it.toDomain() }
@@ -139,13 +168,85 @@ class RoomWorkStreamRepository private constructor(
         if (writer.touchedLinks) _tagLinks.value = db.tagLinks().all().map { it.toDomain() }
         if (writer.touchedSteps) _taskSteps.value = db.taskSteps().all().map { it.toDomain() }
         if (writer.touchedPageBlocks) _taskPageBlocks.value = db.taskPageBlocks().all().map { it.toDomain() }
+        // Previews are read when the map opens rather than observed per node, so there is no
+        // StateFlow to republish; the flag exists so a future observer has one place to hook.
+        if (writer.touchedMapPreviews) Unit
         result
     }
 
     /** Reads inside the transaction see the transaction's own writes — Room guarantees that. */
     private inner class Writer : WorkStreamWriter {
+        val deletedProjects = mutableListOf<com.virlin.app.domain.action.ProjectDeletion>()
+        override suspend fun acknowledgeProjectDeletion(projectId: String) {
+            db.meta().delete(com.virlin.app.domain.action.ProjectDeletion.KEY_PREFIX + projectId)
+        }
+        override suspend fun deleteProjectTree(projectId: String): com.virlin.app.domain.action.ProjectDeletion {
+            check(db.projects().byId(projectId) != null) { "Project not found." }
+            val scope = com.virlin.app.domain.action.ProjectDeletion.scope(projectId,
+                allStreams(), allTasks(), db.captures().all().map { it.toDomain() })
+            return deleteTree(scope)
+        }
+        override suspend fun deleteWorkStreamTree(id: String): com.virlin.app.domain.action.ProjectDeletion {
+            check(getStream(id) != null) { "Workstream not found." }
+            return deleteTree(com.virlin.app.domain.action.ProjectDeletion.branch(id, "workstream", allStreams(), allTasks(), db.captures().all().map { it.toDomain() }))
+        }
+        override suspend fun deleteTaskTree(id: String): com.virlin.app.domain.action.ProjectDeletion {
+            check(getTask(id) != null) { "Task not found." }
+            return deleteTree(com.virlin.app.domain.action.ProjectDeletion.branch(id, "task", allStreams(), allTasks(), db.captures().all().map { it.toDomain() }))
+        }
+        private suspend fun deleteTree(scope: com.virlin.app.domain.action.ProjectDeletion): com.virlin.app.domain.action.ProjectDeletion {
+            val projectId = scope.projectId
+            val report = scope.copy(attachmentIds = scope.captureIds.mapNotNull {
+                db.attachmentDocuments().byCaptureId(it)?.id
+            }.toSet())
+            // The receipt is committed with deletion so interrupted disk cleanup is recoverable.
+            db.meta().put(MetaEntity(com.virlin.app.domain.action.ProjectDeletion.KEY_PREFIX + projectId, report.encode()))
+            val sql = db.openHelper.writableDatabase
+            fun delete(table: String, column: String, id: String) {
+                sql.execSQL("DELETE FROM $table WHERE $column = ?", arrayOf(id))
+            }
+            report.captureIds.forEach { id ->
+                listOf("note_documents", "prompt_documents", "attachment_documents", "voice_documents").forEach { delete(it, "captureItemId", id) }
+                delete("task_page_blocks", "contentId", id)
+                delete("tag_links", "targetId", id)
+                delete("captures", "id", id)
+            }
+            val tags = if (report.kind == "project") db.projectTags().byProject(projectId) else emptyList()
+            tags.forEach { db.tagLinks().deleteByTag(it.id); db.projectTags().delete(it.id) }
+            report.ownerIds.forEach { id ->
+                delete("external_run_intervals", "ownerId", id)
+                delete("external_run_intervals", "taskId", id)
+                delete("tag_links", "targetId", id)
+                delete("priority_preferences", "streamId", id)
+                delete("map_node_previews", "ownerKey", id)
+            }
+            report.noteOwners.forEach { delete("virlin_notes", "ownerKey", it) }
+            val taskEventIds = sql.query("SELECT id, type, detail FROM events WHERE type IN ('TASK_CREATED','TASK_UPDATED','TASK_COMPLETED','ACTIVE_TASK_SET','ACTIVE_TASK_CLEARED')").use { rows ->
+                buildList { while (rows.moveToNext()) if (report.ownsTaskEvent(rows.getString(1), rows.getString(2))) add(rows.getString(0)) }
+            }
+            taskEventIds.forEach { delete("events", "id", it) }
+            (report.streamIds + report.taskIds).forEach { id ->
+                listOf("cycles", "focus_sessions", "context_snapshots", "events", "external_stages").forEach { delete(it, "workStreamId", id) }
+            }
+            report.taskIds.forEach { id ->
+                sql.execSQL("UPDATE captures SET convertedTaskId = NULL WHERE convertedTaskId = ?", arrayOf(id))
+                delete("focus_sessions", "taskId", id); delete("context_snapshots", "taskId", id)
+                delete("task_steps", "taskId", id); delete("task_page_blocks", "taskId", id)
+                delete("tasks", "id", id)
+            }
+            report.streamIds.forEach { delete("workstreams", "id", it) }
+            // Surviving containers must never point at a deleted active task.
+            report.taskIds.forEach { id -> sql.execSQL("UPDATE workstreams SET activeTaskId = NULL WHERE activeTaskId = ?", arrayOf(id)) }
+            if (report.kind == "project") delete("projects", "id", projectId)
+            touchedStreams = true; touchedProjects = true; touchedTasks = true; touchedCaptures = true
+            touchedStages = true; touchedTags = true; touchedLinks = true; touchedSteps = true
+            touchedPageBlocks = true; touchedMapPreviews = true
+            deletedProjects += report
+            return report
+        }
         var touchedStreams = false; var touchedProjects = false; var touchedTasks = false; var touchedCaptures = false; var touchedStages = false
         var touchedTags = false; var touchedLinks = false; var touchedSteps = false; var touchedPageBlocks = false
+        var touchedMapPreviews = false
 
         override suspend fun allTags() = db.projectTags().all().map { it.toDomain() }
         override suspend fun getTag(id: String) = db.projectTags().byId(id)?.toDomain()
@@ -186,7 +287,34 @@ class RoomWorkStreamRepository private constructor(
         // for them; the editor re-reads through the repository when it reopens.
         override suspend fun noteDocOf(ownerKey: String) = db.virlinNotes().byOwner(ownerKey)?.toDomain()
         override suspend fun saveNoteDoc(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc) {
+            check(doc.ownerKey !in deletedNoteOwners && deletedProjects.none { doc.ownerKey in it.noteOwners }) { "Note owner was deleted." }
             db.virlinNotes().upsert(doc.toEntity())
+        }
+
+        override suspend fun mapNodePreviewOf(ownerId: String) =
+            db.mapNodePreviews().byOwner(ownerId)?.let {
+                com.virlin.app.domain.mappreview.MapPreviewCodec.decode(it.ownerKey, it.documentJson)
+                    .copy(createdAt = it.createdAt, updatedAt = it.updatedAt)
+            }
+
+        override suspend fun saveMapNodePreview(preview: com.virlin.app.domain.mappreview.MapNodePreview) {
+            check(preview.ownerId !in deletedPreviewOwners && deletedProjects.none { preview.ownerId in it.ownerIds }) { "Preview owner was deleted." }
+            val existing = db.mapNodePreviews().byOwner(preview.ownerId)
+            val now = preview.updatedAt ?: java.time.Instant.now()
+            db.mapNodePreviews().upsert(
+                MapNodePreviewEntity(
+                    ownerKey = preview.ownerId,
+                    documentJson = com.virlin.app.domain.mappreview.MapPreviewCodec.encode(preview),
+                    revision = (existing?.revision ?: 0) + 1,
+                    createdAt = existing?.createdAt ?: preview.createdAt ?: now,
+                    updatedAt = now,
+                )
+            )
+            touchedMapPreviews = true
+        }
+
+        override suspend fun deleteMapNodePreview(ownerId: String) {
+            db.mapNodePreviews().deleteByOwner(ownerId); touchedMapPreviews = true
         }
 
         override suspend fun getCapture(id: String) = db.captures().byId(id)?.toDomain()
@@ -215,16 +343,33 @@ class RoomWorkStreamRepository private constructor(
         override suspend fun getStream(id: String) = db.workStreams().byId(id)?.toDomain()
         override suspend fun getActiveFocus() = db.workStreams().activeFocus()?.toDomain()
         override suspend fun getOpenFocusSession(streamId: String) = db.focusSessions().open(streamId)?.toDomain()
+        override suspend fun getCycle(id: String) = db.cycles().byId(id)?.toDomain()
         override suspend fun getCurrentCycle(streamId: String) = db.cycles().current(streamId)?.toDomain()
         override suspend fun getLatestSnapshot(streamId: String) = db.snapshots().latest(streamId)?.toDomain()
+        override suspend fun executionEvents(streamId: String) = db.events().byWorkStream(streamId).map { it.toDomain() }
         override suspend fun getProject(id: String) = db.projects().byId(id)?.toDomain()
         override suspend fun getTask(id: String) = db.tasks().byId(id)?.toDomain()
         override suspend fun allTasks() = db.tasks().all().map { it.toDomain() }
         override suspend fun allStreams() = db.workStreams().all().map { it.toDomain() }
 
         override suspend fun saveProject(project: Project) { db.projects().upsert(project.toEntity()); touchedProjects = true }
-        override suspend fun saveTask(task: Task) { db.tasks().upsert(task.toEntity()); touchedTasks = true }
-        override suspend fun saveStream(stream: WorkStream) { db.workStreams().upsert(stream.toEntity()); touchedStreams = true }
+        private suspend fun recordRun(id: String, taskId: String?, old: com.virlin.app.domain.model.TaskExecution?, next: com.virlin.app.domain.model.TaskExecution?, end: java.time.Instant) {
+            val start = old?.processingStartedAt?.takeUnless { old.externalTrackingPaused } ?: return
+            val nextStart = next?.processingStartedAt?.takeUnless { next.externalTrackingPaused }
+            val stoppedAt = minOf(end, old.checkAt ?: end)
+            if (nextStart != start && stoppedAt > start) db.externalRuns().insert(
+                ExternalRunEntity("$id:${start.toEpochMilli()}", id, taskId, start.toEpochMilli(), stoppedAt.toEpochMilli()))
+        }
+        override suspend fun saveTask(task: Task) {
+            recordRun(task.id, task.id, getTask(task.id)?.execution, task.execution, task.updatedAt)
+            db.tasks().upsert(task.toEntity()); touchedTasks = true
+        }
+        override suspend fun saveStream(stream: WorkStream) {
+            val old = getStream(stream.id)
+            recordRun(stream.id, old?.activeTaskId, old?.let { com.virlin.app.domain.model.TaskExecution.of(it) },
+                com.virlin.app.domain.model.TaskExecution.of(stream), stream.updatedAt)
+            db.workStreams().upsert(stream.toEntity()); touchedStreams = true
+        }
         override suspend fun saveCycle(cycle: Cycle) {
             val seq = db.cycles().byId(cycle.id)?.seq ?: (db.cycles().maxSeq() + 1)
             db.cycles().upsert(cycle.toEntity(seq))

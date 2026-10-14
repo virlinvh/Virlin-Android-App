@@ -48,6 +48,7 @@ object VirlinMappers {
         executionPreference = executionPreference.name, state = state.name,
         priority = priority.name, pinned = pinned, lastHumanAction = lastHumanAction, waitingFor = waitingFor,
         nextHumanAction = nextHumanAction, blockerReason = blockerReason, processingStartedAt = processingStartedAt,
+        externalTrackedSeconds = externalTrackedSeconds, externalTrackingPaused = externalTrackingPaused,
         checkAt = checkAt, snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.name, currentCycleId = currentCycleId,
         cycleCount = cycleCount, activeTaskId = activeTaskId, createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt,
         attentionRank = attentionRank, externalActorId = externalActorId, sortOrder = sortOrder
@@ -58,6 +59,7 @@ object VirlinMappers {
         state = WorkStreamState.valueOf(state), priority = Priority.valueOf(priority), pinned = pinned,
         lastHumanAction = lastHumanAction, waitingFor = waitingFor, nextHumanAction = nextHumanAction,
         blockerReason = blockerReason, processingStartedAt = processingStartedAt, checkAt = checkAt,
+        externalTrackedSeconds = externalTrackedSeconds, externalTrackingPaused = externalTrackingPaused,
         snoozedUntil = snoozedUntil, snoozeReason = snoozeReason?.let(SnoozeReason::valueOf),
         currentCycleId = currentCycleId, cycleCount = cycleCount, activeTaskId = activeTaskId,
         createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt, attentionRank = attentionRank,
@@ -79,14 +81,26 @@ object VirlinMappers {
         parentTaskId = parentTaskId, status = status.name, order = order, estimatedEffort = estimatedEffort,
         dueAt = dueAt, reminderAt = reminderAt, priority = priority.name, notes = notes,
         executionPreference = executionPreference.name,
-        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
+        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt,
+        executionState = execution?.state?.name, executionStartedAt = execution?.processingStartedAt,
+        executionExternalSeconds = execution?.externalTrackedSeconds ?: 0, executionPaused = execution?.externalTrackingPaused ?: false,
+        executionCheckAt = execution?.checkAt, executionReason = execution?.snoozeReason?.name,
+        executionBlocker = execution?.blockerReason, executionCycleId = execution?.currentCycleId,
+        executionCycleCount = execution?.cycleCount ?: 0,
+        executionActorId = execution?.actorId, executionTool = execution?.tool, executionInstruction = execution?.instruction,
+        executionAttentionRank = execution?.attentionRank
     )
     fun TaskEntity.toDomain() = Task(
         id = id, title = title, description = description, projectId = projectId, workStreamId = workStreamId,
         parentTaskId = parentTaskId, status = TaskStatus.valueOf(status), order = order, estimatedEffort = estimatedEffort,
         dueAt = dueAt, reminderAt = reminderAt, priority = Priority.valueOf(priority), notes = notes,
         executionPreference = ExecutionPreference.valueOf(executionPreference),
-        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt
+        createdAt = createdAt, updatedAt = updatedAt, completedAt = completedAt,
+        execution = executionState?.let { com.virlin.app.domain.model.TaskExecution(
+            WorkStreamState.valueOf(it), executionStartedAt, executionExternalSeconds, executionPaused,
+            executionCheckAt, executionReason?.let(SnoozeReason::valueOf), executionBlocker,
+            executionCycleId, executionCycleCount, executionActorId, executionTool, executionInstruction,
+            executionAttentionRank) }
     )
 
     fun CaptureItem.toEntity() = CaptureEntity(
@@ -213,10 +227,12 @@ object VirlinMappers {
             PriorityScope.Always -> "ALWAYS"
             PriorityScope.CurrentTerm -> "CURRENT_TERM"
             is PriorityScope.Until -> "UNTIL"
+            is PriorityScope.NextReturns -> "NEXT_RETURNS"
             PriorityScope.OneTime -> error("OneTime is transient and is never stored")
         },
         createdAt = createdAt,
-        expiresAt = (scope as? PriorityScope.Until)?.expiresAt
+        expiresAt = (scope as? PriorityScope.Until)?.expiresAt,
+        remainingReturns = (scope as? PriorityScope.NextReturns)?.remaining
     )
 
     /** Unknown/corrupt scope values read as null so a bad row can never crash attention. */
@@ -225,6 +241,7 @@ object VirlinMappers {
             "ALWAYS" -> PriorityScope.Always
             "CURRENT_TERM" -> PriorityScope.CurrentTerm
             "UNTIL" -> expiresAt?.let { PriorityScope.Until(it) }
+            "NEXT_RETURNS" -> remainingReturns?.takeIf { it > 0 }?.let { PriorityScope.NextReturns(it) }
             else -> null
         } ?: return null
         return PriorityPreference(streamId, preferredPosition, scope, createdAt)

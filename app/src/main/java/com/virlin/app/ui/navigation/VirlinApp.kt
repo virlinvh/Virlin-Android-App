@@ -24,6 +24,8 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
@@ -40,9 +42,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.virlin.app.ui.components.VirlinOrb
-import com.virlin.app.ui.note.TextNoteEditorScreen
-import com.virlin.app.ui.note.textNoteRoute
+import com.virlin.app.ui.notes.captureNotesRoute
 import com.virlin.app.ui.prompt.PromptEditorScreen
 import com.virlin.app.ui.prompt.promptEditorRoute
 import com.virlin.app.ui.link.LinkEditorScreen
@@ -107,6 +107,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
     }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: "now"
+    var mapFocusMode by remember { mutableStateOf(false) }
     val noteScope = rememberCoroutineScope()
     val noteRepository = com.virlin.app.domain.VirlinGraph.repository
     val noteTasks by noteRepository.tasks.collectAsState()
@@ -117,7 +118,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
         else -> null
     }
     val routeProjectId = when (currentRoute) {
-        ProjectDetailRoute, ProjectTaskIndexRoute, com.virlin.app.ui.map.ProjectMapRoute ->
+        ProjectDetailRoute, ProjectTaskIndexRoute, StandaloneTasksRoute, com.virlin.app.ui.map.ProjectMapRoute ->
             backStackEntry?.arguments?.getString("id")
         else -> routeTaskId?.let { id -> noteTasks.firstOrNull { it.id == id }?.projectId }
     }
@@ -165,11 +166,13 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
         currentRoute.startsWith("apps_mind_maps")
     // A project's Pulse drilldown is still Pulse.
     val pulseSubRoute = currentRoute.startsWith("pulse_project/")
-    // One predicate for both the bar and the Orb: they appear and disappear together, so a
-    // screen can never show one without the other.
-    val orbOnThisRoute = currentRoute in RootDestination.routes || streamsSubRoute ||
+    // Keep navigation available independently of the floating assistant.
+    val barOnThisRoute = currentRoute in RootDestination.routes || streamsSubRoute ||
         pulseSubRoute || appsSubRoute
-    val barOnThisRoute = orbOnThisRoute
+    val orbOnThisRoute = isOrbEntryRoute(currentRoute)
+    val popupHidesOrb = com.virlin.app.ui.hierarchy.KnowledgeOrbVisibility.hidden ||
+        !androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused ||
+        androidx.compose.foundation.layout.WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
     val barRoute = when {
         streamsSubRoute -> RootDestination.STREAMS.route
         pulseSubRoute -> RootDestination.PULSE.route
@@ -193,7 +196,8 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
         orbState.toOrbParameters(reducedMotion, oneShotNonce)
     }
 
-    val agentVisible = orbState.isAgentSurfaceVisible
+    // The ORB entry feature has been removed; retained agent data is not deleted.
+    val agentVisible = false
     val agentOpen = agentVisible && orbState != VirlinOrbInteractionState.Closing
 
     // ---- ONE animation drives scrim, sheet rise and the Orb riding the sheet, so they are
@@ -219,6 +223,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
     // The sheet's laid-out height in px, used to offset the Orb by the sheet's current
     // translation so it stays fixed inside the rising sheet (no root→Agent traversal).
     var sheetHeightPx by remember { mutableFloatStateOf(0f) }
+    var footerHeightPx by remember { mutableIntStateOf(0) }
 
     // Android Back and gesture dismissal use exactly the same closing path as the X and scrim.
     BackHandler(enabled = agentVisible) { agentViewModel.dismiss() }
@@ -233,51 +238,40 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
         agentOrbDrawSize = { agentOrbDrawSize },
         sheetTravelPx = { sheetHeightPx },
         progress = { openProgress.value },
-        orb = {
-            if (orbOnThisRoute) {
-                // =============================================================
-                // THE ONE LIVING ORB. Placed by OrbTravelLayout above the scrim and sheet,
-                // in root coordinates: at its approved Now slot when closed; while the Agent
-                // surface is opening/open it rides WITH the rising sheet, fixed in the header
-                // slot — it never traverses the screen from the root slot. Same composable,
-                // same liquid, same phase — never recreated, never duplicated.
-                // =============================================================
-                // The Control workspace has no Orb (Stitch Control UI): the one Orb fades out there and returns on ← / close.
-                val orbHidden = agentVisible && workspace.modeChosen
-                val orbAlpha by androidx.compose.animation.core.animateFloatAsState(if (orbHidden) 0f else 1f, tween(200), label = "orbAlpha")
-                VirlinOrb(
-                    modifier = Modifier.graphicsLayer { alpha = orbAlpha },
-                    size = if (agentVisible || openProgress.value > 0f) agentOrbDrawSize else OrbSize,
-                    params = orbParams,
-                    onPress = agentViewModel::onOrbPressed,
-                    onRelease = agentViewModel::onOrbReleased,
-                    // Inside the open Agent the Orb is identity, not a button.
-                    interactive = !agentVisible
-                )
-            }
-        }
+        orb = {}
     ) {
         // Stitch: the app recedes behind the open Agent with a light blur + dim. The blur is a constant
         // 2dp only while the Agent is visible (never animated per frame; API 31+ RenderEffect, no-op below).
         Box(Modifier.fillMaxSize().then(if (agentVisible) Modifier.blur(2.dp) else Modifier)) {
         Scaffold(
+            // Keep the real footer above the IME; descendants consume this inset rather
+            // than covering system back/home controls or subtracting the keyboard twice.
+            modifier = Modifier.imePadding(),
             // The Inbox is a pure-white surface by design; every other route keeps the app's
             // warm off-white, so the container follows the route rather than being tinted for all.
             containerColor = if (currentRoute == "inbox") Color.White else Color(0xFFF8F7F4),
             // Bottom-attached root navigation (Now · Streams · Pulse · Inbox). The bar owns the
             // navigation-bar inset itself; nothing else pads the bottom, so there is no gap.
-            bottomBar = { if (barOnThisRoute) VirlinBottomNav(barRoute, inboxCount, navController) }
+            bottomBar = { if (barOnThisRoute && !(currentRoute == com.virlin.app.ui.map.ProjectMapRoute && mapFocusMode)) VirlinBottomNav(barRoute, inboxCount, navController,
+                modifier = Modifier.onSizeChanged { footerHeightPx = it.height }) }
         ) { innerPadding ->
             // Content ends above the bar (innerPadding); the Orb slot is an overlay in the
             // bottom-right of that content area, so it floats above the bar and never over Inbox.
             Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+            var pageOrbBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
             if (orbOnThisRoute) Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 18.dp, bottom = 12.dp)
                     .size(OrbSize)
                     .onPlaced { nowSlot.position = it.positionInRoot() }
+                    .onGloballyPositioned {
+                        nowSlot.position = it.positionInRoot()
+                        pageOrbBounds = it.boundsInRoot()
+                    }
             )
+            CompositionLocalProvider(com.virlin.app.ui.components.LocalOrbBounds provides
+                pageOrbBounds.takeIf { orbOnThisRoute && !agentVisible && !popupHidesOrb }) {
             NavHost(
                 navController = navController,
                 startDestination = "now",
@@ -328,7 +322,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                         onBack = { navController.popBackStack() },
                         onOpenTextNote = { id ->
                             if (id == null) openRedesignedNotes(null, null)
-                            else navController.navigate(textNoteRoute(id)) { launchSingleTop = true }
+                            else navController.navigate(captureNotesRoute(id)) { launchSingleTop = true }
                         },
                         onOpenPrompt = { id ->
                             navController.navigate(promptEditorRoute(id)) { launchSingleTop = true }
@@ -347,6 +341,19 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
 
             // Hierarchy surfaces (Pass 2): Streams -> Project -> WorkStream -> Task (any depth).
             composable(ProjectDetailRoute) { e -> ProjectDetailScreen(e.arguments?.getString("id"), navController) }
+            composable("map_container_page/{projectId}/{scope}") { e ->
+                com.virlin.app.ui.hierarchy.MapContainerPageScreen(
+                    e.arguments?.getString("projectId"), e.arguments?.getString("scope"), navController)
+            }
+            composable("project_settings/{id}") { e ->
+                ProjectDetailScreen(e.arguments?.getString("id"), navController, settingsPage = true)
+            }
+            composable(StandaloneTasksRoute) { e ->
+                WorkStreamDetailScreen(null, navController,
+                    initialPath = e.arguments?.getString("path")?.split(',')?.filter { it.isNotBlank() }.orEmpty(),
+                    standaloneProjectId = e.arguments?.getString("id"),
+                    openTaskControls = e.arguments?.getString("controls") == "true")
+            }
             composable(WorkStreamDetailRoute) { e ->
                 // `path` carries the ancestor task ids to open at, so a deep link and a process
                 // restart rebuild the same level from stable ids rather than a live breadcrumb.
@@ -358,7 +365,8 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 )
             }
             composable(com.virlin.app.ui.map.ProjectMapRoute) { e ->
-                com.virlin.app.ui.map.ProjectMapScreen(e.arguments?.getString("id"), navController)
+                com.virlin.app.ui.map.ProjectMapScreen(e.arguments?.getString("id"), navController,
+                    onFocusModeChange = { mapFocusMode = it })
             }
             composable(ProjectTaskIndexRoute) { e ->
                 ProjectTaskIndexScreen(e.arguments?.getString("id"), navController)
@@ -392,11 +400,65 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 ) { FocusClockScreen(navController) }
 
                 // Full-screen Capture Text Note editor (not a bottom-nav destination).
+                composable("knowledge_note/new/{projectId}",
+                    arguments = listOf(navArgument("projectId") { type = NavType.StringType })) { entry ->
+                    com.virlin.app.ui.notes.NewKnowledgeNotesRoute(navController, entry.arguments?.getString("projectId").orEmpty())
+                }
+                composable("knowledge_note/new/workstream/{workStreamId}") { entry ->
+                    val streamId = entry.arguments?.getString("workStreamId")
+                    val stream = com.virlin.app.domain.VirlinGraph.repository.streams.collectAsState().value
+                        .firstOrNull { it.id == streamId }
+                    if (stream?.projectId != null) com.virlin.app.ui.notes.NewWorkstreamNotesRoute(
+                        navController, stream.projectId, stream.id)
+                    else androidx.compose.material3.Text("This workstream is no longer available")
+                }
+                composable("knowledge_todo/new/workstream/{workStreamId}") { entry ->
+                    val streamId = entry.arguments?.getString("workStreamId")
+                    val stream = com.virlin.app.domain.VirlinGraph.repository.streams.collectAsState().value
+                        .firstOrNull { it.id == streamId }
+                    if (stream?.projectId != null) com.virlin.app.ui.todo.KnowledgeTodoScreen(navController,
+                        projectId = stream.projectId, captureId = null, workStreamId = stream.id)
+                    else androidx.compose.material3.Text("This workstream is no longer available")
+                }
+                composable("knowledge_todo/new/{projectId}",
+                    arguments = listOf(navArgument("projectId") { type = NavType.StringType })) { entry ->
+                    com.virlin.app.ui.todo.KnowledgeTodoScreen(navController,
+                        projectId = entry.arguments?.getString("projectId"), captureId = null)
+                }
+                composable("image_workspace/project/{projectId}", arguments = listOf(navArgument("projectId") { type = NavType.StringType })) { entry ->
+                    com.virlin.app.ui.image.ImageWorkspaceScreen(navController, taskId = null, captureId = null, projectId = entry.arguments?.getString("projectId"))
+                }
+                composable("pdf_workspace/new/project/{projectId}", arguments = listOf(navArgument("projectId") { type = NavType.StringType })) { entry ->
+                    com.virlin.app.ui.pdf.PdfWorkspaceScreen(navController, captureId = null, taskId = null, projectId = entry.arguments?.getString("projectId"))
+                }
+                composable("attachment_workspace/project/{projectId}", arguments = listOf(navArgument("projectId") { type = NavType.StringType })) { entry ->
+                    com.virlin.app.ui.attachment.AttachmentWorkspaceScreen(navController, taskId = "", projectId = entry.arguments?.getString("projectId"))
+                }
+                composable("knowledge_todo/{captureId}",
+                    arguments = listOf(navArgument("captureId") { type = NavType.StringType })) { entry ->
+                    com.virlin.app.ui.todo.KnowledgeTodoScreen(navController,
+                        projectId = null, captureId = entry.arguments?.getString("captureId"))
+                }
+                composable("prompt_editor/new/project/{projectId}",
+                    arguments = listOf(navArgument("projectId") { type = NavType.StringType })) { entry ->
+                    PromptEditorScreen(navController, captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(projectId = entry.arguments?.getString("projectId")))
+                }
+                composable("prompt_editor/new/workstream/{workStreamId}") { entry ->
+                    val stream = com.virlin.app.domain.VirlinGraph.repository.streams.collectAsState().value
+                        .firstOrNull { it.id == entry.arguments?.getString("workStreamId") }
+                    if (stream?.projectId != null) PromptEditorScreen(navController, captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(stream.projectId, stream.id))
+                    else androidx.compose.material3.Text("This workstream is no longer available")
+                }
                 composable(
                     route = "text_note/{captureId}",
                     arguments = listOf(navArgument("captureId") { type = NavType.StringType })
                 ) { entry ->
-                    TextNoteEditorScreen(navController, captureId = entry.arguments?.getString("captureId"))
+                    com.virlin.app.ui.notes.CaptureNotesRoute(navController, entry.arguments?.getString("captureId").orEmpty())
+                }
+                composable("capture_note/{captureId}", arguments = listOf(navArgument("captureId") { type = NavType.StringType })) { entry ->
+                    com.virlin.app.ui.notes.CaptureNotesRoute(navController, entry.arguments?.getString("captureId").orEmpty())
                 }
 
                 // Full-screen Capture Prompt editor (not a bottom-nav destination).
@@ -457,6 +519,13 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                         )
                     )
                 }
+                composable("link_editor/new/workstream/{workStreamId}") { entry ->
+                    val stream = com.virlin.app.domain.VirlinGraph.repository.streams.collectAsState().value
+                        .firstOrNull { it.id == entry.arguments?.getString("workStreamId") }
+                    if (stream?.projectId != null) LinkEditorScreen(navController, captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(stream.projectId, stream.id))
+                    else androidx.compose.material3.Text("This workstream is no longer available")
+                }
                 composable(
                     route = "link_editor/new/task/{taskId}",
                     arguments = listOf(navArgument("taskId") { type = NavType.StringType })
@@ -505,6 +574,19 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 // Full-screen Capture Voice editor (single screen; not a bottom-nav destination).
                 composable("voice_editor") {
                     VoiceEditorScreen(navController, captureId = null)
+                }
+                composable("voice_editor/new/project/{projectId}",
+                    arguments = listOf(navArgument("projectId") { type = NavType.StringType })) { entry ->
+                    VoiceEditorScreen(navController, captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(
+                            projectId = entry.arguments?.getString("projectId")))
+                }
+                composable("voice_editor/new/workstream/{workStreamId}") { entry ->
+                    val stream = com.virlin.app.domain.VirlinGraph.repository.streams.collectAsState().value
+                        .firstOrNull { it.id == entry.arguments?.getString("workStreamId") }
+                    if (stream?.projectId != null) VoiceEditorScreen(navController, captureId = null,
+                        initialContext = com.virlin.app.domain.action.CaptureContext(stream.projectId, stream.id))
+                    else androidx.compose.material3.Text("This workstream is no longer available")
                 }
                 composable(
                     route = "voice_editor/{captureId}",
@@ -558,6 +640,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     )
                 }
             }
+            } // Orb bounds provider
             }
         }
         }
@@ -582,7 +665,12 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                     )
             )
 
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            // Reserve the actual navigation height (including device-specific system insets).
+            // The agent is a surface above the footer, never a replacement for it.
+            BoxWithConstraints(modifier = Modifier.fillMaxSize().imePadding().padding(
+                bottom = with(androidx.compose.ui.platform.LocalDensity.current) {
+                    if (barOnThisRoute) footerHeightPx.toDp() else 0.dp
+                })) {
                 // The ENTRY launcher is a compact command surface: it WRAPS its content
                 // (Orb · identity · 3 mode cards · composer) and never takes a screen
                 // percentage — only a max bound so a short device can still scroll inside it.
@@ -597,6 +685,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
                         .fillMaxWidth()
                         .then(if (entrySheet) Modifier.heightIn(max = maxHeight) else Modifier.height(sheetHeight))
                         .graphicsLayer {
@@ -605,7 +694,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                                 (if (entrySheet) sheetHeightPx else sheetHeight.toPx())
                         }
                         .onSizeChanged { sheetHeightPx = it.height.toFloat() }
-                        .background(if (workspace.modeChosen) Pearl else Color.White, RoundedCornerShape(topStart = if (workspace.modeChosen) 28.dp else 34.dp, topEnd = if (workspace.modeChosen) 28.dp else 34.dp))
+                        .background(if (workspace.modeChosen) Pearl else Color.White, RoundedCornerShape(28.dp))
                         // Absorb taps on the sheet body so they never reach the scrim/dismiss.
                         .pointerInput(Unit) { detectTapGestures { } }
                 ) {
@@ -669,7 +758,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                                 onOpenTextNote = { id ->
                                     agentViewModel.dismiss()
                                     if (id == null) openRedesignedNotes(null, null)
-                                    else navController.navigate(textNoteRoute(id)) { launchSingleTop = true }
+                                    else navController.navigate(captureNotesRoute(id)) { launchSingleTop = true }
                                 },
                                 onOpenPrompt = { id ->
                                     agentViewModel.dismiss()
@@ -747,9 +836,9 @@ private fun StartupErrorOverlay(message: String, onRetry: () -> Unit) {
     }
 }
 
-/** Plain (non-state) holder for a layout anchor read within the same placement pass. */
+/** Reactive anchor: ancestor/IME movement must invalidate ORB placement too. */
 private class SlotHolder {
-    var position: Offset? = null
+    var position: Offset? by mutableStateOf(null)
 }
 
 /**
@@ -816,13 +905,21 @@ private fun rememberReducedMotion(): Boolean {
  * Routes that live under Streams: the project pages, the project's task index, a WorkStream and
  * any task level inside it, and a task's own detail. They keep the shared footer and Orb.
  */
+/** No application route exposes the removed ORB entry feature. */
+internal fun isOrbEntryRoute(route: String): Boolean = false
+
 private val STREAMS_SUB_ROUTES = listOf(
     "project_detail/",
+    "project_settings/",
     "project_map/",
     "project_task_index/",
     "workstream_detail/",
     "task_detail/",
     // The Note page belongs to the Projects branch, so the footer keeps Projects selected.
     "task_todo/",
+    "knowledge_todo/",
+    "knowledge_note/",
+    "capture_note/",
+    "text_note/", // Compatibility route, now renders the same Notes workspace.
     "notes/"
 )

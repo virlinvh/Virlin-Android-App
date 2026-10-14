@@ -1,5 +1,11 @@
 # Virlin project documentation index
 
+Standalone task parity: [Shared cards, controls and hierarchy](STANDALONE_TASK_PARITY_2026-10-05.md).
+
+Project directory filtering: [Projects / Tasks view and filter contract](PROJECT_DIRECTORY_FILTERS_2026-10-05.md).
+
+Popup/device compatibility: [System navigation, keyboard and compact-window audit](POPUP_DEVICE_COMPATIBILITY_AUDIT_2026-10-05.md).
+
 Verified against the live workspace: 2026-09-30
 
 This is the starting point for every coding agent. The live workspace currently contains major
@@ -27,6 +33,10 @@ shared extension foundation needed by future Plus-menu features.
 
 ## Read first
 
+Current checkpoint: `PREMIUM_READINESS_AUDIT_2026-10-04.md` — recent feature history,
+safety/stability findings, 1,213-test results, lint/release evidence and proposed fix order.
+This dated audit supersedes older test totals, but does not replace feature contracts.
+
 1. `ARCHITECTURE.md` — system boundaries and dependency direction.
 2. `DATA_AND_STORAGE.md` — Room schema, repositories, managed files and migration rules.
 3. `NAVIGATION_AND_FEATURES.md` — routes, canonical screens, compatibility routes and feature state.
@@ -40,7 +50,10 @@ shared extension foundation needed by future Plus-menu features.
 ## Foundational feature contracts
 
 - `TASK_PAGE_FOUNDATION.md`
+- `PROJECT_SETTINGS_FOUNDATION.md`
 - `TASK_HIERARCHY_CLEANUP.md`
+- `EXECUTION_TIMING_FOUNDATION.md` — canonical state, Current/Focus switching and time roll-ups
+- `EXECUTION_DIALS_UI.md` — Project Overview execution indicators and canonical state mapping
 - `NOTE_SYSTEM_CLEANUP.md`
 - `PDF_FEATURE_FOUNDATION.md`
 - `PROMPT_FEATURE.md`
@@ -73,6 +86,16 @@ relevant contract rather than restating it differently.
 - `CODEX_CHANGES.md`, `CLAUDE_CHANGES.md` — append-only agent work logs, not architecture specs.
 
 ## Documentation rule
+
+- `WORKING_FOR_YOU_FIX_2026-10-04.md` — exact running-task identity and ongoing-run visibility alongside due reminders.
+
+- `AUDIT_REMEDIATION_2026-10-04.md` — fixes, verification and remaining release gates following the readiness audit.
+- `SECURITY_AND_PRIVACY.md` — local storage, backup transport and untrusted-input boundaries.
+
+- `TASK_EXECUTION_AUDIT.md` — task/subtask control fixes, Now routing and remaining ledger gaps.
+
+- `PROJECT_DELETION_2026-10-05.md` — permanent deletion, ownership cascade, confirmation, cleanup recovery and export boundaries.
+- `HIERARCHY_DELETION_2026-10-05.md` — workstream/task/subtask deletion at arbitrary depth, parent preservation and recovery.
 
 Code is the final source of truth. If code and documentation disagree, stop feature work, record the
 conflict, verify intended behavior, and update the authoritative document in the same change as the

@@ -1,4 +1,6 @@
 package com.virlin.app.domain.action
+import com.virlin.app.domain.model.ExecutionEligibility
+import com.virlin.app.domain.model.SnoozeReason
 
 import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.EffectiveExecutionMode
@@ -6,6 +8,7 @@ import com.virlin.app.domain.activity.TaskEventDetail
 import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.ExecutionPreference
+import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.ProjectStatus
 import com.virlin.app.domain.model.Task
@@ -36,12 +39,15 @@ internal class StructureActions(
     private val clock: VirlinClock,
     private val ids: IdProvider
 ) {
+    private fun freshExecution() = if (repository.taskExecutionEnabled) com.virlin.app.domain.model.TaskExecution() else null
 
     // ------------------------------------------------------------------ Project
 
-    suspend fun createProject(r: CreateProject): ActionResult<Project> = tx {
-        if (r.title.isBlank()) return@tx ActionResult.Rejected(DomainError.EmptyTitle)
-        r.estimatedEffort?.let { if (it.isNegative || it.isZero) return@tx ActionResult.Rejected(DomainError.InvalidEffort) }
+    suspend fun createProject(r: CreateProject): ActionResult<Project> = tx { createProjectIn(this, r) }
+
+    suspend fun createProjectIn(w: WorkStreamWriter, r: CreateProject): ActionResult<Project> = with(w) {
+        if (r.title.isBlank()) return ActionResult.Rejected(DomainError.EmptyTitle)
+        r.estimatedEffort?.let { if (it.isNegative || it.isZero) return ActionResult.Rejected(DomainError.InvalidEffort) }
         val now = clock.now()
         val p = Project(
             id = r.id ?: ids.newId("proj"), title = r.title.trim(), description = r.description,
@@ -74,6 +80,7 @@ internal class StructureActions(
             updatedAt = clock.now()
         )
         saveProject(updated)
+        reconcileTaskResponsibilities(id)
         ActionResult.Success(updated)
     }
 
@@ -96,6 +103,14 @@ internal class StructureActions(
         r.estimatedEffort?.let { if (it.isNegative || it.isZero) return@with ActionResult.Rejected(DomainError.InvalidEffort) }
         val all = allTasks()
         val now = clock.now()
+
+        if (repository.taskExecutionEnabled) {
+            val parentActivity = r.parentTaskId?.let { getTask(it)?.execution }
+            val streamActivity = if (r.parentTaskId == null) r.workStreamId?.let { getStream(it) } else null
+            if ((parentActivity != null && parentActivity.state != WorkStreamState.READY && parentActivity.state != WorkStreamState.DONE) ||
+                (streamActivity != null && streamActivity.state != WorkStreamState.READY && streamActivity.state != WorkStreamState.DONE))
+                return@with ActionResult.Rejected(DomainError.PlacementRejected("End this item's activity and reminders before adding children. Recorded time will remain saved."))
+        }
 
         // Resolve ownership deterministically.
         val projectId: String?
@@ -132,6 +147,7 @@ internal class StructureActions(
             order = r.order ?: (siblings.maxOfOrNull { it.order }?.plus(1) ?: 0),
             estimatedEffort = r.estimatedEffort, dueAt = r.dueAt, reminderAt = r.reminderAt,
             priority = r.priority, executionPreference = r.executionPreference,
+            execution = if (repository.taskExecutionEnabled && workStreamId != null) com.virlin.app.domain.model.TaskExecution() else null,
             createdAt = now, updatedAt = now
         )
         saveTask(task)
@@ -177,6 +193,36 @@ internal class StructureActions(
         ActionResult.Success(updated)
     }
 
+    suspend fun restoreTask(id: String): ActionResult<Task> = tx {
+        val task = getTask(id) ?: return@tx ActionResult.Rejected(DomainError.TaskNotFound(id))
+        if (task.status != TaskStatus.DONE) return@tx ActionResult.Rejected(DomainError.TaskAlreadyClosed)
+        val now = clock.now()
+        val ancestors = TaskHierarchy.ancestry(allTasks(), id)
+            ?: return@tx ActionResult.Rejected(DomainError.CyclicParent)
+        if (ancestors.any { it.status == TaskStatus.CANCELLED })
+            return@tx ActionResult.Rejected(DomainError.PlacementRejected("Restore cannot reopen a task under a cancelled parent."))
+        ancestors.drop(1).filter { it.status == TaskStatus.DONE }.forEach { parent ->
+            saveTask(parent.copy(status = TaskStatus.TODO, completedAt = null, updatedAt = now,
+                execution = parent.execution?.copy(state = WorkStreamState.READY, processingStartedAt = null,
+                    checkAt = null, snoozeReason = null, blockerReason = null, currentCycleId = null,
+                    externalTrackingPaused = false)))
+            parent.workStreamId?.let {
+                streamEvent(it, EventType.TASK_UPDATED, now,
+                    TaskEventDetail.encode(parent.id, parent.title, parent.status, TaskStatus.TODO))
+            }
+        }
+        val restored = task.copy(status = TaskStatus.TODO, completedAt = null,
+            execution = task.execution?.copy(state = WorkStreamState.READY, processingStartedAt = null,
+                checkAt = null, snoozeReason = null, blockerReason = null, currentCycleId = null,
+                externalTrackingPaused = false) ?: freshExecution(), updatedAt = now)
+        saveTask(restored)
+        task.workStreamId?.let {
+            streamEvent(it, EventType.TASK_UPDATED, now,
+                TaskEventDetail.encode(task.id, task.title, task.status, restored.status))
+        }
+        ActionResult.Success(restored)
+    }
+
     // ------------------------------------------------------------------ Execution preference
 
     suspend fun setProjectExecutionDefault(id: String, mode: EffectiveExecutionMode): ActionResult<Project> = tx {
@@ -186,10 +232,13 @@ internal class StructureActions(
         rejectProjectDefaultIfProcessingBecomesHuman(id, mode)?.let { return@tx it }
         val updated = p.copy(defaultExecutionMode = mode, updatedAt = clock.now())
         saveProject(updated)
+        reconcileTaskResponsibilities(id)
         ActionResult.Success(updated)
     }
 
     suspend fun setWorkStreamExecutionPreference(streamId: String, preference: ExecutionPreference): ActionResult<WorkStream> = tx {
+        if (repository.taskExecutionEnabled && !ExecutionEligibility.isLeaf(streamId, allTasks()))
+            return@tx ActionResult.Rejected(DomainError.PlacementRejected("Container defaults are inherited. Change responsibility on a leaf task."))
         val ws = getStream(streamId) ?: return@tx ActionResult.NotFound(streamId)
         if (ws.state.isTerminal) return@tx ActionResult.Rejected(DomainError.StreamAlreadyDone)
         if (preference == ExecutionPreference.INHERIT && ws.projectId == null) {
@@ -198,23 +247,54 @@ internal class StructureActions(
         if (ws.executionPreference == preference) return@tx ActionResult.Success(ws)
         val proposed = ws.copy(executionPreference = preference)
         rejectIfProcessingWouldBecomeHuman(proposed)?.let { return@tx it }
-        val updated = proposed.copy(updatedAt = clock.now())
-        saveStream(updated)
-        ActionResult.Success(updated)
+        val effective = ExecutionModeResolver.resolveCurrent(proposed, allTasks().associateBy { it.id },
+            proposed.projectId?.let { getProject(it)?.defaultExecutionMode })
+        val updated = proposed.copy(updatedAt = clock.now(),
+            externalTrackingPaused = proposed.externalTrackingPaused && effective == EffectiveExecutionMode.EXTERNAL)
+        val incompatible = repository.taskExecutionEnabled && ((effective == EffectiveExecutionMode.EXTERNAL && ws.state in setOf(WorkStreamState.FOCUS, WorkStreamState.PAUSED, WorkStreamState.SNOOZED) && !ws.externalTrackingPaused) ||
+            (effective == EffectiveExecutionMode.HUMAN && (ws.processingStartedAt != null || ws.externalTrackingPaused)))
+        val final = if (incompatible) {
+            val now = clock.now()
+            getOpenFocusSession(ws.id)?.let { saveFocusSession(it.copy(endedAt = now)) }
+            updated.copy(state = WorkStreamState.READY, processingStartedAt = null, checkAt = null,
+                externalTrackingPaused = false, snoozeReason = null, snoozedUntil = null,
+                externalTrackedSeconds = ws.externalTrackedSeconds + (ws.processingStartedAt?.let { Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0))
+        } else updated
+        saveStream(final)
+        reconcileTaskResponsibilities(updated.projectId, streamId)
+        ActionResult.Success(final)
     }
 
     suspend fun resetWorkStreamExecutionPreference(streamId: String): ActionResult<WorkStream> =
         setWorkStreamExecutionPreference(streamId, ExecutionPreference.INHERIT)
 
     suspend fun setTaskExecutionPreference(taskId: String, preference: ExecutionPreference): ActionResult<Task> = tx {
+        if (repository.taskExecutionEnabled && !ExecutionEligibility.isLeaf(taskId, allTasks()))
+            return@tx ActionResult.Rejected(DomainError.PlacementRejected("This task contains children. Change responsibility on a leaf task."))
         val t = getTask(taskId) ?: return@tx ActionResult.Rejected(DomainError.TaskNotFound(taskId))
         if (t.status.isTerminal) return@tx ActionResult.Rejected(DomainError.TaskAlreadyClosed)
         if (t.executionPreference == preference) return@tx ActionResult.Success(t)
         rejectProcessingHuman(t.workStreamId, proposedTask = t.copy(executionPreference = preference))
             ?.let { return@tx it }
-        val updated = t.copy(executionPreference = preference, updatedAt = clock.now())
+        val now = clock.now()
+        val proposed = t.copy(executionPreference = preference)
+        val owner = t.workStreamId?.let { getStream(it) }
+        val effective = owner?.let { ExecutionModeResolver.resolveTask(proposed,
+            allTasks().associateBy { it.id } + (t.id to proposed), it,
+            t.projectId?.let { project -> getProject(project)?.defaultExecutionMode }) }
+        var execution = t.execution
+        if (execution != null && ((effective == EffectiveExecutionMode.EXTERNAL && execution.state in setOf(WorkStreamState.FOCUS, WorkStreamState.PAUSED, WorkStreamState.SNOOZED, WorkStreamState.CHECK) && !execution.externalTrackingPaused && execution.processingStartedAt == null && execution.snoozeReason != SnoozeReason.EXTERNAL_RESULT_READY) ||
+                ((execution.processingStartedAt != null || execution.externalTrackingPaused) && effective == EffectiveExecutionMode.HUMAN))) {
+            t.workStreamId?.let { getOpenFocusSession(it) }?.takeIf { it.taskId == t.id }?.let { saveFocusSession(it.copy(endedAt = now)) }
+            execution = execution.copy(state = WorkStreamState.READY, processingStartedAt = null,
+                externalTrackedSeconds = execution.externalTrackedSeconds + (execution.processingStartedAt?.let {
+                    java.time.Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0),
+                externalTrackingPaused = false, checkAt = null, snoozeReason = null)
+        }
+        val updated = t.copy(executionPreference = preference, execution = execution, updatedAt = now)
         saveTask(updated)
         t.workStreamId?.let {
+            reconcileTaskResponsibilities(t.projectId, it)
             streamEvent(it, EventType.TASK_UPDATED, clock.now(),
                 TaskEventDetail.encode(t.id, updated.title, t.status, updated.status))
         }
@@ -223,6 +303,26 @@ internal class StructureActions(
 
     suspend fun resetTaskExecutionPreference(taskId: String): ActionResult<Task> =
         setTaskExecutionPreference(taskId, ExecutionPreference.INHERIT)
+
+    private suspend fun WorkStreamWriter.reconcileTaskResponsibilities(projectId: String?, streamId: String? = null) {
+        val tasks = allTasks()
+        val byId = tasks.associateBy { it.id }
+        val now = clock.now()
+        tasks.filter { !it.status.isTerminal && it.execution != null && it.projectId == projectId &&
+            (streamId == null || it.workStreamId == streamId) }.forEach { task ->
+            val owner = task.workStreamId?.let { getStream(it) } ?: return@forEach
+            val mode = ExecutionModeResolver.resolveTask(task, byId, owner, projectId?.let { getProject(it)?.defaultExecutionMode })
+            val activity = task.execution!!
+            if ((activity.state == WorkStreamState.FOCUS && mode == EffectiveExecutionMode.EXTERNAL) ||
+                ((activity.processingStartedAt != null || activity.externalTrackingPaused) && mode == EffectiveExecutionMode.HUMAN)) {
+                task.workStreamId?.let { getOpenFocusSession(it) }?.takeIf { it.taskId == task.id }?.let { saveFocusSession(it.copy(endedAt = now)) }
+                saveTask(task.copy(updatedAt = now, execution = activity.copy(state = WorkStreamState.READY,
+                    externalTrackedSeconds = activity.externalTrackedSeconds + (activity.processingStartedAt?.let {
+                        java.time.Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0),
+                    processingStartedAt = null, externalTrackingPaused = false, checkAt = null, snoozeReason = null)))
+            }
+        }
+    }
 
     /**
      * If [streamId] is PROCESSING and applying overlays would make resolveCurrent HUMAN, reject.
@@ -235,7 +335,7 @@ internal class StructureActions(
     ): ActionResult.Rejected? {
         val id = streamId ?: return null
         val ws = proposedStream ?: getStream(id) ?: return null
-        if (ws.state != WorkStreamState.PROCESSING) return null
+        if (ws.state != WorkStreamState.PROCESSING && !(ws.state == WorkStreamState.CHECK && ws.processingStartedAt != null)) return null
         val projectDefault = proposedProjectDefault
             ?: ws.projectId?.let { getProject(it)?.defaultExecutionMode }
         val tasks = allTasks().associateBy { it.id }.toMutableMap()
@@ -294,6 +394,11 @@ internal class StructureActions(
         val now = clock.now()
         val all = allTasks()
         val subtree = (TaskHierarchy.descendants(all, task.id).map { it.id } + task.id).toSet()
+        if (repository.taskExecutionEnabled) {
+            target?.id?.let { rejectActiveDestination(it) }?.let { return@tx it }
+            if (all.filter { it.id in subtree }.any { it.execution?.state?.let { state -> state != WorkStreamState.READY && state != WorkStreamState.DONE } == true })
+                return@tx ActionResult.Rejected(DomainError.PlacementRejected("End branch activity before changing its workstream."))
+        }
         val moved = task.copy(workStreamId = target?.id, projectId = projectId, updatedAt = now)
         saveTask(moved)
         all.asSequence()
@@ -379,6 +484,11 @@ internal class StructureActions(
         }
 
         val source = all.first { it.id == allowed.source.id }
+        if (repository.taskExecutionEnabled && (source.parentTaskId != newParentTaskId || source.workStreamId != newStreamId || request.operation == PlacementOperation.COPY)) {
+            rejectActiveDestination(request.targetParentId)?.let { return@tx it }
+            if (request.operation == PlacementOperation.MOVE && (listOf(source) + TaskHierarchy.descendants(all, source.id)).any { it.execution?.state?.let { state -> state != WorkStreamState.READY && state != WorkStreamState.DONE } == true })
+                return@tx ActionResult.Rejected(DomainError.PlacementRejected("End branch activity before moving it to another parent. Reordering remains available."))
+        }
         val commit = when (request.operation) {
             PlacementOperation.MOVE ->
                 moveBranch(allowed, all, source, newParentTaskId, newStreamId, project.id, request.insertBeforeId, now)
@@ -613,6 +723,11 @@ internal class StructureActions(
             p
         }
         // Into itself, or into its own subtree, would orphan the branch from the tree.
+        if (repository.taskExecutionEnabled && moving.any { it.parentTaskId != newParentId }) {
+            newParentId?.let { rejectActiveDestination(it) }?.let { return@tx it }
+            if (moving.flatMap { listOf(it) + TaskHierarchy.descendants(all, it.id) }.any { it.execution?.state?.let { state -> state != WorkStreamState.READY && state != WorkStreamState.DONE } == true })
+                return@tx ActionResult.Rejected(DomainError.PlacementRejected("End branch activity before changing its parent. Reordering remains available."))
+        }
         if (parent != null) {
             val forbidden = moving.flatMap { task ->
                 listOf(task.id) + TaskHierarchy.descendants(all, task.id).map { it.id }
@@ -666,7 +781,7 @@ internal class StructureActions(
             id = copyId,
             title = source.title + " (copy)",
             status = TaskStatus.TODO,
-            completedAt = null,
+            completedAt = null, execution = freshExecution(),
             order = source.order + 1,
             createdAt = now,
             updatedAt = now
@@ -688,7 +803,7 @@ internal class StructureActions(
                     id = newId,
                     parentTaskId = remap[child.parentTaskId] ?: copyId,
                     status = TaskStatus.TODO,
-                    completedAt = null,
+                    completedAt = null, execution = freshExecution(),
                     createdAt = now,
                     updatedAt = now
                 )
@@ -709,7 +824,25 @@ internal class StructureActions(
         val t = getTask(id) ?: return@tx ActionResult.Rejected(DomainError.TaskNotFound(id))
         if (t.status.isTerminal) return@tx ActionResult.Rejected(DomainError.TaskAlreadyClosed)
         val now = clock.now()
-        val closed = t.copy(status = status, completedAt = if (status.isCompleted) now else null, updatedAt = now)
+        val subtree = listOf(t) + TaskHierarchy.descendants(allTasks(), t.id)
+        // One transaction: a terminal container must never leave an executable descendant.
+        subtree.filter { !it.status.isTerminal }.forEach { closeOne(it, status, eventType, now) }
+        ActionResult.Success(getTask(id)!!)
+    }
+
+    private suspend fun WorkStreamWriter.closeOne(t: Task, status: TaskStatus, eventType: EventType, now: Instant) {
+        t.workStreamId?.let { getOpenFocusSession(it) }?.takeIf { it.taskId == t.id }?.let {
+            saveFocusSession(it.copy(endedAt = now))
+        }
+        t.execution?.currentCycleId?.let { getCycle(it) }?.takeIf { it.endedAt == null }?.let {
+            saveCycle(it.copy(endedAt = now))
+        }
+        val closed = t.copy(status = status, completedAt = if (status.isCompleted) now else null, updatedAt = now,
+            execution = t.execution?.let { activity -> activity.copy(state = WorkStreamState.DONE,
+                externalTrackedSeconds = activity.externalTrackedSeconds + (activity.processingStartedAt?.let {
+                    java.time.Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0),
+                processingStartedAt = null, externalTrackingPaused = false, checkAt = null, snoozeReason = null,
+                blockerReason = null, currentCycleId = null) })
         saveTask(closed)
         t.workStreamId?.let { wsId ->
             streamEvent(wsId, eventType, now,
@@ -724,22 +857,35 @@ internal class StructureActions(
                         if (open.isOpen) saveFocusSession(open.copy(endedAt = now))
                     }
                 }
-                saveStream(ws.copy(activeTaskId = null, updatedAt = now))
+                val tracked = ws.externalTrackedSeconds + (ws.processingStartedAt?.let {
+                    java.time.Duration.between(it, now).seconds.coerceAtLeast(0L)
+                } ?: 0L)
+                saveStream(ws.copy(activeTaskId = null, state = WorkStreamState.READY,
+                    processingStartedAt = null, externalTrackingPaused = false, externalTrackedSeconds = tracked,
+                    checkAt = null, snoozedUntil = null, snoozeReason = null, updatedAt = now))
                 streamEvent(wsId, EventType.ACTIVE_TASK_CLEARED, now,
                     TaskEventDetail.encode(t.id, t.title))
             }
         }
-        ActionResult.Success(closed)
     }
 
     // ------------------------------------------------------------------ Active task
 
     suspend fun setActiveTask(streamId: String, taskId: String?): ActionResult<WorkStream> = tx {
         val ws = getStream(streamId) ?: return@tx ActionResult.NotFound(streamId)
+        if (ws.activeTaskId != taskId && (ws.processingStartedAt != null || ws.externalTrackingPaused))
+            return@tx ActionResult.Rejected(DomainError.AnotherTaskIsExecuting)
         if (ws.state.isTerminal) return@tx ActionResult.Rejected(DomainError.StreamAlreadyDone)
         val now = clock.now()
         if (taskId == null) {
             if (ws.activeTaskId == null) return@tx ActionResult.Success(ws)
+            if (ws.state == WorkStreamState.FOCUS) {
+                getOpenFocusSession(streamId)?.let { open ->
+                    if (open.isOpen) saveFocusSession(open.copy(endedAt = now))
+                }
+                // Focus may intentionally continue at WorkStream level without a current Task.
+                saveFocusSession(FocusSession(ids.newId("fs"), streamId, ws.currentCycleId, now))
+            }
             val cleared = ws.copy(activeTaskId = null, updatedAt = now)
             saveStream(cleared); streamEvent(streamId, EventType.ACTIVE_TASK_CLEARED, now, ws.activeTaskId)
             return@tx ActionResult.Success(cleared)
@@ -748,6 +894,15 @@ internal class StructureActions(
         if (t.workStreamId != streamId) return@tx ActionResult.Rejected(DomainError.TaskNotInWorkStream)
         if (t.status.isTerminal) return@tx ActionResult.Rejected(DomainError.TaskAlreadyClosed)
         if (TaskHierarchy.ancestry(allTasks(), taskId) == null) return@tx ActionResult.Rejected(DomainError.CyclicParent)
+        if (ws.activeTaskId == taskId) return@tx ActionResult.Success(ws)
+        if (ws.state == WorkStreamState.FOCUS) {
+            // Changing Current while Focus is running is a timing boundary. Never allow the open
+            // session to keep charging time to the previous Task.
+            getOpenFocusSession(streamId)?.let { open ->
+                if (open.isOpen) saveFocusSession(open.copy(endedAt = now))
+            }
+            saveFocusSession(FocusSession(ids.newId("fs"), streamId, ws.currentCycleId, now, taskId = taskId))
+        }
         val updated = ws.copy(activeTaskId = taskId, updatedAt = now)
         saveStream(updated)
         streamEvent(streamId, EventType.ACTIVE_TASK_SET, now, taskId)
@@ -777,6 +932,12 @@ internal class StructureActions(
     }
 
     // ------------------------------------------------------------------ Shared
+
+    private suspend fun WorkStreamWriter.rejectActiveDestination(id: String): ActionResult.Rejected? {
+        val state = getTask(id)?.execution?.state ?: getStream(id)?.state ?: return null
+        return if (state !in setOf(WorkStreamState.READY, WorkStreamState.DONE))
+            ActionResult.Rejected(DomainError.PlacementRejected("End the destination item's activity before giving it children.")) else null
+    }
 
     private suspend fun <T> tx(block: suspend WorkStreamWriter.() -> ActionResult<T>): ActionResult<T> =
         try { repository.transaction { block() } } catch (e: Exception) { ActionResult.Failure(e) }

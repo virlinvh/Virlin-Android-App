@@ -27,7 +27,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.virlin.app.ui.components.SafeDialog as Dialog
 import com.virlin.app.domain.action.NewExternalStage
 import com.virlin.app.domain.attention.AttentionTiming
 import com.virlin.app.domain.model.ExternalActor
@@ -54,7 +54,7 @@ fun DelegateDialog(
     var stageText by remember { mutableStateOf("") }
     var stages by remember { mutableStateOf(listOf<NewExternalStage>()) }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(onDismissRequest = onDismiss, scrollContent = true) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

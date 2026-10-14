@@ -76,6 +76,7 @@ class TaskPageActions(
             convertedTaskId = null, archivedAt = null, createdAt = now, updatedAt = now)
         saveCapture(copy)
         getNoteByCaptureId(original.id)?.let { saveNoteDocument(it.copy(id = ids.newId("note"), captureItemId = copyId, createdAt = now, updatedAt = now)) }
+        noteDocOf("capture-${original.id}")?.let { saveNoteDoc(it.copy(ownerKey = "capture-$copyId", createdAt = now, updatedAt = now)) }
         getPromptByCaptureId(original.id)?.let { savePromptDocument(it.copy(id = ids.newId("prompt"), captureItemId = copyId, createdAt = now, updatedAt = now)) }
         getAttachmentByCaptureId(original.id)?.let { saveAttachmentDocument(it.copy(id = ids.newId("attachment"), captureItemId = copyId, createdAt = now, updatedAt = now)) }
         getVoiceByCaptureId(original.id)?.let { saveVoiceDocument(it.copy(id = ids.newId("voice"), captureItemId = copyId, createdAt = now, updatedAt = now)) }

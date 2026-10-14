@@ -30,6 +30,93 @@ import java.time.Instant
  */
 @RunWith(AndroidJUnit4::class)
 class VirlinMigrationTest {
+    @Test fun migrate22To23AddsReturnCountWithoutChangingSavedRules() {
+        val name = "virlin-priority-returns-migration.db"
+        helper.createDatabase(name, 22).apply {
+            execSQL("INSERT INTO priority_preferences (streamId,preferredPosition,scopeType,createdAt,expiresAt) " +
+                "VALUES ('task',2,'ALWAYS',1000,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 23, true, VirlinDatabase.MIGRATION_22_23).apply {
+            query("SELECT preferredPosition,scopeType,remainingReturns FROM priority_preferences WHERE streamId='task'").use {
+                assertTrue(it.moveToFirst()); assertEquals(2, it.getInt(0)); assertEquals("ALWAYS", it.getString(1))
+                assertTrue(it.isNull(2))
+            }
+            close()
+        }
+    }
+    @Test fun migrate21To22AddsTaskRankWithoutChangingExistingTask() {
+        val name = "virlin-task-rank-migration.db"
+        helper.createDatabase(name, 21).apply {
+            execSQL("INSERT INTO tasks (id,title,status,sortOrder,priority,executionPreference,createdAt,updatedAt,executionState) " +
+                "VALUES ('t','Waiting task','TODO',0,'NORMAL','EXTERNAL',1000,1000,'CHECK')")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 22, true, VirlinDatabase.MIGRATION_21_22).apply {
+            query("SELECT title,executionState,executionAttentionRank FROM tasks WHERE id='t'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Waiting task", it.getString(0))
+                assertEquals("CHECK", it.getString(1))
+                assertTrue(it.isNull(2))
+            }
+            close()
+        }
+    }
+    @Test fun migrate20To21PreservesExistingTables() {
+        val name = "virlin-external-interval-migration.db"
+        helper.createDatabase(name, 20).close()
+        helper.runMigrationsAndValidate(name, 21, true, VirlinDatabase.MIGRATION_20_21).apply {
+            query("SELECT COUNT(*) FROM external_run_intervals").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals(0, cursor.getInt(0))
+            }
+            query("SELECT COUNT(*) FROM tasks").close()
+            query("SELECT COUNT(*) FROM workstreams").close()
+            close()
+        }
+    }
+    @Test fun migrate19To20_movesExactActivityWithoutRewritingSessions() {
+        val name = "virlin-task-execution-migration.db"
+        helper.createDatabase(name, 19).apply {
+            execSQL("INSERT INTO workstreams (id,title,executionPreference,state,priority,pinned,cycleCount,createdAt,updatedAt,sortOrder,processingStartedAt,activeTaskId,checkAt,externalTrackedSeconds) VALUES ('s','Stream','EXTERNAL','PROCESSING','NORMAL',0,2,1000,1000,0,1000,'t',4000,42)")
+            execSQL("INSERT INTO tasks (id,title,workStreamId,status,sortOrder,priority,executionPreference,createdAt,updatedAt) VALUES ('t','Task','s','TODO',0,'NORMAL','INHERIT',1000,1000)")
+            execSQL("INSERT INTO focus_sessions (id,workStreamId,startedAt,endedAt,taskId,seq) VALUES ('f','s',100,900,'t',1)")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 20, true, VirlinDatabase.MIGRATION_19_20).apply {
+            query("SELECT executionState,executionStartedAt,executionExternalSeconds,executionCheckAt FROM tasks WHERE id='t'").use {
+                assertTrue(it.moveToFirst()); assertEquals("PROCESSING", it.getString(0)); assertEquals(1000L, it.getLong(1))
+                assertEquals(42L, it.getLong(2)); assertEquals(4000L, it.getLong(3))
+            }
+            query("SELECT state,activeTaskId FROM workstreams WHERE id='s'").use {
+                assertTrue(it.moveToFirst()); assertEquals("READY", it.getString(0)); assertTrue(it.isNull(1))
+            }
+            query("SELECT workStreamId,taskId,endedAt FROM focus_sessions WHERE id='f'").use {
+                assertTrue(it.moveToFirst()); assertEquals("s", it.getString(0)); assertEquals("t", it.getString(1)); assertEquals(900L, it.getLong(2))
+            }
+            close()
+        }
+    }
+    @Test fun migrate18To19_preservesRun_andPersistsPauseFields() {
+        val name = "virlin-external-pause-migration.db"
+        helper.createDatabase(name, 18).apply {
+            execSQL("INSERT INTO workstreams (id,title,executionPreference,state,priority,pinned,cycleCount,createdAt,updatedAt,sortOrder,processingStartedAt) VALUES ('external','External','EXTERNAL','PROCESSING','NORMAL',0,0,1000,1000,0,1000)")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 19, true, VirlinDatabase.MIGRATION_18_19).apply {
+            query("SELECT processingStartedAt,externalTrackedSeconds,externalTrackingPaused FROM workstreams WHERE id='external'").use {
+                assertTrue(it.moveToFirst()); assertEquals(1000L, it.getLong(0)); assertEquals(0L, it.getLong(1)); assertEquals(0, it.getInt(2))
+            }
+            execSQL("UPDATE workstreams SET state='PAUSED',processingStartedAt=NULL,externalTrackedSeconds=120,externalTrackingPaused=1 WHERE id='external'")
+            close()
+        }
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, name).addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try { runBlocking {
+            val stored = db.workStreams().byId("external")!!
+            assertEquals(120L, stored.externalTrackedSeconds); assertTrue(stored.externalTrackingPaused)
+            assertNull(stored.processingStartedAt)
+        } } finally { db.close(); ctx.deleteDatabase(name) }
+    }
 
     private val dbName = "virlin-migration-test.db"
     private val t0 = Instant.parse("2026-09-05T09:00:00Z").toEpochMilli()
@@ -68,8 +155,11 @@ class VirlinMigrationTest {
             runBlocking {
                 assertEquals("Virlin Android App", db.projects().byId("p1")!!.title)
                 val s4 = db.workStreams().byId("s4")!!
-                assertEquals("PROCESSING", s4.state); assertEquals("EXTERNAL", s4.executionPreference); assertEquals("t_nl", s4.activeTaskId); assertEquals(t0 + 1800000, s4.checkAt!!.toEpochMilli())
-                assertEquals("FOCUS", db.workStreams().byId("s1")!!.state)
+                assertEquals("READY", s4.state); assertEquals("EXTERNAL", s4.executionPreference); assertNull(s4.activeTaskId); assertNull(s4.checkAt)
+                assertEquals("PROCESSING", db.tasks().byId("t_nl")!!.executionState)
+                assertEquals(t0 + 1800000, db.tasks().byId("t_nl")!!.executionCheckAt!!.toEpochMilli())
+                assertEquals("READY", db.workStreams().byId("s1")!!.state)
+                assertEquals("FOCUS", db.tasks().byId("p_q17")!!.executionState)
                 assertEquals(3, db.tasks().all().size); assertEquals("t_create", db.tasks().byId("t_nl")!!.parentTaskId)
                 assertEquals(1, db.cycles().byWorkStream("s4").size)
                 assertNotNull(db.focusSessions().open("s1"))
@@ -532,7 +622,7 @@ class VirlinMigrationTest {
         } finally { db.close(); ctx.deleteDatabase(dbName) }
     }
 
-    @Test fun freshInstall_isV17_andNoMigrationNeeded() {
+    @Test fun freshInstall_isV18_andNoMigrationNeeded() {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         ctx.deleteDatabase("virlin-fresh-test.db")
         val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, "virlin-fresh-test.db").addMigrations(*VirlinDatabase.MIGRATIONS).build()
@@ -545,8 +635,83 @@ class VirlinMigrationTest {
                 assertEquals(0, db.voiceDocuments().count())
                 assertEquals(0, db.virlinNotes().count())
                 assertEquals(0, db.taskPageBlocks().all().size)
+                assertEquals(0, db.mapNodePreviews().count())
             }
-            assertEquals(17, db.openHelper.readableDatabase.version)
+            assertEquals(21, db.openHelper.readableDatabase.version)
         } finally { db.close(); ctx.deleteDatabase("virlin-fresh-test.db") }
+    }
+
+    @Test fun migrate17To18_addsMapNodePreviews_withoutChangingAnythingElse() {
+        val dbName = "virlin-migration-17-18.db"
+        // Seed v17 with real content so the migration is proven NON-DESTRUCTIVE rather than merely
+        // syntactically valid: a project, a workstream, a task and a Page block must all survive.
+        helper.createDatabase(dbName, 17).apply {
+            execSQL(
+                "INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort," +
+                    "defaultExecutionMode,createdAt,updatedAt,completedAt,iconPath,iconId) " +
+                    "VALUES ('p1','Kept project','d','ACTIVE','HIGH',NULL,144000000,'HUMAN'," +
+                    "1700000000000,1700000000000,NULL,NULL,NULL)"
+            )
+            execSQL(
+                "INSERT INTO task_page_blocks (id, taskId, typeKey, contentId, sortOrder, createdAt, updatedAt) " +
+                    "VALUES ('b1', 't1', 'capture.link', 'c1', 0, 1700000000000, 1700000000000)"
+            )
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 18, true, VirlinDatabase.MIGRATION_17_18).close()
+
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                // Existing data is untouched.
+                assertEquals("Kept project", db.projects().all().single().title)
+                assertEquals("capture.link", db.taskPageBlocks().byTask("t1").single().typeKey)
+                // The new table exists and starts empty: a node with no preview simply has no row.
+                assertEquals(0, db.mapNodePreviews().count())
+
+                val now = java.time.Instant.ofEpochMilli(1_700_000_000_000L)
+                db.mapNodePreviews().upsert(
+                    com.virlin.app.data.db.MapNodePreviewEntity(
+                        ownerKey = "task-1",
+                        documentJson = """{"version":1,"text":"hello","runs":[],"images":[]}""",
+                        revision = 1, createdAt = now, updatedAt = now,
+                    )
+                )
+                assertEquals(1, db.mapNodePreviews().count())
+                assertEquals("task-1", db.mapNodePreviews().byOwner("task-1")!!.ownerKey)
+            }
+        } finally { db.close(); ctx.deleteDatabase(dbName) }
+    }
+
+    /**
+     * The long chain: a database created at the oldest supported version must reach v20 through
+     * every intermediate migration, carrying its data the whole way. This is what catches a
+     * migration that only works when applied to a recently-created database.
+     */
+    @Test fun migrate1To20_longChain_preservesSeededData() {
+        val dbName = "virlin-migration-1-18.db"
+        helper.createDatabase(dbName, 1).apply {
+            execSQL(
+                "INSERT INTO projects (id,title,description,status,priority,dueAt,estimatedEffort," +
+                    "createdAt,updatedAt,completedAt) " +
+                    "VALUES ('p-old','Oldest project','d','ACTIVE','HIGH',NULL,144000000," +
+                    "1600000000000,1600000000000,NULL)"
+            )
+            close()
+        }
+        helper.runMigrationsAndValidate(dbName, 20, true, *VirlinDatabase.MIGRATIONS).close()
+
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = Room.databaseBuilder(ctx, VirlinDatabase::class.java, dbName)
+            .addMigrations(*VirlinDatabase.MIGRATIONS).build()
+        try {
+            runBlocking {
+                assertEquals("Oldest project", db.projects().all().single { it.id == "p-old" }.title)
+                assertEquals(0, db.mapNodePreviews().count())
+            }
+            assertEquals(21, db.openHelper.readableDatabase.version)
+        } finally { db.close(); ctx.deleteDatabase(dbName) }
     }
 }

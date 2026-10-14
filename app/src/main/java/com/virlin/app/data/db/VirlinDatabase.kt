@@ -32,7 +32,7 @@ interface WorkStreamDao {
     @Query("SELECT * FROM workstreams WHERE projectId = :projectId ORDER BY sortOrder, createdAt, id") suspend fun byProject(projectId: String): List<WorkStreamEntity>
     @Query("SELECT COUNT(*) FROM workstreams") suspend fun count(): Int
     /** Streams whose planned look-again time has passed — startup reconciliation. */
-    @Query("SELECT * FROM workstreams WHERE state IN ('PROCESSING','SNOOZED') AND checkAt IS NOT NULL AND checkAt <= :now")
+    @Query("SELECT * FROM workstreams WHERE (state IN ('PROCESSING','SNOOZED') OR (state = 'PAUSED' AND externalTrackingPaused = 1)) AND checkAt IS NOT NULL AND checkAt <= :now")
     suspend fun dueBy(now: Long): List<WorkStreamEntity>
 }
 
@@ -153,6 +153,8 @@ interface TaskStepDao {
 
 @Dao
 interface MetaDao {
+    @Query("SELECT * FROM meta WHERE `key` LIKE 'project-delete:%'") suspend fun pendingProjectDeletions(): List<MetaEntity>
+    @Query("DELETE FROM meta WHERE `key` = :key") suspend fun delete(key: String)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun put(m: MetaEntity)
     @Query("SELECT value FROM meta WHERE `key` = :key") suspend fun get(key: String): String?
 }
@@ -212,6 +214,15 @@ interface VirlinNoteDao {
 }
 
 @Dao
+interface MapNodePreviewDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(row: MapNodePreviewEntity)
+    @Query("SELECT * FROM map_node_previews WHERE ownerKey = :ownerKey") suspend fun byOwner(ownerKey: String): MapNodePreviewEntity?
+    @Query("SELECT * FROM map_node_previews") suspend fun all(): List<MapNodePreviewEntity>
+    @Query("DELETE FROM map_node_previews WHERE ownerKey = :ownerKey") suspend fun deleteByOwner(ownerKey: String)
+    @Query("SELECT COUNT(*) FROM map_node_previews") suspend fun count(): Int
+}
+
+@Dao
 interface TaskPageBlockDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(block: TaskPageBlockEntity)
     @Query("SELECT * FROM task_page_blocks ORDER BY taskId, sortOrder, createdAt, id")
@@ -242,13 +253,15 @@ interface TaskPageBlockDao {
         CaptureEntity::class, NoteDocumentEntity::class, PromptDocumentEntity::class,
         AttachmentDocumentEntity::class, VoiceDocumentEntity::class, PriorityPreferenceEntity::class,
         ExternalStageEntity::class, ProjectTagEntity::class, TagLinkEntity::class,
-        TaskStepEntity::class, VirlinNoteEntity::class, TaskPageBlockEntity::class
+        TaskStepEntity::class, VirlinNoteEntity::class, TaskPageBlockEntity::class,
+        MapNodePreviewEntity::class, ExternalRunEntity::class
     ],
-    version = 17,
+    version = 23,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
 abstract class VirlinDatabase : RoomDatabase() {
+    abstract fun externalRuns(): ExternalRunDao
     abstract fun projects(): ProjectDao
     abstract fun workStreams(): WorkStreamDao
     abstract fun tasks(): TaskDao
@@ -258,6 +271,7 @@ abstract class VirlinDatabase : RoomDatabase() {
     abstract fun events(): EventDao
     abstract fun meta(): MetaDao
     abstract fun captures(): CaptureDao
+    abstract fun mapNodePreviews(): MapNodePreviewDao
     abstract fun noteDocuments(): NoteDocumentDao
     abstract fun promptDocuments(): PromptDocumentDao
     abstract fun priorityPreferences(): PriorityPreferenceDao
@@ -271,6 +285,22 @@ abstract class VirlinDatabase : RoomDatabase() {
     abstract fun virlinNotes(): VirlinNoteDao
 
     companion object {
+        val MIGRATION_22_23: Migration = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE priority_preferences ADD COLUMN remainingReturns INTEGER")
+            }
+        }
+        /** Task-level Needs You ranks were previously lost when the stream adapter saved a task. */
+        val MIGRATION_21_22: Migration = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tasks ADD COLUMN executionAttentionRank INTEGER")
+            }
+        }
+        val MIGRATION_20_21: Migration = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS external_run_intervals (id TEXT NOT NULL PRIMARY KEY, ownerId TEXT NOT NULL, taskId TEXT, startedAt INTEGER NOT NULL, endedAt INTEGER NOT NULL)")
+            }
+        }
         const val NAME = "virlin.db"
 
         /** v1 -> v2: add the captures table (additive; every v1 row is untouched). */
@@ -542,7 +572,53 @@ abstract class VirlinDatabase : RoomDatabase() {
             }
         }
 
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
+        /**
+         * v18: `map_node_previews`, one optional compact preview per mind-map node.
+         *
+         * Purely additive - one new table, no existing table touched and no data rewritten - so
+         * every existing project, map, Page block and attachment is preserved untouched. Nodes
+         * without a preview simply have no row, which is exactly the empty state the map renders.
+         */
+        val MIGRATION_17_18: Migration = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `map_node_previews` (" +
+                        "`ownerKey` TEXT NOT NULL, `documentJson` TEXT NOT NULL, " +
+                        "`revision` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`ownerKey`))"
+                )
+            }
+        }
+
+        val MIGRATION_18_19: Migration = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE workstreams ADD COLUMN externalTrackedSeconds INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE workstreams ADD COLUMN externalTrackingPaused INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        val MIGRATION_19_20: Migration = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf("executionState TEXT", "executionStartedAt INTEGER", "executionExternalSeconds INTEGER NOT NULL DEFAULT 0",
+                    "executionPaused INTEGER NOT NULL DEFAULT 0", "executionCheckAt INTEGER", "executionReason TEXT",
+                    "executionBlocker TEXT", "executionCycleId TEXT", "executionCycleCount INTEGER NOT NULL DEFAULT 0",
+                    "executionActorId TEXT", "executionTool TEXT", "executionInstruction TEXT").forEach {
+                    db.execSQL("ALTER TABLE tasks ADD COLUMN $it")
+                }
+                val pairs = listOf("executionState" to "state", "executionStartedAt" to "processingStartedAt",
+                    "executionExternalSeconds" to "externalTrackedSeconds", "executionPaused" to "externalTrackingPaused",
+                    "executionCheckAt" to "checkAt", "executionReason" to "snoozeReason", "executionBlocker" to "blockerReason",
+                    "executionCycleId" to "currentCycleId", "executionCycleCount" to "cycleCount",
+                    "executionActorId" to "externalActorId", "executionTool" to "tool", "executionInstruction" to "waitingFor")
+                val assignments = pairs.joinToString(",") { (target, source) ->
+                    "$target = (SELECT $source FROM workstreams WHERE activeTaskId = tasks.id AND id = tasks.workStreamId)"
+                }
+                db.execSQL("UPDATE tasks SET $assignments WHERE status NOT IN ('DONE','CANCELLED') AND EXISTS (SELECT 1 FROM workstreams WHERE activeTaskId = tasks.id AND id = tasks.workStreamId)")
+                // Historical sessions, cycles and snapshots keep their original stream/task attribution.
+                db.execSQL("UPDATE workstreams SET state='READY', activeTaskId=NULL, processingStartedAt=NULL, externalTrackedSeconds=0, externalTrackingPaused=0, checkAt=NULL, snoozedUntil=NULL, snoozeReason=NULL, currentCycleId=NULL WHERE activeTaskId IN (SELECT id FROM tasks WHERE executionState IS NOT NULL)")
+                db.execSQL("UPDATE tasks SET executionState=CASE WHEN status IN ('DONE','CANCELLED') THEN 'DONE' ELSE 'READY' END WHERE executionState IS NULL AND workStreamId IS NOT NULL")
+            }
+        }
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

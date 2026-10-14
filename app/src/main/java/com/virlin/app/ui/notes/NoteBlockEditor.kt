@@ -60,13 +60,14 @@ import com.virlin.app.domain.notedoc.NoteDocBlock
 import com.virlin.app.domain.notedoc.NoteDocBlockType
 import com.virlin.app.domain.notedoc.NoteDocMark
 import com.virlin.app.domain.notedoc.NoteDocRun
+import com.virlin.app.domain.notedoc.visibleNoteBlocks
 
-private val Ink = Color(0xFF17221D)
-private val Green = Color(0xFF087848)
-private val Mint = Color(0xFFE2F5EA)
-private val Border = Color(0xFFE3E9E5)
-private val Muted = Color(0xFF66758A)
-private val CodeBg = Color(0xFFF4F6F5)
+private val Ink: Color @Composable get() = NotesInk
+private val Green: Color @Composable get() = NotesAccent
+private val Mint: Color @Composable get() = NotesWash
+private val Border: Color @Composable get() = NotesBorder
+private val Muted: Color @Composable get() = NotesMuted
+private val CodeBg: Color @Composable get() = NotesWash.copy(alpha = .55f)
 
 /**
  * The live editing surface rendered into the frozen shell's `editor` slot.
@@ -83,7 +84,8 @@ fun NoteBlockEditor(
 ) {
     val scroll = rememberScrollState()
     Column(modifier.fillMaxWidth().verticalScroll(scroll)) {
-        state.blocks.forEachIndexed { index, block ->
+        visibleNoteBlocks(state.blocks).forEach { block ->
+            val index = state.blocks.indexOf(block)
             val numberIndex = if (block.type == NoteDocBlockType.NUMBERED) {
                 // Numbering restarts after any block that is not a numbered item at this indent.
                 state.blocks.take(index).reversed()
@@ -93,8 +95,8 @@ fun NoteBlockEditor(
             NoteBlockRow(block, numberIndex, state, vm)
             Spacer(Modifier.height(if (block.type == NoteDocBlockType.DIVIDER) 6.dp else 2.dp))
         }
-        // Room to scroll the last line clear of the Add-a-block row.
-        Spacer(Modifier.height(24.dp))
+        // The add button floats in the bottom corner; keep the final line scrollable above it.
+        Spacer(Modifier.height(76.dp))
     }
 }
 
@@ -107,6 +109,25 @@ private fun NoteBlockRow(
 ) {
     val indent = (block.indent * 18).dp
     when (block.type) {
+        NoteDocBlockType.IMAGE -> NoteImageBlock(block.imagePath, Modifier.padding(start = indent))
+        NoteDocBlockType.TOGGLE -> Row(
+            Modifier.fillMaxWidth().padding(start = indent, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(32.dp).clip(RoundedCornerShape(8.dp))
+                    .clickable(role = Role.Button) { vm.toggleCollapsed(block.id) }
+                    .semantics {
+                        contentDescription = if (block.isCollapsed) "Expand toggle" else "Collapse toggle"
+                    }
+                    .testTag("notes_toggle_${block.id}"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(if (block.isCollapsed) "▸" else "▾", color = Green, fontSize = 20.sp)
+            }
+            Spacer(Modifier.width(4.dp))
+            BlockTextField(block, state, vm, Modifier.weight(1f))
+        }
         NoteDocBlockType.DIVIDER -> Box(
             Modifier.fillMaxWidth().padding(vertical = 10.dp).height(1.dp).background(Border)
                 .semantics { contentDescription = "Divider" },
@@ -236,7 +257,8 @@ private fun BlockTextField(
     val size = (
         block.runs.firstOrNull()?.fontSizeSp
             ?: NotesViewModel.defaultSizeFor(block.type)
-        ).sp
+    ).sp
+    val accent = Green
     val style = TextStyle(
         color = Ink,
         fontSize = size,
@@ -271,8 +293,8 @@ private fun BlockTextField(
         },
         textStyle = style,
         cursorBrush = SolidColor(Green),
-        visualTransformation = remember(block.runs, block.text, block.type) {
-            NoteRunTransformation(block.runs)
+        visualTransformation = remember(block.runs, block.text, block.type, accent) {
+            NoteRunTransformation(block.runs, accent)
         },
         decorationBox = { inner ->
             if (block.text.isEmpty() && !focused) {
@@ -306,6 +328,9 @@ private val NoteDocBlockType.isHeading: Boolean
         this == NoteDocBlockType.HEADING_3
 
 private fun placeholderFor(block: NoteDocBlock, state: NotesUiState): String = when {
+    block.type == NoteDocBlockType.PARAGRAPH && state.blocks.indexOfFirst { it.id == block.id }
+        .let { index -> index > 0 && state.blocks[index - 1].type == NoteDocBlockType.TOGGLE &&
+            block.indent > state.blocks[index - 1].indent } -> "Write inside toggle…"
     block.type == NoteDocBlockType.PARAGRAPH && state.blocks.size == 1 ->
         "Write a note for this task…"
     block.type.isHeading -> "Heading"
@@ -313,11 +338,12 @@ private fun placeholderFor(block: NoteDocBlock, state: NotesUiState): String = w
     block.type == NoteDocBlockType.CODE -> "Code"
     block.type == NoteDocBlockType.CHECKLIST -> "To-do"
     block.type == NoteDocBlockType.PROMPT -> "Prompt body"
+    block.type == NoteDocBlockType.TOGGLE -> "Toggle heading"
     else -> ""
 }
 
 /** Paints stored runs. Offsets are unchanged, so the caret and selection stay exact. */
-private class NoteRunTransformation(private val runs: List<NoteDocRun>) : VisualTransformation {
+private class NoteRunTransformation(private val runs: List<NoteDocRun>, private val accent: Color) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         if (runs.isEmpty()) return TransformedText(text, androidx.compose.ui.text.input.OffsetMapping.Identity)
         val styled = buildAnnotatedString {
@@ -326,14 +352,14 @@ private class NoteRunTransformation(private val runs: List<NoteDocRun>) : Visual
                 val start = r.start.coerceIn(0, text.length)
                 val end = r.end.coerceIn(start, text.length)
                 if (end <= start) return@forEach
-                addStyle(r.toSpanStyle(), start, end)
+                addStyle(r.toSpanStyle(accent), start, end)
             }
         }
         return TransformedText(styled, androidx.compose.ui.text.input.OffsetMapping.Identity)
     }
 }
 
-private fun NoteDocRun.toSpanStyle(): SpanStyle {
+private fun NoteDocRun.toSpanStyle(accent: Color): SpanStyle {
     val decorations = buildList {
         if (NoteDocMark.UNDERLINE in marks || linkUrl != null) add(TextDecoration.Underline)
         if (NoteDocMark.STRIKE in marks) add(TextDecoration.LineThrough)
@@ -343,7 +369,7 @@ private fun NoteDocRun.toSpanStyle(): SpanStyle {
         fontStyle = if (NoteDocMark.ITALIC in marks) FontStyle.Italic else null,
         textDecoration = if (decorations.isEmpty()) null else TextDecoration.combine(decorations),
         color = when {
-            linkUrl != null -> Green
+            linkUrl != null -> accent
             color != null -> Color(color.toULong().toLong())
             else -> Color.Unspecified
         },

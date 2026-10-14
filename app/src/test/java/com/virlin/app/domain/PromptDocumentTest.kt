@@ -131,9 +131,9 @@ class PromptDocumentTest {
         val raw = "Before\n```kotlin\nval x = 1\n```\nMiddle\n```sql\nSELECT 1;\n```\nAfter"
         val segments = PromptContentParser.responseSegments(raw)
         assertEquals(5, segments.size)
-        assertEquals("Before", (segments[0] as ResponseSegment.Prose).text)
+        assertEquals("Before\n", (segments[0] as ResponseSegment.Prose).text)
         assertEquals("Kotlin", (segments[1] as ResponseSegment.Code).language)
-        assertEquals("val x = 1", (segments[1] as ResponseSegment.Code).text)
+        assertEquals("val x = 1\n", (segments[1] as ResponseSegment.Code).text)
         assertEquals("SQL", (segments[3] as ResponseSegment.Code).language)
     }
 

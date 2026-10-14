@@ -47,7 +47,7 @@ data class AttentionNotificationModel(
             val task = activeTask?.takeIf { it.id == stream.activeTaskId }?.title?.takeIf { it.isNotBlank() }
             return when (kind) {
                 ScheduleKind.HUMAN_RETURN -> AttentionNotificationModel(
-                    stream.id, kind, stream.title, "Ready to continue", task,
+                    stream.id, kind, stream.title, if (stream.externalTrackingPaused) "External tracking · ready to resume" else "Ready to continue", task,
                     listOf(NotificationAction.RESUME, NotificationAction.DEFER_5), NotificationTarget.WORKSTREAM_DETAIL
                 )
                 ScheduleKind.EXTERNAL_RESULT_READY -> AttentionNotificationModel(

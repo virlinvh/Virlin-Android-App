@@ -8,6 +8,7 @@ import com.virlin.app.domain.notedoc.NoteDocRun
 import com.virlin.app.domain.notedoc.NoteDocTable
 import com.virlin.app.domain.notedoc.NoteRuns
 import com.virlin.app.domain.notedoc.VirlinNoteCodec
+import com.virlin.app.domain.notedoc.visibleNoteBlocks
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -18,6 +19,28 @@ import org.junit.Test
  * edits and round-tripping. No Compose, no database, no clock.
  */
 class VirlinNoteDocTest {
+
+    @Test fun imageBlock_roundTripsWithDurablePath() {
+        val image = NoteDocBlock("image-1", NoteDocBlockType.IMAGE,
+            imagePath = "123e4567-e89b-12d3-a456-426614174000")
+        assertEquals(image, VirlinNoteCodec.decode(VirlinNoteCodec.encode(listOf(image))).single())
+        assertFalse(image.type.isTextual)
+    }
+
+    @Test fun collapsedToggle_hidesOnlyItsDescendantsAndRoundTrips() {
+        val blocks = listOf(
+            NoteDocBlock("toggle", NoteDocBlockType.TOGGLE, "Details", indent = 0, isCollapsed = true),
+            NoteDocBlock("child", text = "Hidden", indent = 1),
+            NoteDocBlock("nested", NoteDocBlockType.TOGGLE, "Nested", indent = 1),
+            NoteDocBlock("deep", text = "Also hidden", indent = 2),
+            NoteDocBlock("sibling", text = "Visible", indent = 0),
+        )
+        assertEquals(listOf("toggle", "sibling"), visibleNoteBlocks(blocks).map { it.id })
+        assertEquals(blocks, VirlinNoteCodec.decode(VirlinNoteCodec.encode(blocks)))
+        assertEquals(blocks.map { it.id }, visibleNoteBlocks(blocks.mapIndexed { i, block ->
+            if (i == 0) block.copy(isCollapsed = false) else block
+        }).map { it.id })
+    }
 
     // ---- selection formatting -------------------------------------------------------------
 

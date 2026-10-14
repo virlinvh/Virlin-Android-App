@@ -102,9 +102,18 @@ fun TaskTodoScreen(
             TodoSave.Failed -> "Not saved"
         },
         items = items,
+        palette = com.virlin.app.ui.hierarchy.rememberProjectPalette(task.projectId),
         footer = footer,
         actions = TodoActions(
             onBack = { navController.popBackStack() },
+            onBulkImport = { names, complete -> scope.launch {
+                save = TodoSave.Saving
+                val result = VirlinGraph.actions.bulkAddSteps(taskId, names)
+                val success = result is ActionResult.Success
+                save = if (success) TodoSave.Saved else TodoSave.Failed
+                complete(success)
+                if (!success) complain("That import could not be saved.")
+            } },
             // There is nowhere to store a list title, so this does nothing and the page hides it.
             onRenameList = { },
             // The draft is cleared only when the write is accepted, so a refused add keeps the

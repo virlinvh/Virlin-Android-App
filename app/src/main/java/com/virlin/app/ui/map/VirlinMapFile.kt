@@ -4,7 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * The portable `.virlinmap` snapshot, taken from the supplied reference codec.
+ * The portable `.vmap` snapshot, taken from the supplied reference codec.
  *
  * It is a SNAPSHOT for sharing and preview only. The live map always reads the current
  * project, workstreams and tasks; decoding one of these files never writes to them.
@@ -27,6 +27,13 @@ fun encodeVirlinMap(snapshot: VirlinMapSnapshot): ByteArray {
     val branches = JSONObject()
     snapshot.appearance.branchColors.forEach { (id, argb) -> branches.put(id, argb.toString(16)) }
     appearance.put("branchColors", branches)
+    appearance.put("customPalette", JSONArray().also { a -> snapshot.appearance.customPalette.forEach { a.put(it.toString(16)) } })
+    appearance.put("savedColors", JSONArray().also { a -> snapshot.appearance.savedColors.forEach { a.put(it.toString(16)) } })
+    appearance.put("boxFinish", snapshot.appearance.boxFinish.name)
+    appearance.put("nodeFinishes", JSONObject().also { o -> snapshot.appearance.nodeFinishes.forEach { (id, finish) -> o.put(id, finish.name) } })
+    appearance.put("nodeWidths", JSONObject().also { o -> snapshot.appearance.nodeWidths.forEach { (id, width) ->
+        if (width.isFinite() && width in 110f..560f) o.put(id, width.toDouble())
+    } })
     val nodes = JSONArray()
     snapshot.topics.forEach { t ->
         nodes.put(
@@ -53,8 +60,9 @@ fun encodeVirlinMap(snapshot: VirlinMapSnapshot): ByteArray {
 fun decodeVirlinMap(bytes: ByteArray): VirlinMapSnapshot {
     require(bytes.size <= 16 * 1024 * 1024) { "Map file is too large" }
     val json = JSONObject(bytes.toString(Charsets.UTF_8))
-    require(json.optString("format") == "virlin-map") { "Not a Virlin map" }
-    require(json.optInt("schemaVersion", -1) == 1) { "Unsupported Virlin map version" }
+    // Keep the established on-disk format marker so previously exported maps remain readable.
+    require(json.optString("format") == "virlin-map") { "Not a VMap" }
+    require(json.optInt("schemaVersion", -1) == 1) { "Unsupported VMap version" }
     val nodes = json.getJSONArray("topics")
     require(nodes.length() in 1..100_000) { "Unusable map node count" }
     val topics = buildList(nodes.length()) {
@@ -93,8 +101,35 @@ fun decodeVirlinMap(bytes: ByteArray): VirlinMapSnapshot {
             paletteIndex = a.optInt("paletteIndex", 0),
             nodeColors = a.colorMap("nodeColors", ids),
             branchColors = a.colorMap("branchColors", ids),
+            customPalette = a.colorList("customPalette"),
+            savedColors = a.colorList("savedColors"),
+            boxFinish = enumOrNull<MapBoxFinish>(a.optString("boxFinish")) ?: MapBoxFinish.SMOOTH,
+            nodeFinishes = a.finishMap("nodeFinishes", ids),
+            nodeWidths = a.widthMap("nodeWidths", ids),
         ),
     )
+}
+
+private fun JSONObject.colorList(field: String): List<Long> {
+    val a = optJSONArray(field) ?: return emptyList()
+    return (0 until a.length()).mapNotNull { a.optString(it).toULongOrNull(16)?.toLong() }.take(32)
+}
+
+private fun JSONObject.finishMap(field: String, ids: Set<String>): Map<String, MapBoxFinish> {
+    val o = optJSONObject(field) ?: return emptyMap()
+    return buildMap { o.keys().forEach { id ->
+        if (id in ids) enumOrNull<MapBoxFinish>(o.optString(id))?.let { put(id, it) }
+    } }
+}
+
+private fun JSONObject.widthMap(field: String, ids: Set<String>): Map<String, Float> {
+    val o = optJSONObject(field) ?: return emptyMap()
+    return buildMap { o.keys().forEach { id ->
+        if (id in ids) {
+            val width = o.optDouble(id).toFloat()
+            if (width.isFinite() && width in 110f..560f) put(id, width)
+        }
+    } }
 }
 
 /** Every node must be reachable from the root exactly once: no cycles, no orphan islands. */

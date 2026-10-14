@@ -1,19 +1,19 @@
 package com.virlin.app.ui.link
 
 import android.annotation.SuppressLint
-import android.graphics.Bitmap
-import android.net.Uri
+import android.app.Dialog
+import android.content.Context
+import android.view.View
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -22,20 +22,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.material3.CircularProgressIndicator
 import kotlinx.coroutines.delay
 
 /**
- * A narrow, trusted WebView boundary for YouTube's official IFrame Player API.
- * It never loads user-provided HTML, grants file/content access, or exposes a JS bridge.
+ * A narrow WebView boundary for YouTube's official embed URL. No user HTML or JS bridge.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -54,13 +49,14 @@ internal fun YouTubeInlinePlayer(
         return
     }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val fullscreen = remember { YouTubeFullscreenHost() }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var ready by remember(videoId, startSeconds, endSeconds) { mutableStateOf(false) }
-    val html = remember(videoId, startSeconds, endSeconds) {
-        youtubePlayerHtml(videoId, startSeconds.coerceAtLeast(0), endSeconds?.takeIf { it > startSeconds })
+    val embedUrl = remember(videoId, startSeconds, endSeconds) {
+        youtubeEmbedUrl(videoId, startSeconds, endSeconds)
     }
 
-    DisposableEffect(lifecycleOwner, webView) {
+    DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> webView?.onPause()
@@ -72,8 +68,8 @@ internal fun YouTubeInlinePlayer(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            fullscreen.hide()
             webView?.stopLoading()
-            webView?.loadUrl("about:blank")
             webView?.destroy()
             webView = null
         }
@@ -81,18 +77,21 @@ internal fun YouTubeInlinePlayer(
 
     LaunchedEffect(videoId, startSeconds, endSeconds, ready) {
         if (!ready) {
-            delay(12_000)
+            delay(20_000)
             if (!ready) onFailed()
         }
     }
 
-    Box(modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(15.dp)).background(Color.Black)) {
+    // Hardware video surfaces may render behind a Compose rounded graphics layer. Keep the
+    // player as a plain rectangular Android view; the surrounding page supplies its spacing.
+    Box(modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
         AndroidView(
             modifier = Modifier.matchParentSize(),
             factory = { context ->
                 WebView(context).apply {
                     webView = this
                     setBackgroundColor(android.graphics.Color.BLACK)
+                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.allowFileAccess = false
@@ -103,11 +102,12 @@ internal fun YouTubeInlinePlayer(
                     settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     settings.safeBrowsingEnabled = true
                     webChromeClient = object : WebChromeClient() {
-                        override fun onReceivedTitle(view: WebView?, title: String?) {
-                            if (title == "virlin-player-ready" && !ready) {
-                                ready = true
-                                onReady()
-                            }
+                        override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                            fullscreen.show(context, view, callback)
+                        }
+
+                        override fun onHideCustomView() {
+                            fullscreen.hide()
                         }
                     }
                     webViewClient = object : WebViewClient() {
@@ -124,45 +124,56 @@ internal fun YouTubeInlinePlayer(
                         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                             if (request.isForMainFrame) onFailed()
                         }
-
-                        override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                            val parsed = runCatching { Uri.parse(url) }.getOrNull()
-                            val host = parsed?.host.orEmpty().lowercase()
-                            if (host.isNotEmpty() && host != "www.youtube.com" && host != "youtube.com" &&
-                                !host.endsWith(".youtube.com")) {
-                                view.stopLoading(); onFailed()
-                            }
+                        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                            if (request.isForMainFrame && response.statusCode >= 400) onFailed()
+                        }
+                        override fun onPageCommitVisible(view: WebView, url: String) {
+                            if (!ready) { ready = true; onReady() }
                         }
                     }
-                    loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
+                    // YouTube requires an app-identity Referer for Android WebView embeds.
+                    loadUrl(embedUrl, mapOf("Referer" to "https://${context.packageName}/"))
                 }
             },
-            update = { view ->
-                if (view.url == null) view.loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
-            },
-        )
-        if (!ready) CircularProgressIndicator(
-            modifier = Modifier.align(Alignment.Center).size(30.dp),
-            color = Color.White,
-            strokeWidth = 2.dp,
         )
     }
 }
 
-/** Pure builder so the segment contract can be unit-tested without constructing a WebView. */
-internal fun youtubePlayerHtml(videoId: String, startSeconds: Int, endSeconds: Int?): String {
-    val end = endSeconds?.takeIf { it > startSeconds }?.let { ",endSeconds:$it" }.orEmpty()
-    return """<!doctype html>
-<html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<style>html,body,#player{margin:0;width:100%;height:100%;background:#000;overflow:hidden}</style></head>
-<body><div id="player"></div><script src="https://www.youtube.com/iframe_api"></script>
-<script>
-var player;
-function onYouTubeIframeAPIReady(){
-  player=new YT.Player('player',{width:'100%',height:'100%',videoId:'$videoId',
-    playerVars:{playsinline:1,controls:1,rel:0,fs:1,origin:'https://www.youtube.com'},
-    events:{onReady:function(e){e.target.cueVideoById({videoId:'$videoId',startSeconds:$startSeconds$end});document.title='virlin-player-ready';}}
-  });
+/** YouTube can move video into a custom native view when fullscreen is requested. */
+private class YouTubeFullscreenHost {
+    private var dialog: Dialog? = null
+    private var callback: WebChromeClient.CustomViewCallback? = null
+
+    fun show(context: Context, view: View, onHidden: WebChromeClient.CustomViewCallback) {
+        hide()
+        callback = onHidden
+        dialog = Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen).also { window ->
+            window.setContentView(view)
+            window.setOnDismissListener {
+                if (dialog === window) {
+                    dialog = null
+                    callback?.onCustomViewHidden()
+                    callback = null
+                }
+            }
+            window.show()
+        }
+    }
+
+    fun hide() {
+        val current = dialog ?: return
+        dialog = null
+        val notify = callback
+        callback = null
+        current.dismiss()
+        notify?.onCustomViewHidden()
+    }
 }
-</script></body></html>"""
+
+/** A standard HTTPS embed; time boundaries apply without scripted autoplay. */
+internal fun youtubeEmbedUrl(videoId: String, startSeconds: Int, endSeconds: Int?): String {
+    require(videoId.matches(Regex("[A-Za-z0-9_-]{6,20}")))
+    val start = startSeconds.coerceAtLeast(0)
+    val end = endSeconds?.takeIf { it > start }?.let { "&end=$it" }.orEmpty()
+    return "https://www.youtube.com/embed/$videoId?playsinline=1&controls=1&start=$start$end"
 }

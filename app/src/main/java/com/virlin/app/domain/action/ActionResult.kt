@@ -59,7 +59,14 @@ sealed interface DomainError {
     data class DuplicateTagName(val name: String) : DomainError
     /** Task does not belong to that WorkStream. */
     data object TaskNotInWorkStream : DomainError
+    data object AnotherTaskIsExecuting : DomainError
     data object InvalidEffort : DomainError
+
+    /**
+     * A mind-map node preview was rejected: blank owner id, more than the seven permitted images,
+     * duplicate image ids, or an image with no managed path.
+     */
+    data object InvalidPreview : DomainError
 
     // ---- External work (Phase 10)
     /** START NEXT STAGE was asked for but the run has no stage left to start. */

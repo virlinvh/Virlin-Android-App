@@ -6,7 +6,6 @@ import com.virlin.app.domain.model.NoteBlock
 import com.virlin.app.domain.model.NoteBlockType
 import com.virlin.app.domain.note.NoteEnterSemantics
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
-import com.virlin.app.ui.note.TextNoteViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -91,94 +90,32 @@ class NoteEnterAndInboxInteractionTest {
         assertEquals("x\ny", r.updatedCurrent.plainText)
     }
 
-    @Test fun toggleChild_enter_preservesParentChildren() = runTest {
-        val repo = InMemoryWorkStreamRepository()
+    @Test fun currentEditorClosingFlushesKnowledgeDraftExactlyOnce() = runTest {
+        val repo = InMemoryWorkStreamRepository(seedProjects = listOf(com.virlin.app.domain.model.Project("p", "Project", createdAt = clock.now(), updatedAt = clock.now())))
         val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        vm.transformBlock(vm.state.value.blocks.first().id, NoteBlockType.TOGGLE)
-        val toggleId = vm.state.value.blocks.first().id
-        vm.addChildToToggle(toggleId)
-        val childId = vm.state.value.blocks.first().children.first().id
-        vm.onBlockTextChange(childId, "kid")
-        vm.handleEnter(childId, "kid", "")
-        val toggle = vm.state.value.blocks.first()
-        assertEquals(2, toggle.children.size)
-        assertEquals("kid", toggle.children[0].plainText)
-        assertEquals(NoteBlockType.TEXT, toggle.children[1].type)
-    }
-
-    @Test fun slashSelection_removesSlashContent() = runTest {
-        val repo = InMemoryWorkStreamRepository()
-        val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        val id = vm.state.value.blocks.first().id
-        vm.onBlockTextChange(id, "/")
-        vm.transformBlock(id, NoteBlockType.HEADING_1)
-        assertEquals("", vm.state.value.blocks.first().plainText)
-        assertEquals(NoteBlockType.HEADING_1, vm.state.value.blocks.first().type)
-        assertFalse(vm.state.value.blocks.first().plainText.contains("/"))
-    }
-
-    @Test fun back_meaningfulDraft_exactlyOneInboxItem() = runTest {
-        val repo = InMemoryWorkStreamRepository()
-        val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        vm.onTitleChange("Only one")
-        vm.onBlockTextChange(vm.state.value.blocks.first().id, "body")
-        val exit = vm.prepareExit()
-        assertTrue(exit.showInboxFeedback)
-        assertTrue(exit.navigate)
+        val vm = com.virlin.app.ui.notes.NotesViewModel(com.virlin.app.domain.notedoc.CaptureNoteBridge.draftOwner("p", "capture"), "Note", actions, ids)
+        val first = vm.state.value.blocks.first().id
+        vm.onTextChanged(first, "latest pending", androidx.compose.ui.text.TextRange(14))
+        var closed = false
+        vm.saveAndClose { closed = true }
+        advanceUntilIdle()
+        assertTrue(closed)
         assertEquals(1, repo.captures.value.size)
-        assertTrue(vm.state.value.committedToInbox)
+        assertEquals("p", repo.captures.value.single().projectId)
+        vm.flush()
+        advanceUntilIdle()
+        assertEquals(1, repo.captures.value.size)
+        assertEquals("latest pending", actions.loadNoteDoc("capture-capture")!!.blocks.single().text)
     }
 
-    @Test fun back_emptyDraft_noInboxItem() = runTest {
+    @Test fun currentEditorEmptyKnowledgeDraftDoesNotCreateInboxItem() = runTest {
         val repo = InMemoryWorkStreamRepository()
         val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        val exit = vm.prepareExit()
-        assertTrue(exit.navigate)
-        assertFalse(exit.showInboxFeedback)
+        val vm = com.virlin.app.ui.notes.NotesViewModel(com.virlin.app.domain.notedoc.CaptureNoteBridge.draftOwner("p", "empty"), "New note", actions, ids)
+        var closed = false
+        vm.saveAndClose { closed = true }
+        advanceUntilIdle()
+        assertTrue(closed)
         assertTrue(repo.captures.value.isEmpty())
-    }
-
-    @Test fun saveToInbox_staysEditable_noDuplicateOnBack() = runTest {
-        val repo = InMemoryWorkStreamRepository()
-        val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        val id = vm.state.value.blocks.first().id
-        vm.onBlockTextChange(id, "hello")
-        vm.saveToInbox()
-        advanceUntilIdle()
-        assertTrue(vm.state.value.committedToInbox)
-        assertEquals(1, repo.captures.value.size)
-        vm.onBlockTextChange(id, "hello edited")
-        vm.prepareExit()
-        assertEquals(1, repo.captures.value.size)
-        assertEquals("hello edited", repo.getNoteByCaptureId(repo.captures.value.first().id)!!.blocks.first().plainText)
-    }
-
-    @Test fun inboxNote_back_noDuplicate() = runTest {
-        val repo = InMemoryWorkStreamRepository()
-        val actions = DefaultVirlinActions(repo, clock, ids)
-        val created = (actions.createTextNote("T", listOf(NoteBlock("b", NoteBlockType.TEXT, "x"))) as ActionResult.Success).value
-        val vm = TextNoteViewModel(created.captureItemId, actions, repo, ids, clock)
-        advanceUntilIdle()
-        assertTrue(vm.state.value.committedToInbox)
-        vm.onBlockTextChange(vm.state.value.blocks.first().id, "x2")
-        vm.prepareExit()
-        assertEquals(1, repo.captures.value.size)
-    }
-
-    @Test fun pendingText_flushedBeforeInboxCommit() = runTest {
-        val repo = InMemoryWorkStreamRepository()
-        val actions = DefaultVirlinActions(repo, clock, ids)
-        val vm = TextNoteViewModel(null, actions, repo, ids, clock)
-        val id = vm.state.value.blocks.first().id
-        vm.onBlockTextChange(id, "latest pending")
-        // Do not wait for autosave debounce — Back must flush immediately
-        vm.prepareExit()
-        assertEquals(1, repo.captures.value.size)
-        assertTrue(repo.captures.value.first().content.contains("latest pending"))
     }
 }

@@ -30,42 +30,130 @@ import java.time.Duration
 class NowViewModel(
     private val actions: VirlinActions = VirlinGraph.actions,
     private val clock: VirlinClock = VirlinGraph.clock,
-    private val repository: WorkStreamRepository = VirlinGraph.repository
+    repository: WorkStreamRepository = VirlinGraph.repository
 ) : ViewModel(), AttentionIntents {
+    /** Refresh history on execution changes; periodic refresh covers startup and independent writes.
+     * No persisted counters or writes are introduced. Collection stops when Now is not observed. */
+    val daySummary: StateFlow<NowDaySummaryValues> = kotlinx.coroutines.flow.flow {
+        while (true) {
+            emit(Unit)
+            kotlinx.coroutines.delay(15_000)
+        }
+    }.combine(combine(repository.streams, repository.tasks) { streams, tasks -> streams to tasks }) { _, state -> state }
+        .map { state ->
+            try { Triple(state, repository.allFocusSessions(), repository.externalRunIntervals()) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        }.combine(kotlinx.coroutines.flow.flow {
+            while (true) { emit(clock.now()); kotlinx.coroutines.delay(1_000) }
+        }) { data, now ->
+            if (data == null) NowDaySummaryValues(timeSaved = "Unavailable") else {
+                val zone = java.time.ZoneId.systemDefault()
+                val live = data.first.first.mapNotNull { stream ->
+                    stream.processingStartedAt?.takeIf {
+                        stream.state == com.virlin.app.domain.model.WorkStreamState.PROCESSING && !stream.externalTrackingPaused
+                    }?.let {
+                        com.virlin.app.domain.model.ExternalRunInterval(stream.id, stream.activeTaskId, it,
+                            minOf(now, stream.checkAt ?: now))
+                    }
+                } + data.first.second.mapNotNull { task ->
+                    val execution = task.execution ?: return@mapNotNull null
+                    execution.processingStartedAt?.takeIf {
+                        execution.state == com.virlin.app.domain.model.WorkStreamState.PROCESSING &&
+                            !execution.externalTrackingPaused
+                    }?.let {
+                        com.virlin.app.domain.model.ExternalRunInterval(task.id, task.id, it,
+                            minOf(now, execution.checkAt ?: now))
+                    }
+                }
+                val totals = com.virlin.app.domain.model.DailyExecution.calculate(data.third + live, data.second, now, zone)
+                NowDaySummaryValues(
+                    timeFocused = com.virlin.app.domain.model.DailyFocus.label(
+                        com.virlin.app.domain.model.DailyFocus.seconds(data.second, now, zone)),
+                    timeSaved = com.virlin.app.domain.model.DailyFocus.label(totals.freedSeconds),
+                    timeExternal = com.virlin.app.domain.model.DailyFocus.label(totals.externalSeconds),
+                    savedUnit = "Time freed"
+                )
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(0), NowDaySummaryValues(timeSaved = "Loading"))
+
+    private val executionRepository = com.virlin.app.domain.repository.ExecutionViewRepository(repository, viewModelScope)
+    val timersRunning: StateFlow<Boolean> = combine(repository.streams, repository.tasks) { streams, tasks ->
+        streams.any { !it.state.isTerminal && (it.state == com.virlin.app.domain.model.WorkStreamState.FOCUS ||
+            (it.state == com.virlin.app.domain.model.WorkStreamState.PROCESSING && it.processingStartedAt != null)) } ||
+            tasks.any { !it.status.isTerminal && it.execution?.let { e ->
+                e.state == com.virlin.app.domain.model.WorkStreamState.FOCUS ||
+                    (e.state == com.virlin.app.domain.model.WorkStreamState.PROCESSING && e.processingStartedAt != null)
+            } == true }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    private val _masterPauseMessage = MutableStateFlow<String?>(null)
+    val masterPauseMessage = _masterPauseMessage.asStateFlow()
+    private val _pausingTimers = MutableStateFlow(false)
+    val pausingTimers = _pausingTimers.asStateFlow()
+
+    fun pauseAllTimers() {
+        if (_pausingTimers.value) return
+        val resume = !timersRunning.value
+        _pausingTimers.value = true
+        viewModelScope.launch {
+            try {
+                _masterPauseMessage.value = when (val result = if (resume) actions.resumeAllTimers() else actions.pauseAllTimers()) {
+                    is ActionResult.Success -> if (resume) {
+                        if (result.value > 0) "Tasks resumed · Time preserved" else "No master-paused tasks to resume"
+                    } else "All tasks paused · Time saved"
+                    else -> { log("toggleAllTimers", result); "Could not change timers. Please try again." }
+                }
+            } finally { _pausingTimers.value = false }
+        }
+    }
 
     /**
      * Hierarchy shown on the Current Focus card, derived from the domain on every change.
      * `WorkStream.activeTaskId` is the only current-task truth; nothing is cached here.
      */
     val currentFocus: StateFlow<CurrentFocusProjection?> = combine(
-        repository.projects, repository.streams, repository.tasks
+        executionRepository.projects, executionRepository.streams, executionRepository.tasks
     ) { p, s, t -> NowPresentation.currentFocus(p, s, t) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
-            NowPresentation.currentFocus(repository.projects.value, repository.streams.value, repository.tasks.value))
+            NowPresentation.currentFocus(executionRepository.projects.value, executionRepository.streams.value, executionRepository.tasks.value))
 
     /** Attention kinds for the Needs You cards (domain CHECK + snooze reason). */
-    val attention: StateFlow<Map<String, AttentionKind>> = repository.streams
-        .map { NowPresentation.attention(it) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NowPresentation.attention(repository.streams.value))
+    val attention: StateFlow<Map<String, AttentionKind>> = combine(executionRepository.streams, executionRepository.projects, executionRepository.tasks) { s, p, t ->
+        NowPresentation.attention(s, p, t)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+        NowPresentation.attention(executionRepository.streams.value, executionRepository.projects.value, executionRepository.tasks.value))
+
+    val contextPaths: StateFlow<Map<String, List<String>>> = combine(executionRepository.streams, executionRepository.projects, executionRepository.tasks) { s, p, t ->
+        s.associate { it.id to com.virlin.app.domain.external.ExternalWork.context(it, p, t) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), executionRepository.streams.value.associate {
+        it.id to com.virlin.app.domain.external.ExternalWork.context(it, executionRepository.projects.value, executionRepository.tasks.value)
+    })
 
     /** Projects (identity source for Needs You cards): the same repository flow, no copy of icon data anywhere else. */
-    val projects: StateFlow<List<com.virlin.app.domain.model.Project>> = repository.projects
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), repository.projects.value)
+    val projects: StateFlow<List<com.virlin.app.domain.model.Project>> = executionRepository.projects
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), executionRepository.projects.value)
+    val ownerStreams: StateFlow<List<com.virlin.app.domain.model.WorkStream>> = repository.streams
+    val readyFocusedLabels: StateFlow<Map<String, String>> = combine(repository.streams, repository.tasks) { streams, tasks ->
+        val sessions = repository.allFocusSessions()
+        (streams.map { it.id } + tasks.map { it.id }).associateWith {
+            WhenFreePresentation.focusedLabel(it, tasks, sessions, clock.now())
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /** When each Needs You stream started waiting (domain timestamp) — drives the live timer and ordering. */
-    val waitingSince: StateFlow<Map<String, java.time.Instant>> = repository.streams
+    val waitingSince: StateFlow<Map<String, java.time.Instant>> = executionRepository.streams
         .map { NowPresentation.waitingSince(it) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NowPresentation.waitingSince(repository.streams.value))
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NowPresentation.waitingSince(executionRepository.streams.value))
 
     /**
      * THE Needs You attention queue: ordered stream ids, index + 1 = the item's effective rank.
      * Projected once from the domain (`NeedsYouOrder.queue`) — the UI never computes an order or a
      * rank of its own, so there is exactly one source of truth for "who is #1".
      */
-    val needsYouQueue: StateFlow<List<String>> = repository.streams
+    val needsYouQueue: StateFlow<List<String>> = executionRepository.streams
         .map { s -> com.virlin.app.domain.attention.NeedsYouOrder.queue(s).map { it.stream.id } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
-            com.virlin.app.domain.attention.NeedsYouOrder.queue(repository.streams.value).map { it.stream.id })
+            com.virlin.app.domain.attention.NeedsYouOrder.queue(executionRepository.streams.value).map { it.stream.id })
 
     /**
      * The Needs You DISPLAY sort (Phase 06) — a presentation preference owned here, so it survives
@@ -77,32 +165,32 @@ class NowViewModel(
     fun setNeedsYouSort(mode: NeedsYouSortMode) { _needsYouSort.value = mode }
 
     /** The ids to render, in DISPLAY order. Each card still takes its rank from [needsYouQueue]. */
-    val needsYouDisplay: StateFlow<List<String>> = combine(repository.streams, _needsYouSort) { streams, mode ->
+    val needsYouDisplay: StateFlow<List<String>> = combine(executionRepository.streams, _needsYouSort) { streams, mode ->
         NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(streams), mode).map { it.stream.id }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
-        NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(repository.streams.value), NeedsYouSortMode.PRIORITY).map { it.stream.id })
+        NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(executionRepository.streams.value), NeedsYouSortMode.PRIORITY).map { it.stream.id })
 
     /**
      * Each Needs You item's attention target (`checkAt`) — the Phase 05 temporal truth the card's
      * `HH:MM:SS` / `+HH:MM:SS` timer is derived from. One projection, no per-card state.
      */
-    val attentionDueAt: StateFlow<Map<String, java.time.Instant>> = repository.streams
+    val attentionDueAt: StateFlow<Map<String, java.time.Instant>> = executionRepository.streams
         .map { list -> list.filter { it.state == com.virlin.app.domain.model.WorkStreamState.CHECK }.mapNotNull { s -> s.checkAt?.let { s.id to it } }.toMap() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
-            repository.streams.value.filter { it.state == com.virlin.app.domain.model.WorkStreamState.CHECK }.mapNotNull { s -> s.checkAt?.let { s.id to it } }.toMap())
+            executionRepository.streams.value.filter { it.state == com.virlin.app.domain.model.WorkStreamState.CHECK }.mapNotNull { s -> s.checkAt?.let { s.id to it } }.toMap())
 
     /**
      * WORKING FOR YOU (Phase 10): the external runs projected from the domain — soonest check
-     * first. The same WorkStream leaves this list and appears in Needs You when its check time
-     * arrives; nothing is duplicated, and no countdown is stored anywhere.
+     * first. Due checks appear only in Needs You; their external run remains tracked.
+     * No execution is duplicated, and no countdown is stored anywhere.
      */
     val externalWork: StateFlow<List<com.virlin.app.domain.external.ExternalWorkItem>> =
-        combine(repository.streams, repository.stages, repository.projects, repository.tasks) { s, st, p, t ->
+        combine(executionRepository.streams, executionRepository.stages, executionRepository.projects, executionRepository.tasks) { s, st, p, t ->
             com.virlin.app.domain.external.ExternalWork.workingForYou(s, clock.now(), st, p, t)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
             com.virlin.app.domain.external.ExternalWork.workingForYou(
-                repository.streams.value, clock.now(), repository.stages.value,
-                repository.projects.value, repository.tasks.value))
+                executionRepository.streams.value, clock.now(), executionRepository.stages.value,
+                executionRepository.projects.value, executionRepository.tasks.value))
 
     /** Stages of one external run, for the detail surface. Read through the action layer. */
     suspend fun stagesOf(streamId: String) = actions.externalStages(streamId)
@@ -147,7 +235,23 @@ class NowViewModel(
     enum class TimedIntent { LEAVE, HAND_OFF, STILL_RUNNING, RESULT_READY_LATER, DEFER_RETURN }
 
     /** Shared intent implementation (also used by the Agent's CONTROL mode). */
-    private val intents = AttentionIntentController(actions, clock, repository, viewModelScope)
+    private val intents = AttentionIntentController(actions, clock, executionRepository, viewModelScope)
+
+    val taskItems: StateFlow<List<com.virlin.app.domain.model.Task>> = executionRepository.tasks
+
+    /** Only human, executable leaves belong in the focus recommendation list. */
+    val readyFocusIds: StateFlow<Set<String>> = combine(repository.streams, repository.tasks, repository.projects) { streams, tasks, projects ->
+        val parents = tasks.mapNotNull { it.parentTaskId }.toSet()
+        com.virlin.app.domain.model.executionItems(streams, tasks).filter { item ->
+            val task = tasks.firstOrNull { it.id == item.id }
+            item.state == com.virlin.app.domain.model.WorkStreamState.READY &&
+                item.id !in parents &&
+                (task == null || !task.status.isTerminal) &&
+                com.virlin.app.domain.model.ExecutionModeResolver.resolveCurrent(
+                    task?.workStreamId?.let { owner -> streams.firstOrNull { it.id == owner } }?.copy(activeTaskId = task.id) ?: item,
+                    projects, tasks) == com.virlin.app.domain.model.EffectiveExecutionMode.HUMAN
+        }.map { it.id }.toSet()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
     override val chooser: StateFlow<Chooser?> get() = intents.chooser
     val feedback: StateFlow<String?> get() = intents.feedback
     val pendingWorkStreamCompletion: StateFlow<String?> get() = intents.pendingWorkStreamCompletion
@@ -182,6 +286,12 @@ class NowViewModel(
     /** Priority editor SAVE (Phase 04): move now + remember the preference according to its scope. */
     fun setNeedsYouPriority(streamId: String, position: Int, scope: com.virlin.app.domain.attention.PriorityScope) =
         intents.setNeedsYouPriority(streamId, position, scope)
+    fun saveNeedsYouPriority(streamId: String, position: Int,
+        scope: com.virlin.app.domain.attention.PriorityScope, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            onResult(actions.setNeedsYouPriority(streamId, position, scope) is ActionResult.Success)
+        }
+    }
     /** The item's stored durable policy, if any (Room-backed; read off the main thread). */
     suspend fun priorityPreference(streamId: String) = actions.priorityPreference(streamId)
 

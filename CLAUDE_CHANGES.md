@@ -861,3 +861,184 @@ cleared.
 **Known limitation found:** a corrupt image with a valid MIME type and non-zero size is accepted and
 shown as a placeholder rather than refused at import. It fails safely but is not rejected; left
 unchanged as a product decision.
+
+## 2026-10-02 — Mind map node previews
+
+Branch `feature/mind-map-node-preview`, from `origin/main` @ `a30d676`. Contract:
+`docs/MIND_MAP_NODE_PREVIEW.md`.
+
+**Files touched**
+- New: `domain/mappreview/` (MapNodePreview, FormattedTextEditor, MapPreviewCodec),
+  `data/mappreview/MapPreviewImageStore.kt`, `domain/action/MapPreviewActions.kt`,
+  `ui/map/preview/` (draft, popup, rendering, host), `docs/MIND_MAP_NODE_PREVIEW.md`,
+  two JVM test files.
+- Modified: `VirlinEntities.kt`, `VirlinDatabase.kt` (v18 + migration + DAO),
+  `RoomWorkStreamRepository.kt`, `InMemoryWorkStreamRepository.kt`,
+  `BootstrappingWorkStreamRepository.kt`, `WorkStreamRepository.kt`, `VirlinActions.kt`,
+  `DefaultVirlinActions.kt`, `ActionResult.kt`, `VirlinMindMap.kt`, `ProjectMapScreen.kt`,
+  `VirlinMigrationTest.kt`, `DATABASE_MIGRATION_QUEUE.md`.
+
+**Behaviour impact**
+Optional compact previews on mind-map nodes: one formatted description (bold/italic only, 180
+chars) and up to seven images, with a popup editor and an expanded in-node carousel. Resting nodes
+are unchanged, and the lower Open Task / Move / Page / Add bar is untouched. Previews are stored in
+their own `map_node_previews` table keyed by the node's stable entity id and never create a
+Capture, an Inbox item or a Task Page block - verified on device. Images live in their own managed
+root with relative paths, never Attachment storage.
+
+Room v18 was reserved in the migration queue under the user's explicit instruction in the brief;
+the queue otherwise reserves versions to the integration owner, so the attribution is recorded
+there.
+
+**Two defects found and fixed during emulator acceptance**
+1. `selectedId` was not a `pointerInput` key, so the node-level plus compared against a stale null
+   and never opened the editor.
+2. The caret and pencil were drawn by the Canvas, which skips the expanded node - so an expanded
+   node could not be collapsed. Both controls now live inside the overlay card, where they also get
+   real touch targets and semantics.
+
+**Verification actually performed**
+1,152 JVM tests (0 failures) = 1,105 + 47 new; android-test compilation; `assembleDebug`;
+`VirlinMigrationTest` 17/17 on the emulator including a non-destructive v17->v18 check and a v1->v18
+long chain; Roborazzi at exactly the 17 documented differences with no golden changed. Manual
+emulator acceptance of the full flow in a disposable project, including a live v17->v18 upgrade of
+restored real data.
+
+**Not verified:** no instrumentation UI tests were added for the preview itself; acceptance was
+manual. Reflow was exercised only in the tree layouts. Limitations are listed in the contract doc.
+
+**Data note:** running connected instrumentation tests reseeds the emulator's `virlin.db` (Virlin's
+instrumented tests share the real database and `DemoStateRule` restores the demo fixture). This
+cleared 3 captures / 3 Page blocks / 3 attachments during this work; they were restored from a
+snapshot at the user's direction, and the user confirmed connected tests may be run freely.
+
+## 2026-10-04 — Execution/appearance/audit checkpoint reviewed and published
+
+Claude acted as reviewer and publisher for this checkpoint. **The feature and remediation work in
+it is Codex's**, recorded in `CODEX_CHANGES.md` and `docs/AUDIT_REMEDIATION_2026-10-04.md`; this
+entry records only the review, verification and publication.
+
+**Checkout and branch.** Verified that `C:\tmp\virlin-execution-timing` — a worktree of the main
+repository on `codex/now-live-execution-audit` — holds the latest work. The original checkout at
+`C:\Users\tre21\Documents\Android Apps\Virlin` is stale (`feature/attachment-workspace`, clean) and
+was not modified. The branch was 5 ahead / 0 behind `origin/main` (`a30d676`), so it fast-forwards.
+
+**Reviewed, not blindly staged.** 83 tracked modifications (+2,096 / −575) and 40 untracked files
+were inventoried individually. All 40 untracked files are source, exported schema, tests, docs or
+resources; no APK, database, log, keystore or SDK download was staged. A secret-shaped scan over all
+124 files found nothing, and `.gitignore` already covers APKs, keystores and build outputs.
+
+**Claims traced to implementation rather than taken from documentation.** Leaf-only execution is
+enforced in the action layer (`ExecutionEligibility` used from `DefaultVirlinActions` and
+`StructureActions`), not only in UI, and a workstream with no tasks correctly reads as a leaf so it
+can run itself. `DemoSeed.applyIfEmpty` is gated behind `BuildConfig.DEBUG`, so production durable
+startup cannot insert sample data; the unconditional `DemoSeed.build` feeds only the in-memory
+fallback repository. Ownerless standalone execution is rejected before any cycle/session write.
+Schema is v20 with 19 registered migrations; 18→19 and 19→20 are additive `ADD COLUMN` plus a
+backfill, and there is no `fallbackToDestructiveMigration` anywhere in `app/src/main`. Release
+signing requires all four `VIRLIN_*` variables or none, so a partial configuration fails clearly and
+no credentials exist in the repository. The 24 appearance presets with `Sand` as the 24th are pinned
+by `assertEquals(24, projectColorChoices.size)`.
+
+**Verification rerun rather than quoted.** The first run reported 127 of 129 tasks up-to-date, so its
+results were Codex's, not a fresh check. A `--rerun-tasks` attempt then failed with an out-of-memory
+error in `:app:compileReleaseKotlin` (`org.gradle.jvmargs=-Xmx2048m`) before reaching the tests — an
+environment limit, not a code defect. The checks were therefore rerun in stages, each genuinely
+executed:
+
+- `testDebugUnitTest`: **1,228 passed, 0 failures / 0 errors / 0 skipped** (task executed, results
+  rewritten).
+- `lintDebug`: **0 errors, 127 warnings, 12 informational** (reports deleted first and regenerated).
+- `assembleDebug`, `assembleDebugAndroidTest`, `assembleRelease`: all succeeded. Release output is
+  `app-release-unsigned.apk` (14,102,958 bytes) — correctly unsigned without owner credentials.
+- Instrumentation: **40 passed, 0 failures**, pinned with `ANDROID_SERIAL=emulator-5556` to the
+  disposable `Virlin_Audit_20261004`.
+
+**Device safety.** The serial-to-AVD mapping was re-verified immediately before any device work:
+`emulator-5554` → `Pixel_8` (the user's data) and `emulator-5556` → `Virlin_Audit_20261004`. Nothing
+was installed on, tested against, cleared or reset on `emulator-5554`; its `lastUpdateTime` remained
+`2026-10-04 16:44:30`, before this session, and its databases were untouched.
+
+**Observations left for follow-up, not changed here.** `gradle/libs.versions.toml` still declares
+`agp = "8.6.1"`, which is unreferenced — the build applies 8.9.1 from the root `build.gradle.kts`,
+so it is a stale value that misleads a reader rather than a build problem. The remediation report
+states `core.autocrlf=false` / `core.whitespace=cr-at-eol`, but this checkout has
+`core.autocrlf=true` and no `core.whitespace`; `git diff --check` is clean either way. Neither was
+modified, to keep unrelated changes out of the checkpoint.
+
+## 2026-10-10 — Multi-session checkpoint audited and committed
+
+Audit and commit of work accumulated across several sessions in the main checkout
+(`C:\Users\tre21\Documents\Android Apps\Virlin`), reviewed from the files and the diff rather than
+from chat summaries.
+
+**State found.** The branch `feature/attachment-workspace` sat at `d77d8cd`, identical to
+`origin/codex/now-live-execution-audit`, with **no upstream** and **no unpushed commits** — all the
+new work was uncommitted: 80 modified, 2 deleted, 109 untracked. All 109 untracked files were
+source (31), tests (57) or documentation (21); no APK, database, log, keystore, build output or
+machine-specific file was present, nothing exceeded 300 KB, and a secret-shaped scan over all 188
+files found nothing.
+
+**Claims checked against the implementation.** `DailySavings` is completion-based estimated effort
+minus recorded human focus for leaf tasks completed today, floored at zero — its own comment says
+"not external wall-clock time" — and it degrades honestly rather than inventing a figure. There is
+no live "external time today" aggregate anywhere, matching the statement that it is not
+implemented. `DailyFocus` clamps sessions to the day, de-duplicates and never counts future time,
+keeping human and external separate. Schema stays at **v20** with no entity change; the only
+database additions are two queries over the existing `meta` table, so no migration is required.
+Subtree deletion runs inside one Room transaction against an explicitly computed scope and writes a
+recovery receipt to `meta` before deleting, so interrupted file cleanup is resumable. The Orb's
+route predicate was separated from the bottom bar's and popups suppress it. The FOCUSING NOW pulse
+is gated on `ValueAnimator.areAnimatorsEnabled()`, so it honours reduced-motion.
+
+**The stalled dialog tests — diagnosed, not worked around.** The stall reproduces. A full-suite run
+produced one test XML and then nothing for 15 minutes; a thread dump showed the worker parked in
+`RobolectricIdlingStrategy.runUntilIdle` → `ComposeIdlingResource.isIdleNow`, with
+`com.virlin.app.now.InlineLeaveUiTest.customStaysInLeaveDialogAndSavesExactMinutes` on the stack.
+Running that class alone produced no result in 7 minutes. It is **not** environmental: the
+pre-existing Compose test `AgentEntryLayoutTest` runs 5 tests in 33 seconds on the same machine.
+
+**Correction to the commit message of `ca3a44b`:** that message attributes the stall to
+`SafeDialog`. Further bisection **disproved** this, and the attribution should be read as withdrawn.
+
+The cause is **not** `SafeDialog`, not text input and not the activity-result launcher. Each was
+probed in isolation inside a dialog and each idles normally: a plain Compose `Dialog` (31 s), a
+`SafeDialog` with static content (63 s), a `SafeDialog` containing a `BasicTextField` driven by
+`performTextInput` (46 s), a `SafeDialog` containing `rememberLauncherForActivityResult` (17 s), and
+the real `NowChooserDialog` composed and asserted without interaction (16 s). Disabling
+`SafeDialog`'s `OnGlobalLayoutListener` outright did **not** stop the hang, so the inset feedback
+loop originally suspected is ruled out as well.
+
+What is established is the precise trigger: the hang begins when the dialog's content **changes
+size**. A probe that renders the real `NowChooserDialog` and only clicks `chooser_custom` — revealing
+the inline `InlineLeaveMinutes` input, with no text entered — hangs reproducibly, while the identical
+probe without that click passes in 16 seconds. Every static probe passed; only the one that grows the
+dialog's content stalls. The root cause within that growth path is **not yet identified**, so no fix
+is claimed.
+
+No fix was attempted beyond diagnosis. The remaining candidate is a measure/idle loop when a
+scrolling, constrained dialog's content grows, which sits in `SafeDialog`'s layout contract — a
+component carrying documented OEM and Android 15 rationale. Changing it is a product decision rather
+than an obvious repair, so it is raised rather than guessed at.
+
+Reproducer for whoever picks this up: render `NowChooserDialog(NowViewModel.Chooser.Leave("task"), …)`
+under `createComposeRule()` with `@GraphicsMode(NATIVE)`, click `chooser_custom`, and assert
+`chooser_custom_minutes` exists. It never returns.
+
+**Verification actually performed.**
+
+- Non-dialog packages (`domain`, `command`, `agent`, `mappreview`, `map`, `image`, `pdf`, `orb`,
+  `pulse`, `project`, `streams`, `ui.components`): **103 classes, 1,115 tests, 0 failures, 0
+  errors, 0 skipped**.
+- `com.virlin.app.now.*` and `com.virlin.app.screenshot.*`: **hang** — 0 classes completed within a
+  15-minute budget (`timeout` exit 124).
+- `com.virlin.app.hierarchy.*`: **not run**; it holds the dialog and popup tests and is expected to
+  stall for the same reason.
+- `:app:assembleDebug` and `:app:compileDebugAndroidTestKotlin`: pass (APK 23,417,043 bytes).
+- `git diff --check`: clean.
+
+The full suite therefore has **not** been shown green, and no claim is made that it is.
+
+**Not done.** No instrumentation run, no Roborazzi verification (its package is inside the stalling
+group), and no push — the destination was ambiguous because the current branch is named for
+attachment work, carries the execution-audit checkpoint and has no upstream.
