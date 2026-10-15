@@ -162,7 +162,7 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
     val streamsSubRoute = STREAMS_SUB_ROUTES.any { currentRoute.startsWith(it) }
     // The capture Inbox and the map picker are now reached FROM Apps, so the shell treats them
     // as Apps: the footer and Orb stay and the Apps tab stays selected.
-    val appsSubRoute = currentRoute == "inbox" ||
+    val appsSubRoute = currentRoute == "inbox" || currentRoute == "desktop_connect" ||
         currentRoute.startsWith("apps_mind_maps")
     // A project's Pulse drilldown is still Pulse.
     val pulseSubRoute = currentRoute.startsWith("pulse_project/")

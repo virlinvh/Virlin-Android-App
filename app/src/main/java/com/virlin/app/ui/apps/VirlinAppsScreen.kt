@@ -66,7 +66,7 @@ import androidx.compose.ui.unit.sp
 /**
  * Content for the existing Virlin Apps tab. Put this INSIDE the current app Scaffold.
  * The host continues to own the persistent bottom navigation, Orb and routing.
- * All four icons are bitmap drawables so their approved 3D artwork is preserved.
+ * App icons are bitmap drawables so their approved 3D artwork is preserved.
  */
 @Composable
 fun VirlinAppsScreen(
@@ -86,9 +86,9 @@ fun VirlinAppsScreen(
         AppEntry("maps", "Mind Maps", R.drawable.virlin_app_mind_maps, onOpenMindMaps),
         AppEntry("cards", "Flashcards", R.drawable.virlin_app_flashcards, onOpenFlashcards),
         AppEntry("pages", "Pages", R.drawable.virlin_app_pages, onOpenPages),
+        AppEntry("link", "Virlin Link", R.drawable.virlin_app_link, onOpenDesktopConnect),
     )
     val visible = apps.filter { it.title.contains(query.trim(), ignoreCase = true) }
-    val showDesktop = !searching || "Connect desktop".contains(query.trim(), ignoreCase = true)
 
     Column(modifier.fillMaxSize().testTag(AppsScreenTag).background(VirlinCream)) {
         AppsHeader(
@@ -114,19 +114,7 @@ fun VirlinAppsScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            if (showDesktop) {
-                item(span = { GridItemSpan(2) }) {
-                    Text(
-                        "Connect desktop  →",
-                        color = Color(0xFF087D5C),
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpenDesktopConnect)
-                            .padding(horizontal = 16.dp, vertical = 16.dp),
-                    )
-                }
-            }
-            if (visible.isEmpty() && !showDesktop) {
+            if (visible.isEmpty()) {
                 item(span = { GridItemSpan(2) }) {
                     Text(
                         "No apps found",
