@@ -1,12 +1,96 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[allow(dead_code)] // Staged behind the in-app scanner and explicit phone confirmation.
 mod pairing;
 
 use serde::Serialize;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use tauri::{Manager, path::BaseDirectory};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::io::Read;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{Manager, State, path::BaseDirectory};
+
+#[derive(Default)]
+struct PairingState(Mutex<Option<PairingSession>>);
+
+struct PairingSession {
+    cancelled: Arc<AtomicBool>,
+    status: Arc<Mutex<String>>,
+}
+
+#[derive(Serialize)]
+struct LanAddress { name: String, address: String }
+
+#[derive(Serialize)]
+struct PairingOffer { rows: Vec<String>, expires_at: u64, address: String }
+
+#[tauri::command]
+fn list_lan_addresses() -> Result<Vec<LanAddress>, String> {
+    let interfaces = local_ip_address::list_afinet_netifas().map_err(|e| e.to_string())?;
+    let mut addresses: Vec<_> = interfaces.into_iter().filter_map(|(name, ip)| match ip {
+        IpAddr::V4(address) if pairing::is_private_lan(address) =>
+            Some(LanAddress { name, address: address.to_string() }),
+        _ => None,
+    }).collect();
+    addresses.sort_by(|a, b| a.address.cmp(&b.address));
+    Ok(addresses)
+}
+
+#[tauri::command]
+fn start_pairing(address: String, state: State<PairingState>) -> Result<PairingOffer, String> {
+    let ip: Ipv4Addr = address.parse().map_err(|_| "Invalid local address")?;
+    if !list_lan_addresses()?.iter().any(|entry| entry.address == address) {
+        return Err("Choose a listed local network address".into());
+    }
+    let mut guard = state.0.lock().map_err(|_| "Pairing state unavailable")?;
+    if guard.is_some() { return Err("Disconnect the current session first".into()); }
+    let listener = pairing::PairingListener::bind(ip)?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
+    let invitation = listener.invitation(ip, now)?;
+    let qr = qrcodegen::QrCode::encode_text(&invitation, qrcodegen::QrCodeEcc::Medium)
+        .map_err(|_| "Could not create pairing QR")?;
+    let rows = (0..qr.size()).map(|y| (0..qr.size()).map(|x| if qr.get_module(x, y) { '1' } else { '0' }).collect()).collect();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let status = Arc::new(Mutex::new("Waiting for phone approval".to_string()));
+    let thread_cancel = cancelled.clone();
+    let thread_status = status.clone();
+    std::thread::spawn(move || {
+        match listener.accept_with_cancel(&thread_cancel) {
+            Ok(mut connection) => {
+                *thread_status.lock().unwrap() = "Connected — secure pairing only".into();
+                let _ = connection.sock.set_read_timeout(Some(std::time::Duration::from_secs(1)));
+                let mut buffer = [0u8; 1];
+                while !thread_cancel.load(Ordering::Relaxed) {
+                    match connection.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(_) => break, // No application commands are accepted in this slice.
+                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                        Err(_) => break,
+                    }
+                }
+                *thread_status.lock().unwrap() = "Disconnected".into();
+            }
+            Err(error) => *thread_status.lock().unwrap() = error,
+        }
+    });
+    *guard = Some(PairingSession { cancelled, status });
+    Ok(PairingOffer { rows, expires_at: now + 300, address })
+}
+
+#[tauri::command]
+fn pairing_status(state: State<PairingState>) -> Result<String, String> {
+    let guard = state.0.lock().map_err(|_| "Pairing state unavailable")?;
+    Ok(guard.as_ref().map(|session| session.status.lock().unwrap().clone()).unwrap_or_else(|| "Not connected".into()))
+}
+
+#[tauri::command]
+fn cancel_pairing(state: State<PairingState>) -> Result<(), String> {
+    if let Some(session) = state.0.lock().map_err(|_| "Pairing state unavailable")?.take() {
+        session.cancelled.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
 
 const PACKAGE: &str = "com.virlin.app";
 
@@ -99,7 +183,8 @@ fn open_virlin(app: tauri::AppHandle, serial: String) -> Result<(), String> {
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_devices, open_virlin])
+        .manage(PairingState::default())
+        .invoke_handler(tauri::generate_handler![list_lan_addresses, start_pairing, pairing_status, cancel_pairing, list_devices, open_virlin])
         .run(tauri::generate_context!())
         .expect("Virlin Connect failed to start");
 }

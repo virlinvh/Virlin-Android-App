@@ -1,6 +1,6 @@
 # Local desktop bridge (no debugging)
 
-Status: implementation in stages on `codex/local-qr-desktop-bridge`. This document is the contract, not a claim that desktop editing already works.
+Status: first QR pairing flow implemented on `codex/local-qr-desktop-bridge`. Desktop editing is not yet implemented.
 
 ## Product decision
 
@@ -13,7 +13,7 @@ The phone and laptop must share a local network (Wi-Fi or the phone's hotspot). 
 1. The desktop starts a listener on a private LAN address, creates an ephemeral TLS identity and a 256-bit random invitation secret, and shows a QR code. The invitation expires after at most five minutes.
 2. The user opens **Connect desktop** inside Virlin and scans the QR. A manual code/address flow may be added later, but must not weaken the certificate-pinning contract.
 3. The phone validates the invitation strictly (version, private IP, port, expiry, fingerprint, secret), then opens an outbound TLS connection and pins the desktop certificate fingerprint from the QR **before** sending the secret or any app data.
-4. The desktop accepts the secret once, shows the phone's device name, and requires confirmation on the phone. Subsequent messages are authenticated within that TLS session. Disconnect on either device revokes the in-memory session. Reconnect requires a new invitation.
+4. The desktop accepts the secret once after confirmation on the phone and shows connected status. No device name or application messages are exchanged in this first slice. Disconnect on either device ends the in-memory session. Reconnect requires a new invitation.
 5. Secrets, notes, task titles and file bytes must never be logged or placed in analytics. The listener is active only while the desktop connection window is open and is not exposed through Internet port forwarding.
 
 The QR is a pairing credential, not a magic Android permission. The phone app must present the scanner and explicit approval. No app screen capture or system-level input-control permission is involved.
@@ -42,4 +42,6 @@ The desktop UI is not called "full Virlin" until the route/action matrix is comp
 
 ## Current implementation slice
 
-`DesktopPairingInvitation` is the pure Android invitation validator. `PinnedDesktopTls` can establish a TLS connection pinned to that invitation's certificate fingerprint; it sends no secret or app data itself. The desktop has an isolated, unexposed `PairingListener` that creates a fresh certificate and secret, limits attempts and expiry, and passes a local TLS handshake test. Neither side is wired to an app screen or exposes an API yet. The next slice is in-app scanner/confirmation plus desktop UI wiring, followed by read-only projections. The old USB connector is left unchanged until an actual replacement is usable.
+`DesktopPairingInvitation` validates the one-time QR and `PinnedDesktopTls` pins the desktop certificate. The Apps tab opens **Connect desktop**, which scans a QR and requires explicit approval. Virlin Connect lists private LAN addresses, displays the QR, and reports connection status. The desktop listener permits one authenticated session; no task, note, file, screen-mirroring, or other application command is enabled through this connection. The Android session lasts only while its screen is open. The next slice is a versioned read-only projection API, followed by allowlisted writes. The old USB connector code remains in the repository but is no longer the primary UI.
+
+To test on a phone, install the matching Android build and Windows Connect build, join the same Wi-Fi or hotspot, open Connect on Windows, then Apps → Connect desktop → Scan QR → Approve on Android. If Windows asks, allow this application on **private networks** only. A connection timeout may mean client isolation, an incorrect network interface, or firewall blocking; do not turn off the firewall globally or forward the pairing port to the Internet. A camera permission is requested by the QR scanner. A physical phone is needed to verify camera scanning and LAN reachability end-to-end.

@@ -1,30 +1,13 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Virlin Connect</title>
-  </head>
-  <body>
-    <main class="shell">
-      <header class="top"><span class="mark">V</span><span>Virlin <strong>Connect</strong></span><span class="local">LOCAL ONLY</span></header>
-      <section class="hero">
-        <div class="eyebrow">YOUR PHONE, ON YOUR DESKTOP</div>
-        <h1>Pick up where you left off.</h1>
-        <p>Connect your Android phone to open and control the complete Virlin app on this computer. Your projects and files stay on the phone.</p>
-      </section>
-      <section class="panel">
-        <div class="panel-head"><div><h2>Connect a phone</h2><p id="summary">Looking for connected devices…</p></div><button id="refresh" class="icon-button" aria-label="Refresh devices" title="Refresh devices">↻</button></div>
-        <div id="devices" class="devices" aria-live="polite"></div>
-        <p id="notice" class="notice" role="status"></p>
-      </section>
-      <section class="panel help">
-        <h2>First time connecting?</h2>
-        <ol><li>Install Virlin on your Android phone.</li><li>Turn on <b>Developer options → USB debugging</b> on the phone.</li><li>Connect it by USB and accept the phone’s <b>Allow USB debugging</b> prompt.</li><li>Select your phone above and choose <b>Open Virlin</b>.</li></ol>
-        <p>The mirroring window supports your mouse, keyboard, scrolling, and clipboard paste. Disconnecting does not remove anything from the phone.</p>
-      </section>
-      <footer>USB connection · No account · No cloud sync · Android app remains the source of truth</footer>
-    </main>
-    <script type="module" src="/src/main.js"></script>
-  </body>
-</html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Virlin Connect</title></head>
+<body><main class="shell">
+  <header class="top"><span class="mark">V</span><span>Virlin <strong>Connect</strong></span><span class="local">LOCAL NETWORK</span></header>
+  <section class="hero"><div class="eyebrow">CONNECT WITHOUT USB DEBUGGING</div><h1>Pair your phone.</h1><p>Connect over the same Wi-Fi or phone hotspot. Your Virlin data stays on your phone.</p></section>
+  <section class="panel"><h2>Secure local pairing</h2><p>Choose this computer’s network address, then scan the QR in Virlin on your phone.</p>
+    <div class="controls"><select id="addresses" aria-label="Computer network address"></select><button id="start" class="primary">Show pairing QR</button><button id="cancel" class="secondary" hidden>Disconnect</button></div>
+    <div id="qr-wrap" hidden><canvas id="qr" role="img" aria-label="One-time pairing QR code"></canvas><p id="expiry"></p></div>
+    <p id="status" role="status">Checking local network…</p>
+  </section>
+  <section class="panel help"><h2>On your phone</h2><ol><li>Open Virlin → Apps → Connect desktop.</li><li>Tap Scan QR and approve this computer.</li><li>Keep this screen open while testing the connection.</li></ol><p>This version verifies a secure connection only. Desktop task editing and screen mirroring are not yet available through QR pairing. Windows may ask you to allow this app on private networks.</p></section>
+  <footer>No cloud · No USB debugging · One-time, five-minute invitation</footer>
+</main><script type="module" src="/src/main.js"></script></body></html>

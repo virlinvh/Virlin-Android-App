@@ -73,6 +73,7 @@ fun VirlinAppsScreen(
     onOpenInbox: () -> Unit,
     onOpenMindMaps: () -> Unit,
     onOpenPages: () -> Unit,
+    onOpenDesktopConnect: () -> Unit = {},
     modifier: Modifier = Modifier,
     flashcardsAvailable: Boolean = false,
     onOpenFlashcards: () -> Unit = {},
@@ -87,6 +88,7 @@ fun VirlinAppsScreen(
         AppEntry("pages", "Pages", R.drawable.virlin_app_pages, onOpenPages),
     )
     val visible = apps.filter { it.title.contains(query.trim(), ignoreCase = true) }
+    val showDesktop = !searching || "Connect desktop".contains(query.trim(), ignoreCase = true)
 
     Column(modifier.fillMaxSize().testTag(AppsScreenTag).background(VirlinCream)) {
         AppsHeader(
@@ -112,7 +114,19 @@ fun VirlinAppsScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp),
         ) {
-            if (visible.isEmpty()) {
+            if (showDesktop) {
+                item(span = { GridItemSpan(2) }) {
+                    Text(
+                        "Connect desktop  →",
+                        color = Color(0xFF087D5C),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpenDesktopConnect)
+                            .padding(horizontal = 16.dp, vertical = 16.dp),
+                    )
+                }
+            }
+            if (visible.isEmpty() && !showDesktop) {
                 item(span = { GridItemSpan(2) }) {
                     Text(
                         "No apps found",

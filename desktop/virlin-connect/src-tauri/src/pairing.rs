@@ -1,11 +1,11 @@
 //! Isolated one-time desktop TLS pairing listener. No app data is exposed here.
-//! Deliberately not wired into the current scrcpy UI until phone confirmation exists.
+//! The authenticated connection remains in memory and exposes no app data.
 
 use getrandom::fill;
 use rcgen::{generate_simple_self_signed, CertifiedKey};
 use rustls::{pki_types::{CertificateDer, PrivatePkcs8KeyDer}, ServerConfig, ServerConnection, StreamOwned};
 use sha2::{Digest, Sha256};
-use std::{io::{Read, Write}, net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream}, sync::Arc, time::{Duration, Instant}};
+use std::{io::{Read, Write}, net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 use subtle::ConstantTimeEq;
 
 const VALIDITY: Duration = Duration::from_secs(300);
@@ -16,6 +16,7 @@ pub struct PairingListener {
     tls: Arc<ServerConfig>,
     secret_hex: String,
     fingerprint_hex: String,
+    #[cfg(test)]
     certificate_der: Vec<u8>,
     expires: Instant,
 }
@@ -46,6 +47,7 @@ impl PairingListener {
             tls: Arc::new(tls),
             secret_hex: hex(&secret),
             fingerprint_hex: hex(&Sha256::digest(cert_der)),
+            #[cfg(test)]
             certificate_der: cert.der().to_vec(),
             expires: Instant::now() + VALIDITY,
         })
@@ -61,9 +63,15 @@ impl PairingListener {
 
     /// Waits for one authenticated phone. Caller owns the resulting TLS stream.
     /// Wrong attempts are bounded; no state or app data is sent before authentication.
+    #[cfg(test)]
     pub fn accept_once(&self) -> Result<StreamOwned<ServerConnection, TcpStream>, String> {
+        self.accept_with_cancel(&AtomicBool::new(false))
+    }
+
+    pub fn accept_with_cancel(&self, cancelled: &AtomicBool) -> Result<StreamOwned<ServerConnection, TcpStream>, String> {
         let mut attempts = 0;
         while Instant::now() < self.expires {
+            if cancelled.load(Ordering::Relaxed) { return Err("Pairing cancelled".into()); }
             let (tcp, _) = match self.listener.accept() {
                 Ok(value) => value,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {

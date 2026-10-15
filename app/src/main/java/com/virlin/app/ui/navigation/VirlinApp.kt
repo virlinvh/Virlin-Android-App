@@ -303,10 +303,14 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                         // Pages is not built. This opens the existing note editor, which is the
                         // nearest real screen — it is not a Pages home and is not called one.
                         onOpenPages = { openRedesignedNotes(null, null) },
+                        onOpenDesktopConnect = { navController.navigate("desktop_connect") },
                         // Flashcards has no feature behind it, so the tile stays disabled.
                         flashcardsAvailable = false,
                         animateIcons = !reducedMotion,
                     )
+                }
+                composable("desktop_connect") {
+                    com.virlin.app.ui.desktop.DesktopConnectScreen(onBack = { navController.popBackStack() })
                 }
                 composable(com.virlin.app.ui.apps.MindMapsHomeRoute) {
                     com.virlin.app.ui.apps.MindMapsHomeHost(navController)
