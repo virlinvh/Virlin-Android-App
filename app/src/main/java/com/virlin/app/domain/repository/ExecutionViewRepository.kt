@@ -16,10 +16,10 @@ class ExecutionViewRepository(private val inner: WorkStreamRepository, scope: Co
     override suspend fun getActiveFocus() = streams.value.firstOrNull { it.state == WorkStreamState.FOCUS }
     override suspend fun getOpenFocusSession(streamId: String): FocusSession? {
         val task = inner.getTask(streamId) ?: return inner.getOpenFocusSession(streamId)
-        return task.workStreamId?.let { inner.getOpenFocusSession(it) }?.takeIf { it.taskId == task.id }
+        return inner.getOpenFocusSession(task.workStreamId ?: task.id)?.takeIf { it.taskId == task.id }
     }
     override suspend fun getFocusSessions(streamId: String): List<FocusSession> {
         val task = inner.getTask(streamId) ?: return inner.getFocusSessions(streamId)
-        return task.workStreamId?.let { inner.getFocusSessions(it) }.orEmpty().filter { it.taskId == task.id }
+        return inner.getFocusSessions(task.workStreamId ?: task.id).filter { it.taskId == task.id }
     }
 }

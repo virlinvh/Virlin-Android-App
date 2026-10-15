@@ -265,15 +265,23 @@ class ProjectMapTest {
             com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
             com.virlin.app.ui.map.MapTopic("t", "p", "Task", kind = MapKind.TASK),
         )
-        val appearance = MapAppearance(
-            customPalette = listOf(0xFF123456, 0xFFABCDEF),
-            savedColors = listOf(0xFF765432),
-            boxFinish = com.virlin.app.ui.map.MapBoxFinish.LINEN,
-            nodeFinishes = mapOf("t" to com.virlin.app.ui.map.MapBoxFinish.GLASS),
-            nodeColors = mapOf("t" to 0xFF765432),
+        val handDrawnFinishes = listOf(
+            com.virlin.app.ui.map.MapBoxFinish.HAND_DRAWN,
+            com.virlin.app.ui.map.MapBoxFinish.PENCIL_SKETCH,
+            com.virlin.app.ui.map.MapBoxFinish.DOUBLE_INK,
+            com.virlin.app.ui.map.MapBoxFinish.MARKER_EDGE,
         )
-        val decoded = decodeVirlinMap(encodeVirlinMap(VirlinMapSnapshot("p", "Project", topics, appearance)))
-        assertEquals(appearance, decoded.appearance)
+        handDrawnFinishes.forEachIndexed { index, finish ->
+            val appearance = MapAppearance(
+                customPalette = listOf(0xFF123456, 0xFFABCDEF),
+                savedColors = listOf(0xFF765432),
+                boxFinish = finish,
+                nodeFinishes = mapOf("t" to handDrawnFinishes[(index + 1) % handDrawnFinishes.size]),
+                nodeColors = mapOf("t" to 0xFF765432),
+            )
+            val decoded = decodeVirlinMap(encodeVirlinMap(VirlinMapSnapshot("p", "Project", topics, appearance)))
+            assertEquals(appearance, decoded.appearance)
+        }
     }
 
     @Test fun aSnapshotWithACycleIsRejected() {

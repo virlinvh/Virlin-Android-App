@@ -228,6 +228,9 @@ fun VirlinStreamTasks(
     val chromeScroll = Modifier.scrollable(chromeScrollState, Orientation.Vertical)
     Box(modifier.fillMaxSize()) {
     Scaffold(modifier = Modifier.testTag(StreamTasksTag).nestedScroll(scrollConnection), containerColor = palette?.let { Color(it.surface) } ?: Color.White,
+        // The app's root Scaffold already places this route above the footer and system bars.
+        // A second bottom inset here lifts the shared task/subtask FAB and leaves a blank band.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             Row(Modifier.fillMaxWidth().height(76.dp).then(chromeScroll).testTag("hierarchy_top_bar")
                 .padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -295,24 +298,26 @@ fun VirlinStreamTasks(
                     }
                 }
             }
-            Box(Modifier.align(Alignment.BottomCenter)) {
-                BottomListFeather(palette?.let { Color(it.surface) } ?: Color.White)
-            }
-            Row(Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 12.dp),
-                horizontalArrangement = Arrangement.End) {
-                if (organize && selected.isNotEmpty()) {
-                    TextButton(onClick = { moveFor = selected.toList() }) { Text("Move") }
-                    TextButton(onClick = { deleteFor = selected.toList() }) { Text("Cancel tasks") }
-                } else FloatingActionButton(
-                    onClick = { addFor = parentId; showAdd = true },
-                    modifier = Modifier.size(56.dp).testTag(AddTaskButtonTag),
-                    shape = RoundedCornerShape(20.dp),
-                    containerColor = LocalProjectPalette.current?.let { Color(it.main) } ?: Green,
-                    contentColor = LocalProjectPalette.current?.let { readableOn(Color(it.main)) } ?: Color.White
-                ) {
-                    Icon(Icons.Default.Add, if (parentId == null) "Add task" else "Add subtask", modifier = Modifier.size(28.dp))
-                }
-            }
+        }
+    }
+    // Anchor the overlay to the route's full viewport, as on the project overview.
+    // The nested Scaffold's content slot can reserve space independently of the root footer.
+    Box(Modifier.align(Alignment.BottomCenter)) {
+        BottomListFeather(palette?.let { Color(it.surface) } ?: Color.White)
+    }
+    Row(Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 12.dp),
+        horizontalArrangement = Arrangement.End) {
+        if (organize && selected.isNotEmpty()) {
+            TextButton(onClick = { moveFor = selected.toList() }) { Text("Move") }
+            TextButton(onClick = { deleteFor = selected.toList() }) { Text("Cancel tasks") }
+        } else FloatingActionButton(
+            onClick = { addFor = parentId; showAdd = true },
+            modifier = Modifier.size(56.dp).testTag(AddTaskButtonTag),
+            shape = RoundedCornerShape(20.dp),
+            containerColor = LocalProjectPalette.current?.let { Color(it.main) } ?: Green,
+            contentColor = LocalProjectPalette.current?.let { readableOn(Color(it.main)) } ?: Color.White
+        ) {
+            Icon(Icons.Default.Add, if (parentId == null) "Add task" else "Add subtask", modifier = Modifier.size(28.dp))
         }
     }
     if (showAdd) {

@@ -14,7 +14,8 @@ enum class MapStatus { NONE, TODO, CURRENT, DONE, BLOCKED }
 enum class MapBoxFinish(val label: String) {
     SMOOTH("Smooth"), FROSTED("Frosted"), PAPER("Fine paper"), LINEN("Linen"),
     GRAIN("Soft grain"), GLASS("Glass"), OUTLINE("Outline"), EMBOSSED("Embossed"),
-    PENCIL_HATCH("Pencil hatch")
+    PENCIL_HATCH("Pencil hatch"), HAND_DRAWN("Hand drawn"),
+    PENCIL_SKETCH("Pencil sketch"), DOUBLE_INK("Double ink"), MARKER_EDGE("Marker edge")
 }
 
 enum class MapLayout(

@@ -22,7 +22,6 @@ import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.domain.action.ActionResult
 import com.virlin.app.domain.model.ClearedSteps
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 const val TaskTodoRoute = "task_todo/{id}"
 fun taskTodo(id: String) = "task_todo/$id"
@@ -116,19 +115,16 @@ fun TaskTodoScreen(
             } },
             // There is nowhere to store a list title, so this does nothing and the page hides it.
             onRenameList = { },
-            // The draft is cleared only when the write is accepted, so a refused add keeps the
-            // text the user typed. Blocking here is what lets the field report acceptance.
-            onAdd = { text ->
-                val clean = text.trim()
-                if (clean.isEmpty()) false else {
-                    save = TodoSave.Saving
-                    val result = runBlocking { VirlinGraph.actions.addStep(taskId, clean) }
-                    val ok = result is ActionResult.Success
-                    save = if (ok) TodoSave.Saved else TodoSave.Failed
-                    if (!ok) complain("That to-do could not be added.")
-                    ok
-                }
-            },
+            // The screen uses onAddAsync below; never block the UI thread for persistence.
+            onAdd = { false },
+            onAddAsync = { text, complete -> scope.launch {
+                save = TodoSave.Saving
+                val result = VirlinGraph.actions.addStep(taskId, text.trim())
+                val accepted = result is ActionResult.Success
+                save = if (accepted) TodoSave.Saved else TodoSave.Failed
+                complete(accepted)
+                if (!accepted) complain("That to-do could not be added.")
+            } },
             onEdit = { id, text ->
                 if (text.isBlank()) complain("A to-do needs some text.")
                 else write { VirlinGraph.actions.editStep(id, text) }

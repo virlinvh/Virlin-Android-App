@@ -464,7 +464,9 @@ class DefaultVirlinActions(
         } else {
             firstOpenLeaf(all, item.id) ?: return ActionResult.Rejected(DomainError.TaskAlreadyClosed)
         }
-        val streamId = resolved.workStreamId ?: return ActionResult.Rejected(DomainError.OwnershipMismatch)
+        // Standalone project tasks own their execution identity; they do not need a WorkStream.
+        val streamId = resolved.workStreamId ?: resolved.id.takeIf { resolved.projectId != null }
+            ?: return ActionResult.Rejected(DomainError.OwnershipMismatch)
         val current = getActiveFocus()
         val identity = if (repository.taskExecutionEnabled) resolved.id else streamId
         return ActionResult.Success(
@@ -1004,7 +1006,9 @@ class DefaultVirlinActions(
                 if (task.workStreamId != request.workStreamId && task.id != request.workStreamId)
                     return@run ActionResult.Rejected(DomainError.TaskNotInWorkStream)
                 if (task.status.isTerminal) return@run ActionResult.Rejected(DomainError.TaskAlreadyClosed)
-                val owner = task.workStreamId?.let { getStream(it) } ?: return@run ActionResult.Rejected(DomainError.OwnershipMismatch)
+                val owner = task.workStreamId?.let { getStream(it) }
+                if (owner == null && task.projectId == null)
+                    return@run ActionResult.Rejected(DomainError.OwnershipMismatch)
                 if (repository.taskExecutionEnabled && ExecutionModeResolver.resolveTask(task, allTasks().associateBy { it.id }, owner,
                         task.projectId?.let { getProject(it)?.defaultExecutionMode }) != EffectiveExecutionMode.EXTERNAL)
                     return@run ActionResult.Rejected(DomainError.NotExternalExecution)
@@ -1175,7 +1179,7 @@ class DefaultVirlinActions(
         repository.transaction {
             val writer = if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this
             val stream = writer.getStream(streamId) ?: return@transaction ActionResult.NotFound(streamId)
-            if (repository.taskExecutionEnabled && getTask(streamId)?.let { it.workStreamId == null } == true)
+            if (repository.taskExecutionEnabled && getTask(streamId)?.let { it.workStreamId == null && it.projectId == null } == true)
                 return@transaction ActionResult.Rejected(DomainError.OwnershipMismatch)
             if (repository.taskExecutionEnabled && !allowContainer && !ExecutionEligibility.isLeaf(streamId, writer.allTasks()))
                 return@transaction ActionResult.Rejected(DomainError.PlacementRejected("This item contains children. Select a leaf task to manage execution."))

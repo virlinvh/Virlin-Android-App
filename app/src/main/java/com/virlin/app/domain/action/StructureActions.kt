@@ -147,7 +147,7 @@ internal class StructureActions(
             order = r.order ?: (siblings.maxOfOrNull { it.order }?.plus(1) ?: 0),
             estimatedEffort = r.estimatedEffort, dueAt = r.dueAt, reminderAt = r.reminderAt,
             priority = r.priority, executionPreference = r.executionPreference,
-            execution = if (repository.taskExecutionEnabled && workStreamId != null) com.virlin.app.domain.model.TaskExecution() else null,
+            execution = if (repository.taskExecutionEnabled) com.virlin.app.domain.model.TaskExecution() else null,
             createdAt = now, updatedAt = now
         )
         saveTask(task)
@@ -279,13 +279,14 @@ internal class StructureActions(
         val now = clock.now()
         val proposed = t.copy(executionPreference = preference)
         val owner = t.workStreamId?.let { getStream(it) }
-        val effective = owner?.let { ExecutionModeResolver.resolveTask(proposed,
-            allTasks().associateBy { it.id } + (t.id to proposed), it,
-            t.projectId?.let { project -> getProject(project)?.defaultExecutionMode }) }
+        val effective = ExecutionModeResolver.resolveTask(proposed,
+            allTasks().associateBy { it.id } + (t.id to proposed), owner,
+            t.projectId?.let { project -> getProject(project)?.defaultExecutionMode })
         var execution = t.execution
         if (execution != null && ((effective == EffectiveExecutionMode.EXTERNAL && execution.state in setOf(WorkStreamState.FOCUS, WorkStreamState.PAUSED, WorkStreamState.SNOOZED, WorkStreamState.CHECK) && !execution.externalTrackingPaused && execution.processingStartedAt == null && execution.snoozeReason != SnoozeReason.EXTERNAL_RESULT_READY) ||
                 ((execution.processingStartedAt != null || execution.externalTrackingPaused) && effective == EffectiveExecutionMode.HUMAN))) {
-            t.workStreamId?.let { getOpenFocusSession(it) }?.takeIf { it.taskId == t.id }?.let { saveFocusSession(it.copy(endedAt = now)) }
+            getOpenFocusSession(t.workStreamId ?: t.id)?.takeIf { it.taskId == t.id }
+                ?.let { saveFocusSession(it.copy(endedAt = now)) }
             execution = execution.copy(state = WorkStreamState.READY, processingStartedAt = null,
                 externalTrackedSeconds = execution.externalTrackedSeconds + (execution.processingStartedAt?.let {
                     java.time.Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0),
@@ -310,12 +311,13 @@ internal class StructureActions(
         val now = clock.now()
         tasks.filter { !it.status.isTerminal && it.execution != null && it.projectId == projectId &&
             (streamId == null || it.workStreamId == streamId) }.forEach { task ->
-            val owner = task.workStreamId?.let { getStream(it) } ?: return@forEach
+            val owner = task.workStreamId?.let { getStream(it) }
             val mode = ExecutionModeResolver.resolveTask(task, byId, owner, projectId?.let { getProject(it)?.defaultExecutionMode })
             val activity = task.execution!!
             if ((activity.state == WorkStreamState.FOCUS && mode == EffectiveExecutionMode.EXTERNAL) ||
                 ((activity.processingStartedAt != null || activity.externalTrackingPaused) && mode == EffectiveExecutionMode.HUMAN)) {
-                task.workStreamId?.let { getOpenFocusSession(it) }?.takeIf { it.taskId == task.id }?.let { saveFocusSession(it.copy(endedAt = now)) }
+                getOpenFocusSession(task.workStreamId ?: task.id)?.takeIf { it.taskId == task.id }
+                    ?.let { saveFocusSession(it.copy(endedAt = now)) }
                 saveTask(task.copy(updatedAt = now, execution = activity.copy(state = WorkStreamState.READY,
                     externalTrackedSeconds = activity.externalTrackedSeconds + (activity.processingStartedAt?.let {
                         java.time.Duration.between(it, now).seconds.coerceAtLeast(0) } ?: 0),
@@ -831,7 +833,7 @@ internal class StructureActions(
     }
 
     private suspend fun WorkStreamWriter.closeOne(t: Task, status: TaskStatus, eventType: EventType, now: Instant) {
-        t.workStreamId?.let { getOpenFocusSession(it) }?.takeIf { it.taskId == t.id }?.let {
+        getOpenFocusSession(t.workStreamId ?: t.id)?.takeIf { it.taskId == t.id }?.let {
             saveFocusSession(it.copy(endedAt = now))
         }
         t.execution?.currentCycleId?.let { getCycle(it) }?.takeIf { it.endedAt == null }?.let {

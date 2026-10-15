@@ -613,7 +613,7 @@ class HierarchyViewModel(
 
     /** Human focus attributed to this task, derived from FocusSession timestamps. */
     suspend fun focusedOn(task: Task): Duration? {
-        val wsId = task.workStreamId ?: return null
+        val wsId = task.workStreamId ?: task.id
         val sessions = repository.getFocusSessions(wsId)
         val total = FocusInvestment.total(sessions, task.id, VirlinGraph.clock.now())
         return total.takeIf { !it.isZero && !it.isNegative }

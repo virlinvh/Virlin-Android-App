@@ -236,7 +236,9 @@ internal fun MapStudioPage(
                     item { StudioHeading("Choose a box finish",
                         "Pick a subtle surface for every map box. Your map keeps its current layout.",
                         textColor) }
-                    items(MapBoxFinish.entries.chunked(2)) { pair ->
+                    val visibleFinishes = MapBoxFinish.entries.filter { it.isHandDrawn() } +
+                        MapBoxFinish.entries.filterNot { it.isHandDrawn() }
+                    items(visibleFinishes.chunked(2)) { pair ->
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             pair.forEach { finish ->
                                 val chosen = appearance.boxFinish == finish
@@ -253,12 +255,19 @@ internal fun MapStudioPage(
                                             MapBoxFinish.EMBOSSED -> listOf(Color.White, Color(0xFFB9D8C7))
                                             MapBoxFinish.FROSTED -> listOf(Color.White, Color(0xFFD9E7F4))
                                             MapBoxFinish.OUTLINE -> listOf(Color.White, Color.White)
+                                            MapBoxFinish.HAND_DRAWN, MapBoxFinish.PENCIL_SKETCH,
+                                            MapBoxFinish.DOUBLE_INK, MapBoxFinish.MARKER_EDGE -> listOf(Color.White, Color.White)
                                             else -> listOf(Color(0xFFE7F5EA), Color(0xFFCDE8D6))
                                         }
                                         Box(Modifier.fillMaxWidth().height(58.dp)
                                             .background(Brush.linearGradient(gradient), RoundedCornerShape(10.dp))
-                                            .border(if (finish == MapBoxFinish.OUTLINE) 2.dp else 1.dp,
+                                            .border(if (finish.isHandDrawn()) 0.dp else if (finish == MapBoxFinish.OUTLINE) 2.dp else 1.dp,
                                                 accent.copy(alpha = .55f), RoundedCornerShape(10.dp))) {
+                                            if (finish.isHandDrawn()) Canvas(Modifier.fillMaxSize()) {
+                                                drawIntoCanvas { drawHandDrawnBox(it.nativeCanvas,
+                                                    RectF(3f, 3f, size.width - 3f, size.height - 3f),
+                                                    android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG), finish) }
+                                            }
                                             if (finish == MapBoxFinish.PENCIL_HATCH) Canvas(Modifier.fillMaxSize()) {
                                                 val spacing = 7.dp.toPx()
                                                 var x = -size.height

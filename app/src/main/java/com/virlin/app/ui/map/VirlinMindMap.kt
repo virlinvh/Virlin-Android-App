@@ -2025,6 +2025,7 @@ internal fun paintMap(
         if (topic.id == expandedId) continue
         val color = accent(topic)
         val selected = selectedId == topic.id
+        val finish = appearance.nodeFinishes[topic.id] ?: appearance.boxFinish
         val isLeaf = g.topics.none { g.parent[it.id] == topic.id }
         // While a branch is lifted, the nodes that would refuse it recede.
         val dimmed = dragId != null && topic.id != dragId && topic.id != hoverId
@@ -2061,10 +2062,10 @@ internal fun paintMap(
                 androidx.core.graphics.ColorUtils.blendARGB(android.graphics.Color.WHITE, color, if (selected) .25f else .14f),
             ), floatArrayOf(0f, .45f, 1f), android.graphics.Shader.TileMode.CLAMP,
         )
-        drawLayoutNode(canvas, r, appearance.layout, isLeaf, radius, paint)
+        if (finish.isHandDrawn()) drawHandDrawnBox(canvas, r, paint, finish, selected)
+        else drawLayoutNode(canvas, r, appearance.layout, isLeaf, radius, paint)
         paint.shader = null
-        val finish = appearance.nodeFinishes[topic.id] ?: appearance.boxFinish
-        if (finish != MapBoxFinish.SMOOTH) {
+        if (finish != MapBoxFinish.SMOOTH && !finish.isHandDrawn()) {
             canvas.save()
             val clip = Path().apply { addRoundRect(r, radius, radius, Path.Direction.CW) }
             canvas.clipPath(clip)
@@ -2128,7 +2129,8 @@ internal fun paintMap(
         paint.strokeWidth = if (selected) 2f else 1f
         paint.color = color
         paint.alpha = if (selected) 255 else if (dimmed) 55 else 130
-        drawLayoutNode(canvas, r, appearance.layout, isLeaf, radius, paint)
+        if (!finish.isHandDrawn())
+            drawLayoutNode(canvas, r, appearance.layout, isLeaf, radius, paint)
         if (appearance.layout == MapLayout.FAN_FORKS && isLeaf) {
             paint.style = Paint.Style.FILL
             paint.alpha = if (dimmed) 55 else 180
