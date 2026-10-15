@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[allow(dead_code)] // Staged behind the in-app scanner and explicit phone confirmation.
+mod pairing;
+
 use serde::Serialize;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
