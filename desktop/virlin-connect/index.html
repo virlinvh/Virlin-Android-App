@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Virlin Connect</title>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="top"><span class="mark">V</span><span>Virlin <strong>Connect</strong></span><span class="local">LOCAL ONLY</span></header>
+      <section class="hero">
+        <div class="eyebrow">YOUR PHONE, ON YOUR DESKTOP</div>
+        <h1>Pick up where you left off.</h1>
+        <p>Connect your Android phone to open and control the complete Virlin app on this computer. Your projects and files stay on the phone.</p>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><div><h2>Connect a phone</h2><p id="summary">Looking for connected devices…</p></div><button id="refresh" class="icon-button" aria-label="Refresh devices" title="Refresh devices">↻</button></div>
+        <div id="devices" class="devices" aria-live="polite"></div>
+        <p id="notice" class="notice" role="status"></p>
+      </section>
+      <section class="panel help">
+        <h2>First time connecting?</h2>
+        <ol><li>Install Virlin on your Android phone.</li><li>Turn on <b>Developer options → USB debugging</b> on the phone.</li><li>Connect it by USB and accept the phone’s <b>Allow USB debugging</b> prompt.</li><li>Select your phone above and choose <b>Open Virlin</b>.</li></ol>
+        <p>The mirroring window supports your mouse, keyboard, scrolling, and clipboard paste. Disconnecting does not remove anything from the phone.</p>
+      </section>
+      <footer>USB connection · No account · No cloud sync · Android app remains the source of truth</footer>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

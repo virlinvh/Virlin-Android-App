@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Virlin Connect",
+  "version": "0.1.0",
+  "identifier": "com.virlin.connect",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "title": "Virlin Connect", "width": 760, "height": 850, "minWidth": 530, "minHeight": 680, "backgroundColor": "#f7f8f6" }],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "resources": ["resources/scrcpy/"],
+    "windows": { "nsis": { "installMode": "currentUser" } }
+  }
+}
