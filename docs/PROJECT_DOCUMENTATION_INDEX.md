@@ -1,5 +1,7 @@
 # Virlin project documentation index
 
+No-debugging local desktop bridge (in-progress security and parity contract): [Local desktop bridge](LOCAL_DESKTOP_BRIDGE_2026-10-15.md).
+
 Standalone task parity: [Shared cards, controls and hierarchy](STANDALONE_TASK_PARITY_2026-10-05.md).
 
 Project directory filtering: [Projects / Tasks view and filter contract](PROJECT_DIRECTORY_FILTERS_2026-10-05.md).
