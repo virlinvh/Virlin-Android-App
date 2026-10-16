@@ -10,9 +10,49 @@
     <div id="qr-wrap" hidden><canvas id="qr" role="img" aria-label="One-time pairing QR code"></canvas><p id="expiry"></p></div>
     <p id="status" role="status">Checking local network…</p>
   </section>
+  <section id="workspace" class="workspace-app" hidden aria-label="Virlin workspace">
+    <aside class="workspace-sidebar" aria-label="Virlin navigation">
+      <div class="workspace-logo"><span class="workspace-logo-mark">V</span><span>Virlin</span></div>
+      <div class="sidebar-caption">WORKSPACE</div>
+      <nav class="desktop-navigation" aria-label="Main sections">
+        <span class="nav-unavailable" title="Not connected to the phone yet">⌂ <span>Now · Coming later</span></span>
+        <span class="nav-current" aria-current="page">▣ <span>Projects</span></span>
+        <span class="nav-unavailable" title="Not connected to the phone yet">⌁ <span>Momentum · Coming later</span></span>
+        <span class="nav-unavailable" title="Not connected to the phone yet">▦ <span>Apps · Coming later</span></span>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="connection-card"><span class="connection-dot"></span><div><strong>Phone connected</strong><small>Work saves on your phone</small></div></div>
+      <button id="workspace-disconnect" class="disconnect-link" type="button">Disconnect phone</button>
+    </aside>
+    <div class="workspace-main">
+      <div class="workspace-mobile-brand">Virlin <button id="workspace-mobile-disconnect" type="button" aria-label="Disconnect phone">● Phone connected · Disconnect</button></div>
+      <header class="directory-header">
+        <div class="directory-title-line"><h2 id="workspace-heading">Project</h2><span id="project-total" class="project-total"></span></div>
+        <div class="directory-header-actions"><button id="refresh-projects" class="refresh-button" type="button" aria-label="Refresh projects" title="Refresh from phone">↻</button><button id="add-project" class="new-project-button" type="button"><span>＋</span> PROJECT</button></div>
+      </header>
+      <div id="directory-controls" class="directory-controls">
+        <label class="project-search"><span aria-hidden="true">⌕</span><input id="project-search" type="search" placeholder="Search..." aria-label="Search projects"></label>
+        <div class="filter-rail" role="group" aria-label="Filter projects by work status">
+          <button class="filter-chip active" type="button" data-filter="ALL" aria-pressed="true">All</button><span class="filter-divider"></span>
+          <button class="filter-chip" type="button" data-filter="NEED_YOU" aria-pressed="false">Needs You</button>
+          <button class="filter-chip" type="button" data-filter="PROCESSING" aria-pressed="false">Running</button>
+          <button class="filter-chip" type="button" data-filter="READY" aria-pressed="false">Ready</button>
+          <button class="filter-chip" type="button" data-filter="FOCUS" aria-pressed="false">Focused</button>
+          <button class="filter-chip" type="button" data-filter="PAUSED" aria-pressed="false">Paused</button>
+          <button class="filter-chip" type="button" data-filter="SNOOZED" aria-pressed="false">Scheduled</button>
+          <button class="filter-chip" type="button" data-filter="BLOCKED" aria-pressed="false">Blocked</button>
+        </div>
+      </div>
+      <p id="workspace-status" role="status" aria-live="polite"></p>
+      <div id="project-list"></div>
+      <div class="directory-utility"><button id="bulk-projects" type="button">Bulk import projects</button></div>
+      <form id="create-form" hidden><h3 id="create-heading">Create</h3><label>Title<input id="create-title" maxlength="200" required></label><label>Description (optional)<textarea id="create-description" maxlength="4096" rows="3"></textarea></label><div class="workspace-actions"><button class="primary" type="submit">Create on phone</button><button id="create-cancel" class="secondary" type="button">Cancel</button></div></form>
+      <form id="bulk-form" hidden><h3 id="bulk-heading">Bulk import</h3><p>Paste Virlin's version-2 outline JSON. Preview before anything is added.</p><textarea id="bulk-source" rows="10" spellcheck="false" placeholder='{"version":2,"items":[{"name":"Phase 1","children":[{"name":"Task"}]}]}'></textarea><div id="bulk-preview" hidden></div><div class="workspace-actions"><button id="bulk-submit" class="primary" type="submit">Preview import</button><button id="bulk-cancel" class="secondary" type="button">Cancel</button></div></form>
+    </div>
+  </section>
   <section id="usb-panel" class="panel" role="tabpanel" aria-labelledby="usb-tab" hidden><div class="panel-head"><div><h2>USB screen mirror</h2><p>Attach your unlocked Android phone with USB debugging enabled. Virlin Connect detects it automatically.</p></div><span id="usb-summary" class="device-summary">Looking for a phone…</span></div><div id="usb-devices" class="devices" aria-live="polite"></div><p id="usb-notice" role="status"></p></section>
-  <section id="wifi-help" class="panel help"><h2>Pairing steps</h2><ol><li>Open Virlin → Apps → Virlin Link on the phone.</li><li>Tap Open scanner and approve this computer.</li><li>Keep Virlin Link open while testing the connection.</li></ol><p>Wi-Fi pairing currently verifies a secure connection only; desktop editing and mirroring are not available through QR yet. Allow this app on private networks if Windows asks.</p></section>
-  <section id="usb-network-help" class="panel help" hidden><h2>Pair over the cable</h2><ol><li>Connect your unlocked phone to this computer by USB.</li><li>On the phone, open Settings → Network &amp; internet → Hotspot &amp; tethering and turn on USB tethering. Your phone may use mobile data; check your carrier plan.</li><li>When the USB network is detected above, show the QR and scan it in Virlin → Apps → Virlin Link.</li></ol><p>This is the same secure pairing protocol as Wi-Fi, carried over the cable. It does not yet mirror the screen or enable desktop editing. Android requires you to turn on tethering yourself. If pairing times out, check whether Windows classifies the cable network as Public and blocks incoming connections; do not disable your firewall globally.</p></section>
+  <section id="wifi-help" class="panel help"><h2>Pairing steps</h2><ol><li>Open Virlin → Apps → Virlin Link on the phone.</li><li>Tap Open scanner and approve this computer.</li><li>Keep Virlin open while working with projects; you can navigate away from Virlin Link.</li></ol><p>Project browsing, basic creation, and hierarchy bulk import are available here. Notes, files, execution controls, and mirroring are not available through QR yet. Allow this app on private networks if Windows asks.</p></section>
+  <section id="usb-network-help" class="panel help" hidden><h2>Pair over the cable</h2><ol><li>Connect your unlocked phone to this computer by USB.</li><li>On the phone, open Settings → Network &amp; internet → Hotspot &amp; tethering and turn on USB tethering. Your phone may use mobile data; check your carrier plan.</li><li>When the USB network is detected above, show the QR and scan it in Virlin → Apps → Virlin Link.</li></ol><p>This is the same secure project workspace as Wi-Fi, carried over the cable. It does not mirror the screen. Android requires you to turn on tethering yourself.</p></section>
   <section id="usb-help" class="panel help" hidden><h2>Advanced mirror setup</h2><ol><li>Enable Android Developer options and USB debugging on your phone.</li><li>Connect the phone by USB, unlock it, and approve the phone’s USB debugging prompt for this computer.</li><li>Choose Open Virlin when your phone appears above.</li></ol><p>This mirror supports mouse, keyboard, scrolling, and paste. A cable alone cannot grant screen control, and Virlin Connect cannot enable debugging for you.</p></section>
   <footer>No account · No cloud sync · Your phone remains the source of truth</footer>
 </main><script type="module" src="/src/main.js"></script></body></html>

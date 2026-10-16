@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
-use std::io::Read;
+use std::sync::{Arc, Mutex, mpsc, atomic::{AtomicBool, Ordering}};
+use std::io::{Read, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Manager, State, path::BaseDirectory};
 
@@ -18,6 +18,7 @@ struct PairingState(Mutex<Option<PairingSession>>);
 struct PairingSession {
     cancelled: Arc<AtomicBool>,
     status: Arc<Mutex<String>>,
+    requests: mpsc::Sender<(String, mpsc::Sender<Result<String, String>>)>,
 }
 
 #[derive(Serialize)]
@@ -104,18 +105,38 @@ fn start_pairing(address: String, state: State<PairingState>) -> Result<PairingO
     let status = Arc::new(Mutex::new("Waiting for phone approval".to_string()));
     let thread_cancel = cancelled.clone();
     let thread_status = status.clone();
+    let (request_tx, request_rx) = mpsc::channel::<(String, mpsc::Sender<Result<String, String>>) >();
     std::thread::spawn(move || {
         match listener.accept_with_cancel(&thread_cancel) {
             Ok(mut connection) => {
-                *thread_status.lock().unwrap() = "Connected — secure pairing only".into();
+                *thread_status.lock().unwrap() = "Connected — project browser ready".into();
                 let _ = connection.sock.set_read_timeout(Some(std::time::Duration::from_secs(1)));
-                let mut buffer = [0u8; 1];
                 while !thread_cancel.load(Ordering::Relaxed) {
-                    match connection.read(&mut buffer) {
-                        Ok(0) => break,
-                        Ok(_) => break, // No application commands are accepted in this slice.
-                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                        Err(_) => break,
+                    match request_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                        Ok((request, reply)) => {
+                            let _ = connection.sock.set_read_timeout(Some(std::time::Duration::from_secs(60)));
+                            let result = (|| {
+                                if request.len() > 512 * 1024 - 1 { return Err("Request too large".into()); }
+                                connection.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+                                connection.write_all(b"\n").map_err(|e| e.to_string())?;
+                                connection.flush().map_err(|e| e.to_string())?;
+                                read_bounded_line(&mut connection, 1024 * 1024)
+                            })();
+                            let failed = result.is_err();
+                            let _ = reply.send(result);
+                            let _ = connection.sock.set_read_timeout(Some(std::time::Duration::from_secs(1)));
+                            if failed { break; }
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            let mut byte = [0u8; 1];
+                            match connection.read(&mut byte) {
+                                Ok(0) => break,
+                                Ok(_) => break, // The phone never sends unsolicited workspace data.
+                                Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {},
+                                Err(_) => break,
+                            }
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
                 *thread_status.lock().unwrap() = "Disconnected".into();
@@ -123,8 +144,74 @@ fn start_pairing(address: String, state: State<PairingState>) -> Result<PairingO
             Err(error) => *thread_status.lock().unwrap() = error,
         }
     });
-    *guard = Some(PairingSession { cancelled, status });
+    *guard = Some(PairingSession { cancelled, status, requests: request_tx });
     Ok(PairingOffer { rows, expires_at: now + 300, address })
+}
+
+fn read_bounded_line(input: &mut impl Read, limit: usize) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    loop {
+        let mut byte = [0u8];
+        input.read_exact(&mut byte).map_err(|e| e.to_string())?;
+        if byte[0] == b'\n' { return String::from_utf8(bytes).map_err(|_| "Invalid response encoding".into()); }
+        if bytes.len() >= limit { return Err("Project response exceeds size limit".into()); }
+        bytes.push(byte[0]);
+    }
+}
+
+#[tauri::command]
+fn project_tree(state: State<PairingState>) -> Result<String, String> {
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "get_tree"}).to_string())
+}
+
+fn workspace_request(state: &State<PairingState>, request: String) -> Result<String, String> {
+    let sender = {
+        let guard = state.0.lock().map_err(|_| "Pairing state unavailable")?;
+        let session = guard.as_ref().ok_or("Connect a phone first")?;
+        if !session.status.lock().unwrap().starts_with("Connected") { return Err("Connect a phone first".into()); }
+        session.requests.clone()
+    };
+    let (reply_tx, reply_rx) = mpsc::channel();
+    sender.send((request, reply_tx)).map_err(|_| "Phone disconnected")?;
+    reply_rx.recv_timeout(std::time::Duration::from_secs(62)).map_err(|_| "Phone did not respond")?
+}
+
+#[tauri::command]
+fn create_workspace_item(kind: String, owner_type: Option<String>, owner_id: Option<String>, title: String,
+    description: Option<String>, key: String, state: State<PairingState>) -> Result<String, String> {
+    let action = match kind.as_str() {
+        "project" => "create_project",
+        "workstream" => "create_workstream",
+        "task" => "create_task",
+        _ => return Err("Unsupported item type".into()),
+    };
+    if title.trim().is_empty() || title.chars().count() > 200 || description.as_ref().is_some_and(|d| d.chars().count() > 4096) {
+        return Err("Title or description exceeds its limit".into());
+    }
+    if !is_uuid_key(&key) { return Err("Invalid request key".into()); }
+    let request = serde_json::json!({"v": 1, "type": action, "ownerType": owner_type,
+        "ownerId": owner_id, "title": title, "description": description, "key": key}).to_string();
+    workspace_request(&state, request)
+}
+
+#[tauri::command]
+fn preview_workspace_bulk(target: String, owner_type: Option<String>, owner_id: Option<String>,
+    source: String, key: String, state: State<PairingState>) -> Result<String, String> {
+    if source.chars().count() > 250_000 || !is_uuid_key(&key) { return Err("Import is too large or request key is invalid".into()); }
+    let request = serde_json::json!({"v": 1, "type": "preview_bulk", "target": target,
+        "ownerType": owner_type, "ownerId": owner_id, "source": source, "key": key}).to_string();
+    workspace_request(&state, request)
+}
+
+#[tauri::command]
+fn apply_workspace_bulk(key: String, state: State<PairingState>) -> Result<String, String> {
+    if !is_uuid_key(&key) { return Err("Invalid request key".into()); }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "apply_bulk", "key": key}).to_string())
+}
+
+fn is_uuid_key(key: &str) -> bool {
+    key.len() == 36 && key.chars().enumerate().all(|(i, c)|
+        if [8, 13, 18, 23].contains(&i) { c == '-' } else { c.is_ascii_hexdigit() })
 }
 
 #[tauri::command]
@@ -237,7 +324,7 @@ fn open_virlin(app: tauri::AppHandle, serial: String) -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         .manage(PairingState::default())
-        .invoke_handler(tauri::generate_handler![list_lan_addresses, start_pairing, pairing_status, cancel_pairing, list_devices, open_virlin])
+        .invoke_handler(tauri::generate_handler![list_lan_addresses, start_pairing, pairing_status, project_tree, create_workspace_item, preview_workspace_bulk, apply_workspace_bulk, cancel_pairing, list_devices, open_virlin])
         .run(tauri::generate_context!())
         .expect("Virlin Connect failed to start");
 }
@@ -245,6 +332,13 @@ fn main() {
 #[cfg(test)]
 mod device_tests {
     use super::{is_usb_tether_description, parse_devices};
+
+    #[test]
+    fn workspace_frames_are_bounded_and_line_delimited() {
+        assert_eq!(super::read_bounded_line(&mut &b"one\ntwo\n"[..], 8).unwrap(), "one");
+        assert!(super::read_bounded_line(&mut &b"toolong\n"[..], 3).is_err());
+        assert!(super::read_bounded_line(&mut &b"unfinished"[..], 32).is_err());
+    }
 
     #[cfg(windows)]
     #[test]

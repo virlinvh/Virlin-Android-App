@@ -1,0 +1,50 @@
+name: Virlin Connect Windows installer
+
+on:
+  push:
+    branches:
+      - codex/virlin-connect-installer-0.6
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/virlin-connect/package-lock.json
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Download official scrcpy runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Genymobile/scrcpy/releases/latest'
+          $asset = $release.assets | Where-Object name -Match '^scrcpy-win64-v[0-9.]+\.zip$' | Select-Object -First 1
+          if (-not $asset) { throw 'Official scrcpy Windows release asset was not found.' }
+          $archive = Join-Path $env:RUNNER_TEMP 'scrcpy.zip'
+          $unpacked = Join-Path $env:RUNNER_TEMP 'scrcpy'
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+          $scrcpy = Get-ChildItem -LiteralPath $unpacked -Recurse -File -Filter 'scrcpy.exe' | Select-Object -First 1
+          if (-not $scrcpy) { throw 'scrcpy.exe is missing from the official archive.' }
+          ./desktop/virlin-connect/Prepare-Tools.ps1 -ScrcpyDirectory $scrcpy.Directory.FullName
+      - name: Install frontend dependencies
+        working-directory: desktop/virlin-connect
+        run: npm ci
+      - name: Build NSIS installer
+        working-directory: desktop/virlin-connect
+        run: npm run desktop:build
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Virlin-Connect-0.6.0-Windows-installer
+          path: desktop/virlin-connect/src-tauri/target/release/bundle/nsis/*setup.exe
+          if-no-files-found: error
