@@ -9,33 +9,52 @@ const qrWrap = document.querySelector('#qr-wrap');
 const canvas = document.querySelector('#qr');
 const expiry = document.querySelector('#expiry');
 const wifiTab = document.querySelector('#wifi-tab');
+const usbNetworkTab = document.querySelector('#usb-network-tab');
 const usbTab = document.querySelector('#usb-tab');
 const wifiPanel = document.querySelector('#wifi-panel');
+const usbNetworkPanel = document.querySelector('#usb-network-panel');
 const usbPanel = document.querySelector('#usb-panel');
 const wifiHelp = document.querySelector('#wifi-help');
+const usbNetworkHelp = document.querySelector('#usb-network-help');
 const usbHelp = document.querySelector('#usb-help');
+const pairingTitle = document.querySelector('#pairing-title');
+const pairingIntro = document.querySelector('#pairing-intro');
+const usbNetworkSummary = document.querySelector('#usb-network-summary');
+const usbNetworkDetail = document.querySelector('#usb-network-detail');
 const usbDevices = document.querySelector('#usb-devices');
 const usbSummary = document.querySelector('#usb-summary');
 const usbCount = document.querySelector('#usb-count');
 const usbNotice = document.querySelector('#usb-notice');
 let usbChecking = false;
 let openingSerial = null;
+let method = 'wifi';
+let pairingActive = false;
 
-function selectMethod(method) {
-  const usb = method === 'usb';
-  wifiTab.classList.toggle('active', !usb);
-  usbTab.classList.toggle('active', usb);
-  wifiTab.setAttribute('aria-selected', String(!usb));
-  usbTab.setAttribute('aria-selected', String(usb));
-  wifiPanel.hidden = usb;
-  wifiHelp.hidden = usb;
-  usbPanel.hidden = !usb;
-  usbHelp.hidden = !usb;
-  if (usb) refreshUsb();
+function selectMethod(nextMethod) {
+  method = nextMethod;
+  for (const [tab, name] of [[wifiTab, 'wifi'], [usbNetworkTab, 'usb-network'], [usbTab, 'usb-mirror']]) {
+    const active = name === method;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+  }
+  const mirror = method === 'usb-mirror';
+  wifiPanel.hidden = mirror;
+  wifiPanel.setAttribute('aria-labelledby', method === 'usb-network' ? 'usb-network-tab' : 'wifi-tab');
+  usbNetworkPanel.hidden = method !== 'usb-network';
+  usbNetworkHelp.hidden = method !== 'usb-network';
+  wifiHelp.hidden = method !== 'wifi';
+  usbPanel.hidden = !mirror;
+  usbHelp.hidden = !mirror;
+  pairingTitle.textContent = method === 'usb-network' ? 'Secure USB pairing' : 'Secure local pairing';
+  pairingIntro.textContent = method === 'usb-network'
+    ? 'Choose the detected USB network, then scan the QR in Virlin on your phone.'
+    : 'Choose this computer’s network address, then scan the QR in Virlin on your phone.';
+  if (mirror) refreshUsb(); else loadAddresses();
 }
 
 wifiTab.addEventListener('click', () => selectMethod('wifi'));
-usbTab.addEventListener('click', () => selectMethod('usb'));
+usbNetworkTab.addEventListener('click', () => selectMethod('usb-network'));
+usbTab.addEventListener('click', () => selectMethod('usb-mirror'));
 
 function setUsbNotice(message, error = false) {
   usbNotice.textContent = message;
@@ -108,15 +127,27 @@ function setStatus(message, error = false) {
 async function loadAddresses() {
   try {
     const entries = await invoke('list_lan_addresses');
+    const usbEntries = entries.filter(entry => entry.kind === 'usb_tether');
+    usbNetworkSummary.textContent = usbEntries.length ? 'USB network detected' : 'Waiting for USB tethering';
+    usbNetworkDetail.textContent = usbEntries.length
+      ? `${usbEntries.map(entry => `${entry.name} · ${entry.address}`).join(', ')}. No Developer options needed.`
+      : 'Connect the cable and enable USB tethering on your phone. This list updates automatically.';
+    if (pairingActive) return;
+    const selectable = method === 'usb-network' ? usbEntries : entries.filter(entry => entry.kind !== 'usb_tether');
+    const selected = addresses.value;
     addresses.replaceChildren();
-    for (const entry of entries) {
+    for (const entry of selectable) {
       const option = document.createElement('option');
       option.value = entry.address;
       option.textContent = `${entry.name} · ${entry.address}`;
       addresses.append(option);
     }
-    start.disabled = entries.length === 0;
-    setStatus(entries.length ? 'Ready to generate a private, one-time QR.' : 'No private Wi-Fi or hotspot address found. Connect both devices to the same network.', !entries.length);
+    if (selectable.some(entry => entry.address === selected)) addresses.value = selected;
+    start.disabled = selectable.length === 0;
+    const ready = selectable.length > 0;
+    setStatus(ready ? 'Ready to generate a private, one-time QR.' : method === 'usb-network'
+      ? 'Waiting for USB tethering. Turn it on in your phone’s Settings.'
+      : 'No private Wi-Fi or hotspot address found. Connect both devices to the same network.', !ready);
   } catch (error) { setStatus(String(error), true); start.disabled = true; }
 }
 
@@ -142,6 +173,7 @@ start.addEventListener('click', async () => {
     expiry.textContent = `Expires at ${new Date(offer.expires_at * 1000).toLocaleTimeString()} · ${offer.address}`;
     qrWrap.hidden = false;
     cancel.hidden = false;
+    pairingActive = true;
     setStatus('Waiting for approval on your phone…');
   } catch (error) { setStatus(String(error), true); start.disabled = false; }
 });
@@ -149,8 +181,9 @@ cancel.addEventListener('click', async () => {
   try { await invoke('cancel_pairing'); } catch (error) { setStatus(String(error), true); return; }
   qrWrap.hidden = true;
   cancel.hidden = true;
-  start.disabled = false;
+  pairingActive = false;
   setStatus('Disconnected. You can create a fresh invitation.');
+  loadAddresses();
 });
 setInterval(async () => {
   if (cancel.hidden) return;
@@ -159,3 +192,4 @@ setInterval(async () => {
 loadAddresses();
 refreshUsb();
 setInterval(refreshUsb, 3000);
+setInterval(() => { if (method === 'usb-network') loadAddresses(); }, 5000);

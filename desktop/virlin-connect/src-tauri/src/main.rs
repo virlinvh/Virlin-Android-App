@@ -3,6 +3,7 @@
 mod pairing;
 
 use serde::Serialize;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -20,7 +21,7 @@ struct PairingSession {
 }
 
 #[derive(Serialize)]
-struct LanAddress { name: String, address: String }
+struct LanAddress { name: String, address: String, kind: String }
 
 #[derive(Serialize)]
 struct PairingOffer { rows: Vec<String>, expires_at: u64, address: String }
@@ -28,14 +29,62 @@ struct PairingOffer { rows: Vec<String>, expires_at: u64, address: String }
 #[tauri::command]
 fn list_lan_addresses() -> Result<Vec<LanAddress>, String> {
     let interfaces = local_ip_address::list_afinet_netifas().map_err(|e| e.to_string())?;
+    let descriptions = adapter_descriptions();
     let mut addresses: Vec<_> = interfaces.into_iter().filter_map(|(name, ip)| match ip {
-        IpAddr::V4(address) if pairing::is_private_lan(address) =>
-            Some(LanAddress { name, address: address.to_string() }),
+        IpAddr::V4(address) if pairing::is_private_lan(address) => {
+            let kind = if descriptions.get(&name).is_some_and(|description| is_usb_tether_description(description)) {
+                "usb_tether"
+            } else { "network" };
+            Some(LanAddress { name, address: address.to_string(), kind: kind.into() })
+        }
         _ => None,
     }).collect();
     addresses.sort_by(|a, b| a.address.cmp(&b.address));
     Ok(addresses)
 }
+
+fn is_usb_tether_description(description: &str) -> bool {
+    let description = description.to_ascii_lowercase();
+    ["remote ndis", "rndis", "usb tether", "usb ethernet"]
+        .iter().any(|term| description.contains(term))
+}
+
+#[cfg(windows)]
+fn adapter_descriptions() -> HashMap<String, String> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH, GAA_FLAG_SKIP_UNICAST};
+    let mut bytes = 15_000u32;
+    for _ in 0..3 {
+        // u64 gives the WinAPI buffer suitable alignment for IP_ADAPTER_ADDRESSES_LH.
+        let mut buffer = vec![0u64; (bytes as usize).div_ceil(8)];
+        let ptr = buffer.as_mut_ptr() as *mut IP_ADAPTER_ADDRESSES_LH;
+        let result = unsafe { GetAdaptersAddresses(0, GAA_FLAG_SKIP_UNICAST, std::ptr::null(), ptr, &mut bytes) };
+        if result == 111 { continue; } // ERROR_BUFFER_OVERFLOW
+        if result != 0 { break; }
+        let mut descriptions = HashMap::new();
+        let mut current = ptr;
+        for _ in 0..256 {
+            if current.is_null() { break; }
+            let adapter = unsafe { &*current };
+            let name = unsafe { utf16_pointer(adapter.FriendlyName) };
+            let description = unsafe { utf16_pointer(adapter.Description) };
+            descriptions.insert(name, description);
+            current = adapter.Next;
+        }
+        return descriptions;
+    }
+    HashMap::new()
+}
+
+#[cfg(windows)]
+unsafe fn utf16_pointer(pointer: *const u16) -> String {
+    if pointer.is_null() { return String::new(); }
+    let mut len = 0;
+    while len < 512 && unsafe { *pointer.add(len) } != 0 { len += 1; }
+    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(pointer, len) })
+}
+
+#[cfg(not(windows))]
+fn adapter_descriptions() -> HashMap<String, String> { HashMap::new() }
 
 #[tauri::command]
 fn start_pairing(address: String, state: State<PairingState>) -> Result<PairingOffer, String> {
@@ -195,7 +244,23 @@ fn main() {
 
 #[cfg(test)]
 mod device_tests {
-    use super::parse_devices;
+    use super::{is_usb_tether_description, parse_devices};
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_adapter_descriptions_have_names() {
+        let descriptions = super::adapter_descriptions();
+        assert!(descriptions.keys().all(|name| !name.is_empty()));
+        assert!(descriptions.values().all(|description| !description.is_empty()));
+        println!("Windows adapters: {descriptions:?}");
+    }
+
+    #[test]
+    fn usb_network_detection_uses_adapter_description() {
+        assert!(is_usb_tether_description("SAMSUNG Mobile USB Remote NDIS Network Device #2"));
+        assert!(is_usb_tether_description("Android RNDIS Ethernet Adapter"));
+        assert!(!is_usb_tether_description("Killer Wi-Fi 6 Adapter"));
+    }
 
     #[test]
     fn usb_detection_excludes_emulators_and_wifi_transports() {

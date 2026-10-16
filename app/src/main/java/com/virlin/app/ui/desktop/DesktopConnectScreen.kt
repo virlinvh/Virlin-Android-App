@@ -126,8 +126,11 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
         Spacer(Modifier.height(18.dp))
         Text("Virlin, wherever you work.", fontSize = 27.sp, fontWeight = FontWeight.SemiBold, color = Ink)
         Spacer(Modifier.height(8.dp))
-        Text("Connect this phone to a computer on the same Wi-Fi. Your projects remain on your phone.",
+        Text("Connect over Wi-Fi, a hotspot, or a USB-tethered cable. Your projects remain on your phone.",
             fontSize = 15.sp, color = Muted, lineHeight = 22.sp)
+        Spacer(Modifier.height(8.dp))
+        Text("For USB without debugging, connect the cable and turn on USB tethering in the phone's Network & internet settings before scanning the computer's code.",
+            fontSize = 13.sp, color = Muted, lineHeight = 19.sp)
         Spacer(Modifier.height(28.dp))
 
         Column(
@@ -196,7 +199,7 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
         Spacer(Modifier.height(24.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Default.Security, contentDescription = null, tint = Green, modifier = Modifier.size(18.dp))
-            Text("Private network · No USB debugging", color = Muted, fontSize = 13.sp)
+            Text("Private local link · No USB debugging for pairing", color = Muted, fontSize = 13.sp)
         }
         Spacer(Modifier.height(18.dp))
     }
@@ -220,7 +223,7 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
                             status = null
                         }.onFailure {
                             status = when (it) {
-                                is SocketTimeoutException -> "Connection timed out. Check the shared Wi-Fi and Windows private-network firewall permission."
+                                is SocketTimeoutException -> "Connection timed out. Check the selected Wi-Fi or USB-tethered network and Windows firewall permission."
                                 else -> "Could not pair: ${it.message ?: "Connection failed"}. Generate a new code and try again."
                             }
                         }
