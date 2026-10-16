@@ -33,6 +33,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +56,7 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import javax.net.ssl.SSLSocket
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -72,7 +74,32 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
     var status by remember { mutableStateOf<String?>(null) }
     var connecting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    DisposableEffect(connection) { onDispose { connection?.close() } }
+    // Capture the socket for this effect. Reading the mutable state in onDispose
+    // closes the *new* socket when pairing changes null -> connected.
+    DisposableEffect(connection) {
+        val ownedSocket = connection
+        onDispose { ownedSocket?.close() }
+    }
+    LaunchedEffect(connection) {
+        val observedSocket = connection ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            try {
+                while (isActive && !observedSocket.isClosed) {
+                    try {
+                        if (observedSocket.inputStream.read() < 0) break
+                    } catch (_: SocketTimeoutException) {
+                        // The desktop sends no app data yet; keep waiting for a close.
+                    }
+                }
+            } catch (_: IOException) {
+                // A closed or interrupted socket is reported below.
+            }
+        }
+        if (connection === observedSocket) {
+            connection = null
+            status = "Computer disconnected. Scan a fresh code to reconnect."
+        }
+    }
     val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
         val scanned = result.contents
         if (scanned != null) {
@@ -126,7 +153,9 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
                         invitation = null
                         status = null
                         scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                            .setPrompt("Scan the Virlin Connect QR").setBeepEnabled(false))
+                            .setPrompt("Scan the Virlin Connect QR").setBeepEnabled(false)
+                            .setCaptureActivity(VirlinQrCaptureActivity::class.java)
+                            .setOrientationLocked(false))
                     }, enabled = !connecting, modifier = Modifier.fillMaxWidth().height(48.dp).testTag("virlin_link_scan"),
                     colors = ButtonDefaults.buttonColors(containerColor = Green),
                     shape = RoundedCornerShape(12.dp),

@@ -34,6 +34,14 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.desktop.VirlinQrCaptureActivity"
+            android:screenOrientation="fullUser"
+            android:exported="false"
+            android:stateNotNeeded="true"
+            android:theme="@style/zxing_CaptureTheme"
+            android:windowSoftInputMode="stateAlwaysHidden" />
+
         <receiver android:name=".platform.AttentionAlarmReceiver" android:exported="false" />
         <receiver android:name=".platform.NotificationActionReceiver" android:exported="false" />
         <receiver android:name=".platform.BootRescheduleReceiver" android:exported="true">
