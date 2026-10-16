@@ -1,13 +1,16 @@
 <!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Virlin Connect</title></head>
 <body><main class="shell">
-  <header class="top"><span class="mark">V</span><span>Virlin <strong>Connect</strong></span><span class="local">LOCAL NETWORK</span></header>
-  <section class="hero"><div class="eyebrow">CONNECT WITHOUT USB DEBUGGING</div><h1>Pair your phone.</h1><p>Connect over the same Wi-Fi or phone hotspot. Your Virlin data stays on your phone.</p></section>
-  <section class="panel"><h2>Secure local pairing</h2><p>Choose this computer’s network address, then scan the QR in Virlin on your phone.</p>
+  <header class="top"><span class="mark">V</span><span>Virlin <strong>Connect</strong></span><span class="local">LOCAL ONLY</span></header>
+  <section class="hero"><div class="eyebrow">YOUR PHONE, YOUR WORKSPACE</div><h1>Connect your phone.</h1><p>Choose Wi-Fi for secure local pairing or USB to mirror and control Virlin on this computer. Your Virlin data stays on your phone.</p></section>
+  <div class="connection-tabs" role="tablist" aria-label="Connection method"><button id="wifi-tab" class="connection-tab active" type="button" role="tab" aria-selected="true" aria-controls="wifi-panel">Wi-Fi / hotspot</button><button id="usb-tab" class="connection-tab" type="button" role="tab" aria-selected="false" aria-controls="usb-panel">USB <span id="usb-count" hidden></span></button></div>
+  <section id="wifi-panel" class="panel" role="tabpanel" aria-labelledby="wifi-tab"><h2>Secure local pairing</h2><p>Choose this computer’s network address, then scan the QR in Virlin on your phone.</p>
     <div class="controls"><select id="addresses" aria-label="Computer network address"></select><button id="start" class="primary">Show pairing QR</button><button id="cancel" class="secondary" hidden>Disconnect</button></div>
     <div id="qr-wrap" hidden><canvas id="qr" role="img" aria-label="One-time pairing QR code"></canvas><p id="expiry"></p></div>
     <p id="status" role="status">Checking local network…</p>
   </section>
-  <section class="panel help"><h2>On your phone</h2><ol><li>Open Virlin → Apps → Connect desktop.</li><li>Tap Scan QR and approve this computer.</li><li>Keep this screen open while testing the connection.</li></ol><p>This version verifies a secure connection only. Desktop task editing and screen mirroring are not yet available through QR pairing. Windows may ask you to allow this app on private networks.</p></section>
-  <footer>No cloud · No USB debugging · One-time, five-minute invitation</footer>
+  <section id="usb-panel" class="panel" role="tabpanel" aria-labelledby="usb-tab" hidden><div class="panel-head"><div><h2>Connect by USB</h2><p>Attach your unlocked Android phone. Virlin Connect detects it automatically.</p></div><span id="usb-summary" class="device-summary">Looking for a phone…</span></div><div id="usb-devices" class="devices" aria-live="polite"></div><p id="usb-notice" role="status"></p></section>
+  <section id="wifi-help" class="panel help"><h2>Pairing steps</h2><ol><li>Open Virlin → Apps → Virlin Link on the phone.</li><li>Tap Open scanner and approve this computer.</li><li>Keep Virlin Link open while testing the connection.</li></ol><p>Wi-Fi pairing currently verifies a secure connection only; desktop editing and mirroring are not available through QR yet. Allow this app on private networks if Windows asks.</p></section>
+  <section id="usb-help" class="panel help" hidden><h2>USB setup</h2><ol><li>Enable Android Developer options and USB debugging on your phone.</li><li>Connect the phone by USB, unlock it, and approve the phone’s USB debugging prompt for this computer.</li><li>Choose Open Virlin when your phone appears above.</li></ol><p>USB opens a live mirrored window for mouse, keyboard, scrolling, and paste. Nothing is copied from the phone. If USB debugging is disabled, a cable alone cannot grant app control.</p></section>
+  <footer>No account · No cloud sync · Your phone remains the source of truth</footer>
 </main><script type="module" src="/src/main.js"></script></body></html>

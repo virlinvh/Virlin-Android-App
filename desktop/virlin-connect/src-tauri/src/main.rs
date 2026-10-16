@@ -140,6 +140,10 @@ impl NoWindow for Command {
 #[tauri::command]
 fn list_devices(app: tauri::AppHandle) -> Result<Vec<Device>, String> {
     let raw = adb_output(&app, &["devices", "-l"])?;
+    Ok(parse_devices(&raw))
+}
+
+fn parse_devices(raw: &str) -> Vec<Device> {
     let mut devices = Vec::new();
     for line in raw.lines().skip(1) {
         let mut parts = line.split_whitespace();
@@ -151,7 +155,7 @@ fn list_devices(app: tauri::AppHandle) -> Result<Vec<Device>, String> {
         } else if serial.contains(':') { "Wi-Fi" } else { "USB" };
         devices.push(Device { serial: serial.into(), state: state.into(), kind: kind.into(), model });
     }
-    Ok(devices)
+    devices
 }
 
 #[tauri::command]
@@ -159,7 +163,7 @@ fn open_virlin(app: tauri::AppHandle, serial: String) -> Result<(), String> {
     // A serial supplied by the UI is never passed to a shell, but still must match
     // a currently authorized physical device. This also prevents stale selections.
     let devices = list_devices(app.clone())?;
-    let device = devices.iter().find(|d| d.serial == serial && d.state == "device" && d.kind != "Emulator")
+    let device = devices.iter().find(|d| d.serial == serial && d.state == "device" && d.kind == "USB")
         .ok_or("Select an authorized physical phone and try again.")?;
     let installed = adb_output(&app, &["-s", &device.serial, "shell", "pm", "path", PACKAGE])?;
     if !installed.lines().any(|line| line.starts_with("package:")) {
@@ -187,4 +191,21 @@ fn main() {
         .invoke_handler(tauri::generate_handler![list_lan_addresses, start_pairing, pairing_status, cancel_pairing, list_devices, open_virlin])
         .run(tauri::generate_context!())
         .expect("Virlin Connect failed to start");
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::parse_devices;
+
+    #[test]
+    fn usb_detection_excludes_emulators_and_wifi_transports() {
+        let devices = parse_devices("List of devices attached\nABC123 device product:panther model:Pixel_8\nemulator-5554 device model:sdk_gphone64_x86_64\n192.168.1.12:5555 device model:Pixel_8\nDEF456 unauthorized\n");
+        assert_eq!(devices.len(), 4);
+        assert_eq!(devices[0].kind, "USB");
+        assert_eq!(devices[0].model.as_deref(), Some("Pixel 8"));
+        assert_eq!(devices[1].kind, "Emulator");
+        assert_eq!(devices[2].kind, "Wi-Fi");
+        assert_eq!(devices[3].kind, "USB");
+        assert_eq!(devices[3].state, "unauthorized");
+    }
 }
