@@ -211,12 +211,19 @@ private fun AppTile(app: AppEntry, available: Boolean, animate: Boolean) {
             .padding(vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Image(
-            painter = painterResource(app.icon),
-            contentDescription = null, // The whole tile supplies the accessible label.
-            contentScale = ContentScale.Fit,
+        Box(
             modifier = Modifier.size(122.dp).then(iconMovement(app.id, animate)),
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                painter = painterResource(app.icon),
+                contentDescription = null, // The whole tile supplies the accessible label.
+                contentScale = ContentScale.Fit,
+                // This square artwork fills its bitmap edge-to-edge; the original
+                // icons have internal breathing room. Keep one common layout slot.
+                modifier = Modifier.size(if (app.id == "link") 104.dp else 122.dp),
+            )
+        }
         Spacer(Modifier.height(6.dp))
         Text(
             text = app.title,
