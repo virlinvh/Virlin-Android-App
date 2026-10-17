@@ -26,9 +26,10 @@
     </aside>
     <div class="workspace-main">
       <div class="workspace-mobile-brand">Virlin <button id="workspace-mobile-disconnect" type="button" aria-label="Disconnect phone">● Phone connected · Disconnect</button></div>
+      <div id="project-breadcrumb" class="project-breadcrumb" hidden><button id="project-back" type="button">Projects</button><span aria-hidden="true">›</span><span id="project-breadcrumb-name"></span></div>
       <header class="directory-header">
-        <div class="directory-title-line"><h2 id="workspace-heading">Project</h2><span id="project-total" class="project-total"></span></div>
-        <div class="directory-header-actions"><button id="refresh-projects" class="refresh-button" type="button" aria-label="Refresh projects" title="Refresh from phone">↻</button><button id="add-project" class="new-project-button" type="button"><span>＋</span> PROJECT</button></div>
+        <div><div class="directory-title-line"><h2 id="workspace-heading">Project</h2><span id="project-total" class="project-total"></span></div><p id="project-subtitle" class="project-subtitle" hidden></p></div>
+        <div class="directory-header-actions"><button id="refresh-projects" class="refresh-button" type="button" aria-label="Refresh projects" title="Refresh from phone">↻</button><button id="add-project" class="new-project-button" type="button"><span>＋</span> PROJECT</button><div id="project-add-wrap" class="project-add-wrap" hidden><button id="project-add" class="project-add-button" type="button" aria-haspopup="menu" aria-expanded="false">＋ Add to project</button><div id="project-add-menu" class="project-add-menu" role="menu" hidden><button type="button" role="menuitem" data-project-action="workstream">Workstream</button><button type="button" role="menuitem" data-project-action="task">Standalone task</button><button type="button" role="menuitem" data-project-action="bulk-workstreams">Bulk workstreams</button><button type="button" role="menuitem" data-project-action="bulk-tasks">Bulk tasks</button><button type="button" role="menuitem" disabled title="Project knowledge is not available through the phone link yet">Project knowledge · unavailable</button></div></div></div>
       </header>
       <div id="directory-controls" class="directory-controls">
         <label class="project-search"><span aria-hidden="true">⌕</span><input id="project-search" type="search" placeholder="Search..." aria-label="Search projects"></label>

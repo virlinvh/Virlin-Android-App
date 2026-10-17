@@ -45,6 +45,6 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: Virlin-Connect-0.6.0-Windows-installer
+          name: Virlin-Connect-0.6.1-Windows-installer
           path: desktop/virlin-connect/src-tauri/target/release/bundle/nsis/*setup.exe
           if-no-files-found: error

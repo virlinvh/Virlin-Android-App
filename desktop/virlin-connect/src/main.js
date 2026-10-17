@@ -56,6 +56,41 @@ const directoryControls = document.querySelector('#directory-controls');
 const addProject = document.querySelector('#add-project');
 const bulkProjects = document.querySelector('#bulk-projects');
 const filterChips = [...document.querySelectorAll('.filter-chip')];
+const projectBreadcrumb = document.querySelector('#project-breadcrumb');
+const projectBreadcrumbName = document.querySelector('#project-breadcrumb-name');
+const projectSubtitle = document.querySelector('#project-subtitle');
+const projectAddWrap = document.querySelector('#project-add-wrap');
+const projectAdd = document.querySelector('#project-add');
+const projectAddMenu = document.querySelector('#project-add-menu');
+
+function closeProjectMenu() {
+  projectAddMenu.hidden = true;
+  projectAdd.setAttribute('aria-expanded', 'false');
+}
+projectAdd.addEventListener('click', () => {
+  projectAddMenu.hidden = !projectAddMenu.hidden;
+  projectAdd.setAttribute('aria-expanded', String(!projectAddMenu.hidden));
+});
+document.addEventListener('click', event => {
+  if (!projectAddWrap.contains(event.target)) closeProjectMenu();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeProjectMenu();
+});
+document.querySelector('#project-back').addEventListener('click', () => {
+  selectedProjectId = null;
+  closeProjectMenu();
+  if (projectTree) renderProjects(projectTree);
+});
+projectAddMenu.addEventListener('click', event => {
+  const action = event.target.closest('[data-project-action]')?.dataset.projectAction;
+  if (!action || !selectedProjectId) return;
+  closeProjectMenu();
+  if (action === 'workstream') beginCreate('workstream', 'project', selectedProjectId);
+  if (action === 'task') beginCreate('task', 'project', selectedProjectId);
+  if (action === 'bulk-workstreams') beginBulk('workstreams', 'project', selectedProjectId);
+  if (action === 'bulk-tasks') beginBulk('tasks', 'project', selectedProjectId);
+});
 
 projectSearch.addEventListener('input', () => {
   projectQuery = projectSearch.value.trim().toLocaleLowerCase();
@@ -271,17 +306,6 @@ function treeRow(title, detail, depth = 0, actions = []) {
   return row;
 }
 
-function sectionHeading(label, count) {
-  const heading = document.createElement('div');
-  heading.className = 'project-section-heading';
-  const title = document.createElement('h3');
-  title.textContent = label;
-  const number = document.createElement('span');
-  number.textContent = String(count);
-  heading.append(title, number);
-  return heading;
-}
-
 function projectCard(project, tree) {
   const card = document.createElement('button');
   card.className = 'project-card';
@@ -311,8 +335,203 @@ function projectCard(project, tree) {
   arrow.className = 'project-arrow';
   arrow.textContent = '›';
   card.append(icon, content, ring, arrow);
-  card.addEventListener('click', () => { selectedProjectId = project.id; renderProjects(tree); });
+  card.addEventListener('click', () => {
+    selectedProjectId = project.id;
+    renderProjects(tree);
+    window.scrollTo(0, 0);
+  });
   return card;
+}
+
+function projectAction(label, handler, className = '') {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener('click', handler);
+  return button;
+}
+
+function taskRoots(tree, owner, ownerId) {
+  return tree.tasks.filter(task => task[owner] === ownerId && !task.parentTaskId)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+function taskBranch(tree, tasks, depth = 0, ancestors = new Set()) {
+  const fragment = document.createDocumentFragment();
+  for (const task of tasks) {
+    if (ancestors.has(task.id)) continue;
+    fragment.append(treeRow(task.title, task.status.replaceAll('_', ' '), depth,
+      [{ label: '+ Subtask', kind: 'task', ownerType: 'task', ownerId: task.id },
+        { label: 'Bulk', mode: 'bulk', target: 'subtasks', ownerType: 'task', ownerId: task.id }]));
+    const children = tree.tasks.filter(item => item.parentTaskId === task.id)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    fragment.append(taskBranch(tree, children, depth + 1, new Set([...ancestors, task.id])));
+  }
+  return fragment;
+}
+
+function detailSection(title, count, actions = []) {
+  const section = document.createElement('section');
+  section.className = 'project-detail-section';
+  const head = document.createElement('div');
+  head.className = 'project-detail-section-head';
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  if (count !== null) {
+    const number = document.createElement('span');
+    number.className = 'detail-count';
+    number.textContent = String(count);
+    heading.append(' ', number);
+  }
+  const controls = document.createElement('div');
+  controls.className = 'project-detail-section-actions';
+  controls.append(...actions);
+  head.append(heading, controls);
+  section.append(head);
+  return section;
+}
+
+function renderProjectDetail(project, tree) {
+  const allTasks = tree.tasks.filter(task => task.projectId === project.id);
+  const streams = tree.workstreams.filter(item => item.projectId === project.id)
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  const standalone = taskRoots(tree, 'projectId', project.id).filter(task => !task.workStreamId);
+  const percent = Number.isFinite(project.progressPercent)
+    ? Math.max(0, Math.min(100, project.progressPercent)) : null;
+
+  const summary = document.createElement('div');
+  summary.className = 'project-progress-strip';
+  const progress = document.createElement('strong');
+  progress.textContent = percent === null ? '—' : `${percent}%`;
+  const track = document.createElement('div');
+  track.className = 'project-progress-track';
+  track.setAttribute('role', 'progressbar');
+  track.setAttribute('aria-label', 'Project progress');
+  track.setAttribute('aria-valuemin', '0');
+  track.setAttribute('aria-valuemax', '100');
+  if (percent !== null) track.setAttribute('aria-valuenow', String(percent));
+  const fill = document.createElement('span');
+  fill.style.width = `${percent ?? 0}%`;
+  track.append(fill);
+  const description = document.createElement('span');
+  description.textContent = `${allTasks.length} task${allTasks.length === 1 ? '' : 's'} · ${streams.length} workstream${streams.length === 1 ? '' : 's'}`;
+  summary.append(progress, track, description);
+  projectList.append(summary);
+
+  const tabs = document.createElement('div');
+  tabs.className = 'project-detail-tabs';
+  tabs.setAttribute('role', 'tablist');
+  tabs.setAttribute('aria-label', 'Project sections');
+  const overviewTab = document.createElement('button');
+  overviewTab.type = 'button';
+  overviewTab.setAttribute('role', 'tab');
+  overviewTab.setAttribute('aria-selected', 'true');
+  overviewTab.textContent = 'Overview';
+  tabs.append(overviewTab);
+  for (const title of ['Knowledge', 'Activity']) {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.disabled = true;
+    tab.textContent = title;
+    tab.title = `${title} is not available through the phone link yet`;
+    tabs.append(tab);
+  }
+  projectList.append(tabs);
+
+  const workstreams = detailSection('Workstreams', streams.length, [
+    projectAction('Mind map · unavailable', () => {}, 'detail-disabled-action'),
+    projectAction('+ Workstream', () => beginCreate('workstream', 'project', project.id)),
+    projectAction('Bulk', () => beginBulk('workstreams', 'project', project.id)),
+  ]);
+  workstreams.querySelector('.detail-disabled-action').disabled = true;
+  workstreams.querySelector('.detail-disabled-action').title = 'Mind map is not available through the phone link yet';
+  const grid = document.createElement('div');
+  grid.className = 'project-workstream-grid';
+  for (const stream of streams) {
+    const roots = taskRoots(tree, 'workStreamId', stream.id);
+    const streamTasks = tree.tasks.filter(task => task.workStreamId === stream.id);
+    const card = document.createElement('div');
+    card.className = 'project-workstream-card';
+    const top = document.createElement('button');
+    top.className = 'project-workstream-toggle';
+    top.type = 'button';
+    top.setAttribute('aria-expanded', 'false');
+    const icon = document.createElement('span');
+    icon.className = 'project-workstream-icon';
+    icon.textContent = stream.title.slice(0, 1).toUpperCase();
+    icon.setAttribute('aria-hidden', 'true');
+    const names = document.createElement('span');
+    names.className = 'project-workstream-names';
+    const name = document.createElement('strong');
+    name.textContent = stream.title;
+    const meta = document.createElement('small');
+    meta.textContent = `${streamTasks.length} task${streamTasks.length === 1 ? '' : 's'}`;
+    names.append(name, meta);
+    const state = document.createElement('span');
+    state.className = 'project-workstream-state';
+    state.textContent = (stream.effectiveState || stream.state).replaceAll('_', ' ');
+    const arrow = document.createElement('span');
+    arrow.className = 'project-workstream-arrow';
+    arrow.textContent = '⌄';
+    arrow.setAttribute('aria-hidden', 'true');
+    top.append(icon, names, state, arrow);
+    const details = document.createElement('div');
+    details.className = 'project-workstream-details';
+    details.hidden = true;
+    const actions = document.createElement('div');
+    actions.className = 'project-workstream-actions';
+    actions.append(projectAction('+ Task', () => beginCreate('task', 'workstream', stream.id)),
+      projectAction('Bulk tasks', () => beginBulk('tasks', 'workstream', stream.id)));
+    details.append(actions);
+    if (roots.length) details.append(taskBranch(tree, roots));
+    else {
+      const empty = document.createElement('p');
+      empty.className = 'project-detail-empty';
+      empty.textContent = 'No tasks in this workstream yet.';
+      details.append(empty);
+    }
+    top.addEventListener('click', () => {
+      details.hidden = !details.hidden;
+      top.setAttribute('aria-expanded', String(!details.hidden));
+    });
+    card.append(top, details);
+    grid.append(card);
+  }
+  if (!streams.length) {
+    const empty = document.createElement('p');
+    empty.className = 'project-detail-empty';
+    empty.textContent = 'No workstreams yet. Add one to organize this project.';
+    grid.append(empty);
+  }
+  workstreams.append(grid);
+  projectList.append(workstreams);
+
+  const lower = document.createElement('div');
+  lower.className = 'project-lower-grid';
+  const tasks = detailSection('Standalone tasks', standalone.length, [
+    projectAction('+ Task', () => beginCreate('task', 'project', project.id)),
+    projectAction('Bulk', () => beginBulk('tasks', 'project', project.id)),
+  ]);
+  const taskPanel = document.createElement('div');
+  taskPanel.className = 'project-detail-panel';
+  if (standalone.length) taskPanel.append(taskBranch(tree, standalone));
+  else {
+    const empty = document.createElement('p');
+    empty.className = 'project-detail-empty';
+    empty.textContent = 'No standalone tasks yet.';
+    taskPanel.append(empty);
+  }
+  tasks.append(taskPanel);
+  const knowledge = detailSection('Project knowledge', null);
+  const knowledgePanel = document.createElement('div');
+  knowledgePanel.className = 'project-detail-panel project-knowledge-unavailable';
+  const knowledgeText = document.createElement('p');
+  knowledgeText.textContent = 'Knowledge items are still on your phone. Viewing and adding them from Windows is not connected yet.';
+  knowledgePanel.append(knowledgeText);
+  knowledge.append(knowledgePanel);
+  lower.append(tasks, knowledge);
+  projectList.append(lower);
 }
 
 function renderProjects(tree) {
@@ -323,6 +542,10 @@ function renderProjects(tree) {
   addProject.hidden = Boolean(project);
   bulkProjects.hidden = Boolean(project);
   projectTotal.hidden = Boolean(project);
+  projectBreadcrumb.hidden = !project;
+  projectSubtitle.hidden = !project;
+  projectAddWrap.hidden = !project;
+  if (!project) closeProjectMenu();
   if (!project) {
     selectedProjectId = null;
     heading.textContent = 'Project';
@@ -355,52 +578,9 @@ function renderProjects(tree) {
     return;
   }
   heading.textContent = project.title;
-  const back = document.createElement('button');
-  back.className = 'project-back';
-  back.type = 'button';
-  back.textContent = '← All projects';
-  back.addEventListener('click', () => { selectedProjectId = null; renderProjects(tree); });
-  projectList.append(back);
-  const actions = document.createElement('div');
-  actions.className = 'project-detail-actions';
-  for (const action of [
-    { label: '+ Workstream', kind: 'workstream', ownerType: 'project', ownerId: project.id },
-    { label: '+ Task', kind: 'task', ownerType: 'project', ownerId: project.id },
-    { label: 'Bulk workstreams', mode: 'bulk', target: 'workstreams', ownerType: 'project', ownerId: project.id },
-    { label: 'Bulk tasks', mode: 'bulk', target: 'tasks', ownerType: 'project', ownerId: project.id },
-  ]) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = action.label;
-    button.addEventListener('click', () => action.mode === 'bulk'
-      ? beginBulk(action.target, action.ownerType, action.ownerId)
-      : beginCreate(action.kind, action.ownerType, action.ownerId));
-    actions.append(button);
-  }
-  projectList.append(actions);
-  const appendTasks = (owner, ownerId, depth, ancestors = new Set()) => {
-    for (const task of tree.tasks.filter(item => item[owner] === ownerId &&
-        (owner === 'parentTaskId' || !item.parentTaskId) &&
-        (owner !== 'projectId' || !item.workStreamId))) {
-      if (ancestors.has(task.id)) continue;
-      projectList.append(treeRow(task.title, task.status, depth,
-        [{ label: '+ Subtask', kind: 'task', ownerType: 'task', ownerId: task.id },
-          { label: 'Bulk', mode: 'bulk', target: 'subtasks', ownerType: 'task', ownerId: task.id }]));
-      appendTasks('parentTaskId', task.id, depth + 1, new Set([...ancestors, task.id]));
-    }
-  };
-  const streams = tree.workstreams.filter(item => item.projectId === project.id)
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-  projectList.append(sectionHeading('Workstreams', streams.length));
-  for (const stream of streams) {
-    projectList.append(treeRow(stream.title, `Workstream · ${stream.state}`, 0,
-      [{ label: '+ Task', kind: 'task', ownerType: 'workstream', ownerId: stream.id },
-        { label: 'Bulk', mode: 'bulk', target: 'tasks', ownerType: 'workstream', ownerId: stream.id }]));
-    appendTasks('workStreamId', stream.id, 1);
-  }
-  const standalone = tree.tasks.filter(item => item.projectId === project.id && !item.parentTaskId && !item.workStreamId);
-  projectList.append(sectionHeading('Standalone tasks', standalone.length));
-  appendTasks('projectId', project.id, 0);
+  projectBreadcrumbName.textContent = project.title;
+  projectSubtitle.textContent = project.description || 'Your work, organized for desktop.';
+  renderProjectDetail(project, tree);
 }
 
 async function loadProjects() {
