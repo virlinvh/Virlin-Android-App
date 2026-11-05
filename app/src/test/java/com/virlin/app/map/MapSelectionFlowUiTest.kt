@@ -4,6 +4,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.virlin.app.ui.map.*
 import org.junit.Assert.assertEquals
@@ -20,7 +21,38 @@ import org.robolectric.annotation.GraphicsMode
 class MapSelectionFlowUiTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun selectedBoxResizesFromItsInvisibleRightEdgeOnlyInOrganizeMode() {
+    @Test fun boxColorPickerTogglesSameSwatchAndKeepsToolbarSelection() {
+        val appearance = mutableStateOf(MapAppearance())
+        val open = mutableStateOf(false)
+        compose.setContent {
+            MaterialTheme {
+                MapStructureBar(MapTopic("node", null, "Selected", kind = MapKind.TASK), 1,
+                    null, true, onOpen = {}, onEdit = {}, onMove = {}, onCopy = {},
+                    onDuplicate = {}, onPaste = {}, onClear = {},
+                    colorPickerOpen = open.value,
+                    selectedBoxColor = appearance.value.nodeColors["node"],
+                    onToggleColorPicker = { open.value = !open.value },
+                    onChooseBoxColor = { appearance.value =
+                        toggleBoxColor(appearance.value, "node", it) },
+                    onClearBoxColor = { appearance.value =
+                        clearBoxColor(appearance.value, "node") })
+            }
+        }
+        compose.onNodeWithContentDescription("Box color").performScrollTo().performClick()
+        compose.onNodeWithTag("map_box_color_palette").assertExists()
+        val paletteHeight = compose.onNodeWithTag("map_box_color_palette")
+            .fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot().height
+        assertTrue("Palette must not cover the map", paletteHeight < 200f)
+        compose.onNodeWithContentDescription("Box color").assertIsNotSelected()
+        compose.onNodeWithTag("map_box_color_none").assertIsSelected()
+        compose.onNodeWithTag("map_box_color_0").performClick().assertIsSelected()
+        compose.onNodeWithContentDescription("Box color").assertIsSelected()
+        compose.onNodeWithTag("map_box_color_none").performClick().assertIsSelected()
+        compose.onNodeWithTag("map_box_color_0").assertIsNotSelected()
+        compose.onNodeWithContentDescription("Box color").assertIsNotSelected()
+    }
+
+    @Test fun selectedBoxShowsResizeHandleOnlyWhenToolIsArmedInOrganizeMode() {
         val topics = listOf(
             MapTopic("p", null, "Project", kind = MapKind.PROJECT),
             MapTopic("t", "p", "A task with several words", kind = MapKind.TASK),
@@ -32,7 +64,8 @@ class MapSelectionFlowUiTest {
                 VirlinProjectMindMap("Project", topics, appearance.value,
                     onAppearanceChange = { appearance.value = it },
                     onNodeOpen = {}, onBack = {}, onExportXmind = {}, onExportVirlin = {},
-                    onOpenVirlinMap = {}, structureMode = organizing.value, selectedId = "t")
+                    onOpenVirlinMap = {}, structureMode = organizing.value, selectedId = "t",
+                    resizeModeId = if (organizing.value) "t" else null)
             }
         }
         compose.onNodeWithTag("mind_map_resize_edge_t").assertExists()
@@ -50,6 +83,74 @@ class MapSelectionFlowUiTest {
         compose.onNodeWithTag("mind_map_resize_edge_t").assertDoesNotExist()
     }
 
+    @Test fun resizeToolbarActionTogglesSelectedStateForEveryNodeKind() {
+        val armed = mutableStateOf(false)
+        val kind = mutableStateOf(MapKind.PROJECT)
+        compose.setContent {
+            MaterialTheme {
+                MapStructureBar(MapTopic("node", null, "Selected", kind = kind.value), 1,
+                    null, true, onOpen = {}, onEdit = {}, onMove = {}, onCopy = {},
+                    onDuplicate = {}, onPaste = {}, onClear = {},
+                    resizing = armed.value, onToggleResize = { armed.value = !armed.value })
+            }
+        }
+        for (level in MapKind.entries) {
+            compose.runOnIdle { kind.value = level; armed.value = false }
+            compose.onNodeWithContentDescription("Resize horizontally").assertIsNotSelected().performClick()
+            compose.onNodeWithContentDescription("Resize horizontally").assertIsSelected()
+        }
+    }
+
+    @Test fun deleteToolbarActionUsesExplicitCallback() {
+        var requests = 0
+        compose.setContent {
+            MaterialTheme {
+                MapStructureBar(MapTopic("w", "p", "Workstream", kind = MapKind.WORKSTREAM),
+                    3, null, true, onOpen = {}, onEdit = {}, onMove = {}, onCopy = {},
+                    onDuplicate = {}, onPaste = {}, onClear = {}, onDelete = { requests++ })
+            }
+        }
+        compose.onNodeWithContentDescription("Delete selected box").performClick()
+        compose.runOnIdle { assertEquals(1, requests) }
+    }
+
+    @Test fun deletionWarningRequiresExactNodeName() {
+        var deletions = 0
+        compose.setContent {
+            MaterialTheme {
+                com.virlin.app.ui.hierarchy.DeleteHierarchyDialog("Release task", "task",
+                    false, null, {}, { deletions++ })
+            }
+        }
+        compose.onNodeWithText("Delete task").assertIsNotEnabled()
+        compose.onNode(hasSetTextAction()).performTextInput("Release task")
+        compose.onNodeWithText("Delete task").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, deletions) }
+    }
+
+    @Test fun armedHandleAppearsForProjectWorkstreamAndNestedTask() {
+        val topics = listOf(
+            MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            MapTopic("w", "p", "Workstream", kind = MapKind.WORKSTREAM),
+            MapTopic("t", "w", "Task", kind = MapKind.TASK),
+            MapTopic("child", "t", "Subtask", kind = MapKind.TASK),
+        )
+        val selected = mutableStateOf("p")
+        compose.setContent {
+            MaterialTheme {
+                VirlinProjectMindMap("Project", topics, MapAppearance(),
+                    onAppearanceChange = {}, onNodeOpen = {}, onBack = {},
+                    onExportXmind = {}, onExportVirlin = {}, onOpenVirlinMap = {},
+                    structureMode = true, selectedId = selected.value,
+                    resizeModeId = selected.value)
+            }
+        }
+        for (id in listOf("p", "w", "t", "child")) {
+            compose.runOnIdle { selected.value = id }
+            compose.onNodeWithTag("mind_map_resize_edge_$id").assertExists()
+        }
+    }
+
     @Test fun organizeBarShowsCompactIconActionsAndDuplicate() {
         var duplicateCalls = 0
         var branchCalls = 0
@@ -65,8 +166,13 @@ class MapSelectionFlowUiTest {
             }
         }
         compose.onNodeWithContentDescription("Edit").assertExists()
+        val edit = compose.onNodeWithContentDescription("Edit").getUnclippedBoundsInRoot()
+        val branch = compose.onNodeWithContentDescription("Add branch").getUnclippedBoundsInRoot()
+        val into = compose.onNodeWithContentDescription("Into").getUnclippedBoundsInRoot()
+        val close = compose.onNodeWithContentDescription("Clear selection").getUnclippedBoundsInRoot()
+        assertTrue(branch.left < edit.left && edit.left < into.left && into.left < close.left)
         compose.onNodeWithContentDescription("Copy").assertExists()
-        compose.onNodeWithContentDescription("Add branch").performClick()
+        compose.onNodeWithContentDescription("Add branch").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Duplicate").performClick()
         compose.onNodeWithContentDescription("Clear selection").assertExists()
         compose.onNodeWithText("Create Mode").assertDoesNotExist()
@@ -93,7 +199,7 @@ class MapSelectionFlowUiTest {
         }
         for (level in MapKind.entries) {
             compose.runOnIdle { kind.value = level }
-            compose.onNodeWithContentDescription("Add branch").performClick()
+            compose.onNodeWithContentDescription("Add branch").performScrollTo().performClick()
             compose.runOnIdle {
                 assertEquals(MapKind.entries.indexOf(level) + 1, calls)
                 }
@@ -459,8 +565,8 @@ class MapSelectionFlowUiTest {
                     onAppearanceChange = {}, onNodeOpen = { calls += it.id to "open" },
                     onBack = {}, onExportXmind = {}, onExportVirlin = {}, onOpenVirlinMap = {},
                     selectedId = selected.value, onStructureSelect = { selected.value = it?.id },
-                    onMoveTask = { calls += it.id to "move" },
                     onOpenTaskPage = { calls += it.id to "page" },
+                    onOpenFlashcards = { calls += it.id to "flashcard" },
                     onAddChoice = { owner, kind -> calls += owner.id to kind.name },
                     onAddContainer = { calls += it.id to "container" })
             }
@@ -475,13 +581,18 @@ class MapSelectionFlowUiTest {
         compose.onNodeWithTag("mind_map_branch_drag_handle").assertDoesNotExist()
         compose.onNodeWithTag(mapTaskActionTag("Open Project")).assertIsDisplayed()
         compose.onNodeWithTag(mapTaskActionTag("Move")).assertDoesNotExist()
+        compose.onNodeWithTag(mapTaskActionTag("Flashcard")).assertIsDisplayed()
+        compose.onNodeWithTag(mapTaskActionTag("Flashcard")).performClick()
         compose.onNodeWithTag(mapTaskActionTag("Page")).performClick()
         compose.onNodeWithTag(mapTaskActionTag("Add")).performClick()
         compose.onNodeWithTag("mind_map_add_note").performClick()
         listOf(task, child).forEach { owner ->
             compose.runOnIdle { selected.value = owner.id }
             compose.onNodeWithTag(MapSelectedTaskBarTag).assertIsDisplayed()
-            listOf("Open Task", "Move", "Page").forEach { label ->
+            compose.onNodeWithTag(mapTaskActionTag("Move")).assertDoesNotExist()
+            compose.onNodeWithTag(mapTaskActionTag("Flashcard")).assertIsDisplayed()
+            compose.onNodeWithTag(mapTaskActionTag("Flashcard")).performClick()
+            listOf("Open Task", "Page").forEach { label ->
                 compose.onNodeWithTag(mapTaskActionTag(label)).performClick()
             }
             MapAddKind.entries.forEach { kind ->
@@ -495,11 +606,11 @@ class MapSelectionFlowUiTest {
         }
         compose.runOnIdle {
             val expected = listOf(task, child).flatMap { owner ->
-                (listOf("open", "move", "page") + MapAddKind.entries.map { it.name })
+                (listOf("flashcard", "open", "page") + MapAddKind.entries.map { it.name })
                     .map { owner.id to it }
             }
             assertEquals(listOf(stream.id to "page", stream.id to "NOTE",
-                project.id to "page", project.id to "NOTE") + expected, calls)
+                project.id to "flashcard", project.id to "page", project.id to "NOTE") + expected, calls)
         }
     }
 }

@@ -11,6 +11,24 @@ import java.time.Instant
 
 @RunWith(RobolectricTestRunner::class)
 class BulkHierarchyTest {
+    @Test fun recognizesIndentedOutlineAndExistingJsonWithSameTree() {
+        val outline = "- Build release APK\n  - Check signing\n  - Test on Pixel 8\n- Prepare release notes"
+        val recognized = BulkHierarchy.recognize(outline)
+        assertEquals("Outline", recognized.format)
+        assertEquals(listOf("Build release APK", "Prepare release notes"), recognized.nodes.map { it.name })
+        assertEquals(listOf("Check signing", "Test on Pixel 8"), recognized.nodes.first().children.map { it.name })
+        assertEquals(recognized.nodes, BulkHierarchy.parse(recognized.json))
+        assertEquals(recognized.nodes, BulkHierarchy.recognize(recognized.json).nodes)
+        val numbered = BulkHierarchy.recognize("1. Build\n1.1 Check\n2. Publish")
+        assertEquals(listOf("Build", "Publish"), numbered.nodes.map { it.name })
+        assertEquals("Check", numbered.nodes.first().children.single().name)
+    }
+
+    @Test fun outlineRejectsMissingParentsDuplicatesAndOversizedNames() {
+        listOf("1.1 Child without parent", "- A\n- a", "- ${"x".repeat(201)}")
+            .forEach { assertTrue(runCatching { BulkHierarchy.recognize(it) }.isFailure) }
+    }
+
     @Test fun projectImportCreatesAllLevelsWithCorrectOwners() = runTest {
         val repo = InMemoryWorkStreamRepository()
         val actions = DefaultVirlinActions(repo, FakeClock(Instant.EPOCH), SequentialIdProvider())
@@ -42,6 +60,18 @@ class BulkHierarchyTest {
         assertTrue(repo.tasks.value.all { it.projectId == project.id && it.workStreamId == stream.id })
         assertEquals(4, (actions.bulkCreateTasks(source, CreateTask("", projectId = project.id)) as ActionResult.Success).value)
         assertEquals(4, repo.tasks.value.count { it.workStreamId == null })
+    }
+
+    @Test fun closedParentImportReturnsReasonAndDoesNotWrite() = runTest {
+        val repo = InMemoryWorkStreamRepository()
+        val actions = DefaultVirlinActions(repo, FakeClock(Instant.EPOCH), SequentialIdProvider())
+        val project = (actions.createProject(CreateProject("Base")) as ActionResult.Success).value
+        val parent = (actions.createTask(CreateTask("Closed", projectId = project.id)) as ActionResult.Success).value
+        assertTrue(actions.completeTask(parent.id) is ActionResult.Success)
+        val source = """{"version":2,"items":[{"name":"Must not be added"}]}"""
+        assertEquals(ActionResult.Rejected(DomainError.TaskAlreadyClosed),
+            actions.bulkCreateTasks(source, CreateTask("", parentTaskId = parent.id)))
+        assertEquals(listOf(parent.id), repo.tasks.value.map { it.id })
     }
 
     @Test fun destinationSpecificPromptsAndPreview() {

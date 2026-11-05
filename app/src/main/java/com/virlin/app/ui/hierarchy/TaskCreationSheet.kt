@@ -57,6 +57,7 @@ internal fun TaskCreationSheet(
     var mode by rememberSaveable { mutableStateOf(StreamExecutionMode.INHERIT) }
     var choosing by remember { mutableStateOf<String?>(null) }
     var preview by remember { mutableStateOf<List<String>?>(null) }
+    var recognized by remember { mutableStateOf<BulkHierarchy.RecognizedInput?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -152,9 +153,14 @@ internal fun TaskCreationSheet(
                                 Text("Bulk import format", fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold, color = ink)
                                 Spacer(Modifier.height(8.dp))
-                                Text("Paste the same JSON hierarchy supported by bulk creation. Up to ${BulkHierarchy.MAX_ITEMS} items including children.",
+                                Text("Paste an outline with one task per line. Indent to create subtasks, or paste the existing JSON hierarchy. Up to ${BulkHierarchy.MAX_ITEMS} items including children.",
                                     color = muted, fontSize = 13.sp)
                                 Spacer(Modifier.height(12.dp))
+                                Text("- Build release APK\n  - Check signing\n  - Test on Pixel 8\n- Prepare release notes",
+                                    Modifier.fillMaxWidth().background(Color(0xFFF4F6F7), RoundedCornerShape(12.dp))
+                                        .padding(14.dp), color = ink, fontSize = 12.sp)
+                                Spacer(Modifier.height(8.dp))
+                                Text("JSON is also accepted:", color = muted, fontSize = 12.sp)
                                 Text("{\"version\":2,\"items\":[{\"name\":\"First task\"}]}",
                                     Modifier.fillMaxWidth().background(Color(0xFFF4F6F7), RoundedCornerShape(12.dp))
                                         .padding(14.dp), color = ink, fontSize = 12.sp)
@@ -184,13 +190,14 @@ internal fun TaskCreationSheet(
                                 }
                             } else if (preview == null) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("Paste JSON", Modifier.weight(1f), color = muted, fontSize = 13.sp)
+                                    Text("Paste a task outline", Modifier.weight(1f), color = muted, fontSize = 13.sp)
+                                    Text("Text or JSON", color = muted, fontSize = 12.sp)
                                     IconButton(onClick = { choosing = "help" }) {
                                         Icon(Icons.Outlined.Info, "Import format and AI prompt", tint = muted)
                                     }
                                 }
-                                OutlinedTextField(input, { input = it; error = null },
-                                    placeholder = { Text("Paste your task hierarchy here", color = muted) },
+                                OutlinedTextField(input, { input = it; error = null; recognized = null },
+                                    placeholder = { Text("One task per line. Indent for subtasks.", color = muted) },
                                     modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 220.dp),
                                     minLines = 4, enabled = !busy,
                                     shape = RoundedCornerShape(12.dp),
@@ -209,6 +216,9 @@ internal fun TaskCreationSheet(
                                 Text("Preview · ${preview!!.size} ${if (preview!!.size == 1) "item" else "items"}", fontSize = 17.sp,
                                     fontWeight = FontWeight.Bold, color = ink)
                                 Spacer(Modifier.height(10.dp))
+                                Text("${recognized?.format ?: "Input"} recognized · ${recognized?.nodes?.size ?: 0} top-level tasks",
+                                    color = greenInk, fontSize = 12.sp)
+                                Spacer(Modifier.height(8.dp))
                                 Text("Execution: ${if (mode == StreamExecutionMode.INHERIT) "Inherit · ${defaultExecution.label()}" else mode.label()}",
                                     color = muted, fontSize = 12.sp)
                                 Spacer(Modifier.height(8.dp))
@@ -235,10 +245,11 @@ internal fun TaskCreationSheet(
                         if (choosing == null) Button(onClick = {
                             if (!bulk) onSave(name.trim(), after, mode)
                             else if (preview == null) {
-                                try { preview = BulkHierarchy.parse(input).flatMap {
+                                try { recognized = BulkHierarchy.recognize(input); preview = recognized!!.nodes.flatMap {
                                     it.preview(rootType = if (bulkDestination?.parentTaskId == null) "tasks" else "subtasks")
                                 } } catch (exception: Exception) {
-                                    error = exception.message ?: "Invalid JSON."
+                                    recognized = null
+                                    error = exception.message ?: "Could not read that task outline."
                                 }
                             } else scope.launch {
                                 busy = true; error = null
@@ -247,7 +258,7 @@ internal fun TaskCreationSheet(
                                     StreamExecutionMode.HUMAN -> ExecutionPreference.HUMAN
                                     StreamExecutionMode.EXTERNAL -> ExecutionPreference.EXTERNAL
                                 })
-                                when (val result = VirlinGraph.actions.bulkCreateTasks(input, destination)) {
+                                when (val result = VirlinGraph.actions.bulkCreateTasks(recognized!!.json, destination)) {
                                     is ActionResult.Success -> onDismiss()
                                     is ActionResult.Failure -> error = result.cause.message ?: "Nothing was added."
                                     else -> error = "Import was refused. Nothing was added."

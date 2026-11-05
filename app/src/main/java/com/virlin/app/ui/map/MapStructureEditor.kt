@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.AccountTree
@@ -20,18 +21,31 @@ import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.Redo
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.FormatColorReset
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Icon
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
@@ -42,16 +56,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalDensity
 import com.virlin.app.domain.structure.HierarchyNode
 import com.virlin.app.domain.structure.NodeKind
 import kotlinx.coroutines.delay
@@ -82,8 +100,8 @@ fun MapStructureBar(
     clipboard: MapTopic?,
     organizing: Boolean,
     /**
-     * True while the floating selected-task toolbar is on screen. That toolbar owns Open Task and
-     * Move, so this bar drops both rather than offering the same action twice in two places.
+     * True while the floating selected-task toolbar is on screen. It owns Open Task,
+     * while Move remains available here in Organize mode.
      */
     taskToolbarPresent: Boolean = false,
     onOpen: () -> Unit,
@@ -94,39 +112,166 @@ fun MapStructureBar(
     onDuplicate: () -> Unit,
     onPaste: () -> Unit,
     onClear: () -> Unit,
+    resizing: Boolean = false,
+    onToggleResize: () -> Unit = {},
+    onDelete: () -> Unit = {},
+    canUndo: Boolean = false,
+    canRedo: Boolean = false,
+    onUndo: () -> Unit = {},
+    onRedo: () -> Unit = {},
+    colorPickerOpen: Boolean = false,
+    selectedBoxColor: Long? = null,
+    onToggleColorPicker: () -> Unit = {},
+    onChooseBoxColor: (Long) -> Unit = {},
+    onClearBoxColor: () -> Unit = {},
+    selectedBoxHidden: Boolean = false,
+    hasHiddenBoxes: Boolean = false,
+    showHidden: Boolean = false,
+    onToggleHideBox: () -> Unit = {},
+    onToggleShowHidden: () -> Unit = {},
 ) {
-    if (selected == null) return
+    if (selected == null) {
+        // Hiding deselects a box. Keep this map-level recovery action reachable without selection.
+        if (organizing && hasHiddenBoxes) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.End) {
+                MapIconAction(Icons.Default.Visibility, "Show hidden", showHidden,
+                    false, true, 0L, onToggleShowHidden)
+            }
+        }
+        return
+    }
     val openLabel = when (selected.kind) {
         MapKind.TASK -> "Open Task"
         MapKind.WORKSTREAM -> "Open Workstream"
         else -> "Open Project"
     }
-    val actions = buildList {
+    val secondaryActions = buildList {
         if (organizing) {
-            add(MapToolbarAction(Icons.Default.Edit, "Edit", onEdit))
             add(MapToolbarAction(Icons.Default.AccountTree, "Add branch", onAddBranch))
             if (selected.kind == MapKind.TASK) {
                 add(MapToolbarAction(Icons.Default.ContentCopy, "Copy", onCopy))
                 add(MapToolbarAction(Icons.Default.FileCopy, "Duplicate", onDuplicate))
             } else if (!taskToolbarPresent) {
                 add(MapToolbarAction(Icons.Default.OpenInNew, openLabel, onOpen))
-                add(MapToolbarAction(Icons.Default.DriveFileMove, "Move", onMove))
             }
             if (clipboard != null) add(MapToolbarAction(Icons.Default.ContentPaste, "Paste into", onPaste))
+            add(MapToolbarAction(Icons.Default.SwapHoriz, "Resize horizontally", onToggleResize, resizing))
+            add(MapToolbarAction(Icons.Outlined.DeleteOutline, "Delete selected box", onDelete,
+                destructive = true))
+            add(MapToolbarAction(Icons.Default.Undo, "Undo", onUndo, enabled = canUndo))
+            add(MapToolbarAction(Icons.Default.Redo, "Redo", onRedo, enabled = canRedo))
+            add(MapToolbarAction(Icons.Default.Palette, "Box color", onToggleColorPicker,
+                selected = selectedBoxColor != null))
+            add(MapToolbarAction(Icons.Default.VisibilityOff, "Hide box", onToggleHideBox,
+                selected = selectedBoxHidden, enabled = selected.kind != MapKind.PROJECT))
+            add(MapToolbarAction(Icons.Default.Visibility, "Show hidden", onToggleShowHidden,
+                selected = showHidden, enabled = hasHiddenBoxes))
         } else if (!taskToolbarPresent) {
             add(MapToolbarAction(Icons.Default.OpenInNew, openLabel, onOpen))
         }
-        add(MapToolbarAction(Icons.Default.Close, "Clear selection", onClear))
     }
-    Row(
-        Modifier.testTag(MapStructureBarTag).padding(top = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        actions.forEachIndexed { index, action ->
-            key(selected.id, action.label) {
-                MapIconAction(action.icon, action.label,
-                    entranceDelayMs = (actions.lastIndex - index) * 40L, action.onClick)
+    Column(Modifier.fillMaxWidth().testTag(MapStructureBarTag), horizontalAlignment = Alignment.End) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            if (organizing) {
+                val actionScroll = rememberScrollState()
+                LaunchedEffect(selected.id, actionScroll.maxValue) {
+                    actionScroll.scrollTo(actionScroll.maxValue)
+                }
+                Row(Modifier.weight(1f).horizontalScroll(actionScroll),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    secondaryActions.asReversed().forEachIndexed { index, action ->
+                        key(selected.id, action.label) {
+                            MapIconAction(action.icon, action.label, action.selected,
+                                action.destructive, action.enabled,
+                                entranceDelayMs = (secondaryActions.size - index) * 45L,
+                                action.onClick)
+                        }
+                    }
+                }
+                // Primary actions stay visible at the right while the rest scrolls to their left.
+                MapIconAction(Icons.Default.Edit, "Edit", false, false, true, 0L, onEdit)
+                MapIconAction(Icons.Default.DriveFileMove, "Into", false, false,
+                    selected.kind != MapKind.PROJECT, 0L, onMove)
+            } else {
+                Spacer(Modifier.weight(1f))
+                secondaryActions.forEach { action ->
+                    MapIconAction(action.icon, action.label, action.selected,
+                        action.destructive, action.enabled, 0L, action.onClick)
+                }
+            }
+            MapIconAction(Icons.Default.Close, "Clear selection", false, false, true, 0L, onClear)
+        }
+        if (organizing && colorPickerOpen) {
+            val paletteScroll = rememberScrollState()
+            val surface = MaterialTheme.colorScheme.surface
+            val featherPx = with(LocalDensity.current) { 36.dp.toPx() }
+            Box(
+                Modifier.fillMaxWidth().height(52.dp)
+                    .testTag("map_box_color_palette")
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(surface)
+                    .border(1.dp, MapHairline, RoundedCornerShape(16.dp)),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .horizontalScroll(paletteScroll)
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(40.dp)
+                            .testTag("map_box_color_none")
+                            .semantics {
+                                contentDescription = "No box color"
+                                this.selected = selectedBoxColor == null
+                            }
+                            .clickable(role = Role.Button, onClick = onClearBoxColor),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Default.FormatColorReset, contentDescription = null,
+                            tint = MapMuted, modifier = Modifier.size(24.dp))
+                    }
+                    boxHighlightColors.forEachIndexed { index, color ->
+                        val active = selectedBoxColor == color
+                        Box(
+                            Modifier.size(40.dp)
+                                .testTag("map_box_color_$index")
+                                .semantics {
+                                    contentDescription = "Box color ${index + 1}"
+                                    this.selected = active
+                                }
+                                .clickable(role = Role.Button) { onChooseBoxColor(color) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                Modifier.size(if (active) 30.dp else 26.dp)
+                                    .background(Color(color.toInt()), RoundedCornerShape(50))
+                                    .then(if (active) Modifier.border(2.dp,
+                                        MaterialTheme.colorScheme.onSurface,
+                                        RoundedCornerShape(50)) else Modifier),
+                            )
+                        }
+                    }
+                }
+                // Stationary feathered edges make swatches emerge and disappear as the row moves.
+                // These are decorative overlays; horizontal gestures still reach the row below.
+                if (paletteScroll.value > 0) {
+                    Box(Modifier.align(Alignment.CenterStart).width(36.dp).height(52.dp)
+                        .graphicsLayer { alpha = (paletteScroll.value / featherPx).coerceIn(0f, 1f) }
+                        .background(Brush.horizontalGradient(
+                            0f to surface, .35f to surface.copy(alpha = .76f),
+                            1f to surface.copy(alpha = 0f))))
+                }
+                if (paletteScroll.value < paletteScroll.maxValue) {
+                    Box(Modifier.align(Alignment.CenterEnd).width(36.dp).height(52.dp)
+                        .graphicsLayer { alpha = ((paletteScroll.maxValue - paletteScroll.value) / featherPx).coerceIn(0f, 1f) }
+                        .background(Brush.horizontalGradient(
+                            0f to surface.copy(alpha = 0f), .65f to surface.copy(alpha = .76f),
+                            1f to surface)))
+                }
             }
         }
     }
@@ -134,27 +279,37 @@ fun MapStructureBar(
 
 private data class MapToolbarAction(
     val icon: ImageVector, val label: String, val onClick: () -> Unit,
+    val selected: Boolean = false,
+    val destructive: Boolean = false,
+    val enabled: Boolean = true,
 )
 
 @Composable
-private fun MapIconAction(icon: ImageVector, label: String, entranceDelayMs: Long, onClick: () -> Unit) {
+private fun MapIconAction(icon: ImageVector, label: String, selected: Boolean,
+    destructive: Boolean,
+    enabled: Boolean,
+    entranceDelayMs: Long, onClick: () -> Unit) {
     val entrance = remember { Animatable(0f) }
-    val tint = com.virlin.app.ui.hierarchy.LocalProjectPalette.current?.let { Color(it.secondary) } ?: MapGreen
+    val tint = if (destructive) MaterialTheme.colorScheme.error else
+        com.virlin.app.ui.hierarchy.LocalProjectPalette.current?.let { Color(it.secondary) } ?: MapGreen
     LaunchedEffect(Unit) {
         delay(entranceDelayMs)
         entrance.animateTo(1f, tween(180))
     }
     Box(
         Modifier.size(44.dp)
+            .background(if (selected) tint.copy(alpha = .16f) else Color.Transparent,
+                RoundedCornerShape(12.dp))
             .graphicsLayer {
                 alpha = entrance.value
                 translationX = (1f - entrance.value) * 10.dp.toPx()
             }
-            .semantics { contentDescription = label }
-            .clickable(role = Role.Button, onClick = onClick),
+            .semantics { contentDescription = label; this.selected = selected }
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+        Icon(icon, contentDescription = null, tint = tint.copy(alpha = if (enabled) 1f else .35f),
+            modifier = Modifier.size(20.dp))
     }
 }
 

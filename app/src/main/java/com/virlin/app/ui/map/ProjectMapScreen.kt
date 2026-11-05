@@ -112,6 +112,13 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
 
     val topics = remember(project, streams, tasks) { projectMapTopics(project, streams, tasks) }
     val appearance = saved[project.id] ?: MapAppearance()
+    var latestHistoryAppearance by remember(project.id) { mutableStateOf<MapAppearance?>(null) }
+    var showHidden by androidx.compose.runtime.saveable.rememberSaveable(project.id) {
+        mutableStateOf(false)
+    }
+    androidx.compose.runtime.LaunchedEffect(appearance, latestHistoryAppearance) {
+        if (latestHistoryAppearance == appearance) latestHistoryAppearance = null
+    }
 
     fun exportDocument(uri: Uri?, label: String, write: (java.io.OutputStream) -> Unit) {
         if (uri == null) return
@@ -192,6 +199,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
     // ---- Edit structure -------------------------------------------------------------------
     // Every button below ends in VirlinActions.placeBranch; nothing here writes a parent id.
     var structureMode by remember { mutableStateOf(false) }
+    var resizeNodeId by remember { mutableStateOf<String?>(null) }
     var structureTransitioning by remember { mutableStateOf(true) }
     var mapDisposed by remember { mutableStateOf(false) }
     // The transition must finish even if navigation removes the composition mid-transaction.
@@ -221,6 +229,11 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
         }
     }
     var selectedNode by remember { mutableStateOf<MapTopic?>(null) }
+    var colorPickerNodeId by remember(project.id) { mutableStateOf<String?>(null) }
+    val editHistory = remember(project.id) { MapEditHistory() }
+    var historyRevision by remember(project.id) { androidx.compose.runtime.mutableIntStateOf(0) }
+    var historyBusy by remember(project.id) { mutableStateOf(false) }
+    fun historyChanged() { historyRevision++ }
 
     // --- Mind-map node previews. Entirely separate from the lower action bar's Add.
     val previewHost = com.virlin.app.ui.map.preview.rememberMapPreviewHostState()
@@ -245,6 +258,9 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
     }
     var renaming by remember { mutableStateOf<MapTopic?>(null) }
     var duplicating by remember { mutableStateOf<MapTopic?>(null) }
+    var deletingNode by remember { mutableStateOf<MapTopic?>(null) }
+    var deletingProjectBusy by remember { mutableStateOf(false) }
+    var deletionError by remember { mutableStateOf<String?>(null) }
     var previewNameSaving by remember { mutableStateOf(false) }
     // Messages that are not about a placement keep their own copy; reusing the placement
     // dialog's title hid the real reason an edit was refused.
@@ -360,33 +376,23 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                 // it also lets several moves chain on the same branch.
                 val commit = result.value
                 lastCommit = commit
-                val undoable =
-                    com.virlin.app.domain.structure.inverseOf(commit, project.id, 0L) != null
+                if (operation == com.virlin.app.domain.structure.PlacementOperation.MOVE) {
+                    editHistory.record(MapEdit.Move(request, commit))
+                    historyChanged()
+                } else {
+                    // A copy creates a new hierarchy with new ids; do not replay stale moves.
+                    editHistory.clear()
+                    historyChanged()
+                }
                 // A queued snackbar would keep offering Undo for an EARLIER move while a later
                 // one has already committed, so the visible one always belongs to the newest.
                 snackbar.currentSnackbarData?.dismiss()
                 val verb = if (operation == com.virlin.app.domain.structure.PlacementOperation.MOVE)
                     "Moved" else "Copied"
-                val outcome = snackbar.showSnackbar(
+                snackbar.showSnackbar(
                     message = placedDescription?.let { "$verb $it" } ?: "$verb into ${target.title}",
-                    // Undo is offered only when a true inverse exists.
-                    actionLabel = if (undoable) "Undo" else null,
                     withDismissAction = true,
                 )
-                if (outcome == SnackbarResult.ActionPerformed) {
-                    val inverse = com.virlin.app.domain.structure.inverseOf(
-                        commit, project.id, actions.hierarchyRevision(project.id)
-                    )
-                    if (inverse == null) {
-                        refused = "This cannot be undone."
-                    } else when (val undone = actions.placeBranch(project.id, inverse)) {
-                        is ActionResult.Success -> Unit
-                        is ActionResult.Rejected ->
-                            refused = (undone.reason as? DomainError.PlacementRejected)?.reason
-                                ?: "The undo was refused."
-                        else -> refused = "The undo could not be completed."
-                    }
-                }
             }
             // A refusal wrote nothing, so any success message still on screen belongs to an
             // EARLIER placement. Left standing beside the refusal dialog it reads as though the
@@ -410,6 +416,44 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
         }
     }
 
+    suspend fun travelHistory(undo: Boolean) {
+        if (historyBusy) return
+        val edit = if (undo) editHistory.undoCandidate() else editHistory.redoCandidate()
+        if (edit == null) return
+        historyBusy = true
+        try {
+            when (edit) {
+                is MapEdit.Appearance -> {
+                    val restored = if (undo) edit.before else edit.after
+                    latestHistoryAppearance = restored
+                    store.save(project.id, restored)
+                    if (undo) editHistory.confirmUndo(edit) else editHistory.confirmRedo(edit)
+                    historyChanged()
+                }
+                is MapEdit.Move -> {
+                    val request = if (undo) {
+                        com.virlin.app.domain.structure.inverseOf(edit.commit, project.id,
+                            VirlinGraph.actions.hierarchyRevision(project.id))
+                    } else edit.forward.copy(expectedRevision =
+                        VirlinGraph.actions.hierarchyRevision(project.id))
+                    if (request == null) {
+                        refused = "This move can no longer be reversed."
+                    } else when (val result = VirlinGraph.actions.placeBranch(project.id, request)) {
+                        is ActionResult.Success -> {
+                            if (undo) editHistory.confirmUndo(edit)
+                            else editHistory.confirmRedo(edit.copy(commit = result.value))
+                            historyChanged()
+                        }
+                        is ActionResult.Rejected -> refused =
+                            (result.reason as? DomainError.PlacementRejected)?.reason
+                                ?: "The hierarchy changed; this edit could not be restored."
+                        else -> refused = "This edit could not be restored."
+                    }
+                }
+            }
+        } finally { historyBusy = false }
+    }
+
     /**
      * THE route a node opens by. Both the map's own `onNodeOpen` and the bar's Open action call
      * this, so there is a single implementation of "what opening this node means".
@@ -423,11 +467,21 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
         }
     }
 
+    fun saveMapAppearance(changed: MapAppearance) {
+        val before = latestHistoryAppearance ?: appearance
+        if (changed == before) return
+        editHistory.record(MapEdit.Appearance(before, changed))
+        historyChanged()
+        latestHistoryAppearance = changed
+        store.save(project.id, changed)
+    }
+
     VirlinProjectMindMap(
         projectTitle = project.title,
         topics = topics,
-        appearance = appearance,
-        onAppearanceChange = { store.save(project.id, it) },
+        appearance = latestHistoryAppearance ?: appearance,
+        showHidden = showHidden,
+        onAppearanceChange = ::saveMapAppearance,
         onNodeOpen = ::openTopic,
         onBack = { navController.popBackStack() },
         onFocusModeChange = onFocusModeChange,
@@ -439,6 +493,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
         onExportJson = { exportJson.launch("${project.title.fileSafe()}.json") },
         onOpenVirlinMap = { openVirlin.launch(arrayOf("*/*")) },
         structureMode = structureMode,
+        resizeModeId = resizeNodeId,
         onToggleStructureMode = {
             if (!structureTransitioning) {
                 structureTransitioning = true
@@ -452,7 +507,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                                 if (!structureMode) VirlinGraph.actions.resumeTimersForOrganize(project.id)
                             } else {
                                 structureMode = !structureMode
-                                if (!structureMode) clipboard = null
+                                if (!structureMode) { clipboard = null; resizeNodeId = null }
                             }
                         }
                         is ActionResult.Failure -> problem = result.cause.message
@@ -469,6 +524,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
         selectedId = selectedNode?.id,
         onStructureSelect = {
             selectedNode = it
+            if (resizeNodeId != it?.id) resizeNodeId = null
             // A resting node shows its title only, so deselecting collapses any open preview.
             previewHost.onSelectionChanged(it?.id)
         },
@@ -526,15 +582,17 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                 }
             }
         },
-        // Move: preselect the task and open the SAME destination sheet the structure bar uses.
-        // Nothing is written until a destination is chosen in that sheet.
-        onMoveTask = { topic ->
-            selectedNode = topic
-            intent = StructureIntent.MOVE
-        },
         onOpenTaskPage = { topic ->
             if (topic.kind == MapKind.TASK) navController.navigate(com.virlin.app.ui.page.taskPage(topic.id))
             else navController.navigate("map_container_page/${Uri.encode(project.id)}/${if (topic.kind == MapKind.PROJECT) "project" else Uri.encode(topic.id)}")
+        },
+        onOpenFlashcards = { topic ->
+            navController.navigate(com.virlin.app.ui.notes.flashcardsRoute(
+                when (topic.kind) {
+                    MapKind.PROJECT -> "project"
+                    MapKind.WORKSTREAM -> "workstream"
+                    MapKind.TASK -> "task"
+                }, topic.id))
         },
         onAddContainer = { topic ->
             if (topic.kind == MapKind.PROJECT) choosingProjectBranch = topic
@@ -554,8 +612,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                 affectedCount = selectedNode?.let { branchSize(it.id) } ?: 0,
                 clipboard = clipboard,
                 organizing = structureMode,
-                // The floating toolbar appears for a selected TASK and carries Open Task and
-                // Move, so this bar must not repeat them.
+                // The floating toolbar owns Open Task, while Organize keeps Move.
                 taskToolbarPresent = selectedNode?.kind == MapKind.TASK,
                 onOpen = { selectedNode?.let(::openTopic) },
                 onEdit = {
@@ -598,7 +655,51 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                         }
                     }
                 },
-                onClear = { selectedNode = null; clipboard = null },
+                resizing = resizeNodeId == selectedNode?.id,
+                onToggleResize = {
+                    resizeNodeId = selectedNode?.id?.takeUnless { it == resizeNodeId }
+                },
+                onDelete = {
+                    deletingNode = selectedNode
+                    deletionError = null
+                },
+                canUndo = historyRevision >= 0 && editHistory.canUndo && !historyBusy,
+                canRedo = historyRevision >= 0 && editHistory.canRedo && !historyBusy,
+                onUndo = { scope.launch { travelHistory(true) } },
+                onRedo = { scope.launch { travelHistory(false) } },
+                colorPickerOpen = colorPickerNodeId == selectedNode?.id,
+                selectedBoxColor = selectedNode?.id?.let {
+                    (latestHistoryAppearance ?: appearance).nodeColors[it]
+                },
+                onToggleColorPicker = {
+                    val id = selectedNode?.id
+                    colorPickerNodeId = id?.takeUnless { it == colorPickerNodeId }
+                },
+                onChooseBoxColor = { color ->
+                    selectedNode?.id?.let { id ->
+                        saveMapAppearance(toggleBoxColor(latestHistoryAppearance ?: appearance,
+                            id, color))
+                    }
+                },
+                onClearBoxColor = {
+                    selectedNode?.id?.let { id ->
+                        saveMapAppearance(clearBoxColor(latestHistoryAppearance ?: appearance, id))
+                    }
+                },
+                selectedBoxHidden = selectedNode?.id in (latestHistoryAppearance ?: appearance).hiddenNodeIds,
+                hasHiddenBoxes = (latestHistoryAppearance ?: appearance).hiddenNodeIds.isNotEmpty(),
+                showHidden = showHidden,
+                onToggleHideBox = {
+                    selectedNode?.takeIf { it.kind != MapKind.PROJECT }?.let { topic ->
+                        val currentAppearance = latestHistoryAppearance ?: appearance
+                        val hidden = currentAppearance.hiddenNodeIds
+                        val next = if (topic.id in hidden) hidden - topic.id else hidden + topic.id
+                        saveMapAppearance(currentAppearance.copy(hiddenNodeIds = next))
+                        if (topic.id in next && !showHidden) selectedNode = null
+                    }
+                },
+                onToggleShowHidden = { showHidden = !showHidden },
+                onClear = { selectedNode = null; clipboard = null; resizeNodeId = null },
             )
         },
     )
@@ -668,24 +769,23 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
     intent?.let { pending ->
         val source = selectedNode
         if (source == null) { intent = null; return@let }
-        MapDestinationSheet(
-            intent = pending,
-            source = source,
-            affectedCount = branchSize(source.id),
-            destinations = destinationsFor(nodes, titles, source.id, project.title),
-            onDismiss = { intent = null },
-            onChoose = { destination ->
-                intent = null
-                scope.launch {
-                    apply(
-                        source.id, destination,
-                        if (pending == StructureIntent.MOVE)
-                            com.virlin.app.domain.structure.PlacementOperation.MOVE
-                        else com.virlin.app.domain.structure.PlacementOperation.COPY
-                    )
-                }
+        val available = destinationsFor(nodes, titles, source.id, project.title)
+        val choose: (MapDestination) -> Unit = { destination ->
+            intent = null
+            scope.launch {
+                apply(source.id, destination,
+                    if (pending == StructureIntent.MOVE)
+                        com.virlin.app.domain.structure.PlacementOperation.MOVE
+                    else com.virlin.app.domain.structure.PlacementOperation.COPY)
             }
-        )
+        }
+        if (pending == StructureIntent.MOVE) {
+            MapMoveDestinationSheet(source, branchSize(source.id), project.title,
+                nodes, titles, available, onDismiss = { intent = null }, onChoose = choose)
+        } else {
+            MapDestinationSheet(pending, source, branchSize(source.id), available,
+                onDismiss = { intent = null }, onChoose = choose)
+        }
     }
 
     renaming?.let { topic ->
@@ -924,6 +1024,8 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                     scope.launch {
                         when (val result = VirlinGraph.actions.duplicateTask(topic.id)) {
                             is ActionResult.Success -> {
+                                editHistory.clear()
+                                historyChanged()
                                 selectedNode = null
                                 snackbar.currentSnackbarData?.dismiss()
                                 snackbar.showSnackbar("Duplicated " + topic.title, withDismissAction = true)
@@ -935,6 +1037,50 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
             },
             dismissButton = { TextButton(onClick = { duplicating = null }) { Text("Cancel") } },
         )
+    }
+
+    deletingNode?.let { topic ->
+        if (topic.kind == MapKind.PROJECT) {
+            com.virlin.app.ui.hierarchy.DeleteProjectDialog(project, deletingProjectBusy,
+                deletionError, onDismiss = { if (!deletingProjectBusy) deletingNode = null },
+                onDelete = {
+                    if (!deletingProjectBusy) {
+                        deletingProjectBusy = true
+                        VirlinGraph.deleteProject(project.id) { result ->
+                            deletingProjectBusy = false
+                            if (result is ActionResult.Success ||
+                                repository.projects.value.none { it.id == project.id }) {
+                                editHistory.clear()
+                                historyChanged()
+                                if (result !is ActionResult.Success) Toast.makeText(context,
+                                    "Project removed. Remaining cleanup is queued for retry.",
+                                    Toast.LENGTH_LONG).show()
+                                deletingNode = null
+                                selectedNode = null
+                                resizeNodeId = null
+                                clipboard = null
+                                navController.navigate("streams") {
+                                    popUpTo("streams") { inclusive = true }
+                                    launchSingleTop = true
+                                }
+                            } else deletionError = editRefusal(result)
+                        }
+                    }
+                })
+        } else {
+            com.virlin.app.ui.hierarchy.HierarchyDeletionHost(
+                com.virlin.app.ui.hierarchy.DeletionTarget(topic.id, topic.title,
+                    if (topic.kind == MapKind.WORKSTREAM) "workstream" else "task"),
+                onDismiss = { deletingNode = null },
+                onRemoved = {
+                    editHistory.clear()
+                    historyChanged()
+                    deletingNode = null
+                    selectedNode = null
+                    resizeNodeId = null
+                    clipboard = null
+                })
+        }
     }
 
     notice?.let { (title, message) ->

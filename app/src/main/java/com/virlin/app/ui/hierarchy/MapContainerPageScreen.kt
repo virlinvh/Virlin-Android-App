@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.CheckBox
@@ -30,6 +31,9 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -250,17 +254,67 @@ fun MapContainerPageScreen(
 @Composable
 internal fun MasterDocumentItem(entry: MasterDocumentEntry, ink: Color,
     accent: Color, onOpen: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onOpen)
-        .testTag("map_page_item_${entry.id}")
-        .padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 18.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(entry.title, Modifier.weight(1f), color = ink,
-                fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 23.sp)
-            Text("${entry.kind}  ↗", color = accent, fontSize = 12.sp,
-                modifier = Modifier.padding(start = 12.dp))
+    var isExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
+    val kind = entry.kind.lowercase()
+    val icon = when {
+        kind.contains("video") -> Icons.Outlined.PlayCircleOutline
+        kind.contains("to-do") || kind.contains("checklist") -> Icons.Outlined.CheckBox
+        kind.contains("prompt") -> Icons.Outlined.SmartToy
+        kind.contains("link") -> Icons.Outlined.Link
+        kind.contains("image") -> Icons.Outlined.Image
+        else -> Icons.Outlined.Description
+    }
+    Surface(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(16.dp), color = Color.White,
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = if (isExpanded) .55f else .14f))) {
+        Column {
+            Row(Modifier.fillMaxWidth().clickable { isExpanded = !isExpanded }
+                .testTag("map_page_item_${entry.id}")
+                .padding(horizontal = 14.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(40.dp).background(accent.copy(alpha = .09f), RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center) {
+                    Icon(icon, null, tint = accent, modifier = Modifier.size(20.dp))
+                }
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(entry.kind.uppercase(), color = accent, fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold)
+                    Text(entry.title, color = ink, fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp, lineHeight = 20.sp, maxLines = if (isExpanded) 3 else 2,
+                        overflow = TextOverflow.Ellipsis)
+                }
+                Icon(if (isExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    if (isExpanded) "Collapse" else "Expand", tint = accent)
+            }
+            if (isExpanded) {
+                Column(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 14.dp)
+                    .testTag("map_page_preview_${entry.id}")) {
+                    if (kind.contains("video") && !entry.isImage) {
+                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                            .background(ink, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Outlined.PlayCircleOutline, "Video preview", tint = Color.White,
+                                modifier = Modifier.size(48.dp))
+                        }
+                        Spacer(Modifier.size(10.dp))
+                    }
+                    MasterEntryBody(entry, ink)
+                    Row(Modifier.fillMaxWidth().padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.End) {
+                        Surface(onClick = onOpen, color = accent.copy(alpha = .1f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.testTag("map_page_open_${entry.id}")) {
+                            Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Text("Open ${entry.kind}", color = accent, fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold)
+                                Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, tint = accent,
+                                    modifier = Modifier.padding(start = 6.dp).size(15.dp))
+                            }
+                        }
+                    }
+                }
+            }
         }
-        Spacer(Modifier.size(9.dp))
-        MasterEntryBody(entry, ink)
     }
 }
 

@@ -13,7 +13,8 @@ internal fun MapBoxFinish.isHandDrawn() = this == MapBoxFinish.HAND_DRAWN ||
 
 /** Repeatable vector strokes: the same finish is used by the picker and every map node. */
 internal fun drawHandDrawnBox(canvas: Canvas, rect: RectF, paint: Paint,
-                              finish: MapBoxFinish, selected: Boolean = false) {
+                              finish: MapBoxFinish, selected: Boolean = false,
+                              boxColor: Int? = null) {
     val radius = min(18f, rect.height() * .27f)
     val path = Path().apply {
         moveTo(rect.left + radius, rect.top + 1f)
@@ -29,12 +30,14 @@ internal fun drawHandDrawnBox(canvas: Canvas, rect: RectF, paint: Paint,
     }
     paint.shader = null
     paint.style = Paint.Style.FILL
-    paint.color = when (finish) {
+    val paperColor = when (finish) {
         MapBoxFinish.PENCIL_SKETCH -> Color.rgb(247, 245, 239)
         MapBoxFinish.DOUBLE_INK -> Color.rgb(251, 250, 247)
         MapBoxFinish.MARKER_EDGE -> Color.rgb(232, 234, 231)
         else -> Color.rgb(239, 239, 237)
     }
+    paint.color = boxColor?.let { androidx.core.graphics.ColorUtils.blendARGB(paperColor, it, .42f) }
+        ?: paperColor
     paint.alpha = 255
     canvas.drawPath(path, paint)
     canvas.save()
@@ -49,7 +52,7 @@ internal fun drawHandDrawnBox(canvas: Canvas, rect: RectF, paint: Paint,
         x += if (finish == MapBoxFinish.PENCIL_SKETCH) 9f else 12f
     }
     canvas.restore()
-    paint.color = if (finish == MapBoxFinish.PENCIL_SKETCH) Color.rgb(82, 82, 79)
+    paint.color = boxColor ?: if (finish == MapBoxFinish.PENCIL_SKETCH) Color.rgb(82, 82, 79)
                   else Color.rgb(24, 24, 24)
     paint.alpha = 255
     paint.strokeWidth = when (finish) {

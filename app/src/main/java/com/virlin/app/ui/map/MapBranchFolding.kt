@@ -28,6 +28,15 @@ internal fun foldedMapTopics(topics: List<MapTopic>, collapsed: Set<String>): Li
     return topics.filterNot { it.id in hidden }
 }
 
+/** Hidden owners also hide their descendants, but never modify canonical map topics. */
+internal fun hiddenMapTopicIds(topics: List<MapTopic>, hiddenOwners: Set<String>): Set<String> {
+    val root = topics.firstOrNull { it.parentId == null }?.id
+    val validOwners = hiddenOwners.filterNot { it == root }
+    return validOwners.flatMapTo(mutableSetOf()) { owner ->
+        if (topics.none { it.id == owner }) emptySet() else mapDescendants(topics, owner) + owner
+    }
+}
+
 private fun mapDepths(topics: List<MapTopic>): Map<String, Int> {
     val ids = topics.mapTo(mutableSetOf()) { it.id }
     val children = topics.groupBy { it.parentId }

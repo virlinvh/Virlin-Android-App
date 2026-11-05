@@ -24,13 +24,13 @@ class DeleteProjectDialogUiTest {
         compose.setContent { MaterialTheme {
             DeleteProjectDialog(project, false, null, { dismissed++ }, { deleted++ })
         } }
-        compose.onNodeWithText("Delete permanently").assertIsNotEnabled()
+        compose.onNodeWithText("Delete project").assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).performTextInput("Wrong")
-        compose.onNodeWithText("Delete permanently").assertIsNotEnabled()
+        compose.onNodeWithText("Delete project").assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).performTextReplacement("Example")
-        compose.onNodeWithText("Delete permanently").assertIsEnabled().performClick()
+        compose.onNodeWithText("Delete project").assertIsEnabled().performClick()
         assertEquals(1, deleted)
-        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithText("Keep project").performClick()
         assertEquals(1, dismissed)
         assertEquals(1, deleted)
     }

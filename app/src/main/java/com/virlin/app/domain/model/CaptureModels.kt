@@ -43,3 +43,8 @@ data class CaptureItem(
 ) {
     val hasContext: Boolean get() = projectId != null || workStreamId != null || taskId != null
 }
+
+/** Opaque optimistic-edit token for desktop capture editors. */
+fun CaptureItem.editToken(): String = java.security.MessageDigest.getInstance("SHA-256")
+    .digest(toString().toByteArray(Charsets.UTF_8))
+    .joinToString("") { "%02x".format(it) }

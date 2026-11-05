@@ -8,7 +8,7 @@ sealed interface ResponseSegment {
 
 /** Deterministic display parser. It never rewrites the stored response string. */
 object PromptContentParser {
-    private val fenced = Regex("```([A-Za-z0-9_+.#-]*)[ \\t]*\\r?\\n([\\s\\S]*?)```", RegexOption.MULTILINE)
+    private val fenced = Regex("^ {0,3}(`{3,}|~{3,})([A-Za-z0-9_+.#-]*)[ \\t]*\\r?\\n([\\s\\S]*?)^ {0,3}\\1[ \\t]*(?=\\r?$)", RegexOption.MULTILINE)
 
     fun responseSegments(source: String): List<ResponseSegment> {
         if (source.isEmpty()) return emptyList()
@@ -20,9 +20,9 @@ object PromptContentParser {
                     .takeIf { it.isNotEmpty() }?.let { out += ResponseSegment.Prose(it) }
             }
             out += ResponseSegment.Code(
-                text = match.groupValues[2],
-                language = match.groupValues[1].takeIf { it.isNotBlank() }?.let(::canonicalLanguage)
-                    ?: detectLanguage(match.groupValues[2]).takeUnless { it == "Plain text" }
+                text = match.groupValues[3],
+                language = match.groupValues[2].takeIf { it.isNotBlank() }?.let(::canonicalLanguage)
+                    ?: detectLanguage(match.groupValues[3]).takeUnless { it == "Plain text" }
             )
             cursor = match.range.last + 1
         }

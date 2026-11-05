@@ -126,6 +126,19 @@ private val customColors = listOf(
     0xFF9B9EA7, 0xFF739B91, 0xFFB59A82, 0xFF81A8B8,
 )
 
+/** Connector colours, including inherited branch overrides, shared by the canvas and fold controls. */
+internal fun mapBranchTints(g: MapGeometry, appearance: MapAppearance): Map<String, Long> {
+    val palette = appearance.customPalette.takeIf { it.isNotEmpty() }
+        ?: mapPalettes[appearance.paletteIndex.mod(mapPalettes.size)]
+    val colors = mutableMapOf<String, Long>()
+    for (topic in g.topics) {
+        val inherited = g.parent[topic.id]?.let(colors::get)
+        colors[topic.id] = appearance.branchColors[topic.id] ?: inherited
+            ?: palette[g.branch.getValue(topic.id) % palette.size]
+    }
+    return colors
+}
+
 private const val MIN_ZOOM = MAP_MIN_ZOOM
 private const val MAX_ZOOM = MAP_MAX_ZOOM
 
@@ -170,6 +183,7 @@ internal fun arrange(
     layout: MapLayout,
     expanded: Pair<String, Float>? = null,
     nodeWidths: Map<String, Float> = emptyMap(),
+    rootBranchIndices: Map<String, Int> = emptyMap(),
 ): MapGeometry {
     require(topics.map { it.id }.distinct().size == topics.size) { "Map IDs must be unique" }
     val root = topics.singleOrNull { it.parentId == null }
@@ -191,7 +205,8 @@ internal fun arrange(
         for (i in kids.indices.reversed()) {
             val child = kids[i]
             depth[child.id] = depth.getValue(node.id) + 1
-            branch[child.id] = if (node.id == root.id) i else branch.getValue(node.id)
+            branch[child.id] = if (node.id == root.id)
+                rootBranchIndices[child.id] ?: i else branch.getValue(node.id)
             stack.add(child)
         }
     }
@@ -405,6 +420,8 @@ fun VirlinProjectMindMap(
      * unchanged in both modes.
      */
     structureMode: Boolean = false,
+    /** The selected node whose horizontal-resize tool is armed by the organize bar. */
+    resizeModeId: String? = null,
     onToggleStructureMode: (() -> Unit)? = null,
     /**
      * THE selected node, owned by the host. The map used to keep its own copy, which could
@@ -459,11 +476,11 @@ fun VirlinProjectMindMap(
     onAddChoice: (MapTopic, MapAddKind) -> Unit = { _, _ -> },
     /** Open this task's Page, or say plainly that there is not one yet. */
     onOpenTaskPage: (MapTopic) -> Unit = {},
-    /** Open the host's destination picker for this task. Nothing is written until it confirms. */
-    onMoveTask: (MapTopic) -> Unit = {},
+    onOpenFlashcards: (MapTopic) -> Unit = {},
     /** Project/workstream creation menu; task content retains its real task owner. */
     onAddContainer: (MapTopic) -> Unit = {},
     onAddChildTask: (MapTopic) -> Unit = {},
+    showHidden: Boolean = false,
 ) {
     var current by remember(appearance) { mutableStateOf(appearance) }
     var tasksOnly by rememberSaveable { mutableStateOf(false) }
@@ -510,21 +527,34 @@ fun VirlinProjectMindMap(
         val branch = focusedMapTopics(topics, focusedRootId)
         if (tasksOnly) taskOnlyMapTopics(branch) else branch
     }
-    val visibleTopics = remember(baseTopics, collapsedIds) { foldedMapTopics(baseTopics, collapsedIds.toSet()) }
+    val rootBranchIndices = remember(baseTopics) {
+        val rootId = baseTopics.firstOrNull { it.parentId == null }?.id
+        baseTopics.filter { it.parentId == rootId }
+            .sortedWith(compareBy<MapTopic> { it.order }.thenBy { it.id })
+            .mapIndexed { index, topic -> topic.id to index }.toMap()
+    }
+    val ghostIds = remember(baseTopics, current.hiddenNodeIds) {
+        hiddenMapTopicIds(baseTopics, current.hiddenNodeIds)
+    }
+    val visibleTopics = remember(baseTopics, collapsedIds, ghostIds, showHidden) {
+        val available = if (showHidden) baseTopics else baseTopics.filterNot { it.id in ghostIds }
+        foldedMapTopics(available, if (showHidden) emptySet() else collapsedIds.toSet())
+    }
     val branchCounts = remember(baseTopics) {
         baseTopics.associate { it.id to mapDescendants(baseTopics, it.id).size }
     }
     val visiblePreviewId = expandedPreviewId.takeIf {
-        !tasksOnly && !focusMode && visibleTopics.any { topic -> topic.id == it }
+        !tasksOnly && !focusMode && it !in ghostIds && visibleTopics.any { topic -> topic.id == it }
     }
     val visiblePreviewOwners = if (tasksOnly || focusMode) emptySet() else previewOwners
-    val geometry = remember(visibleTopics, current.layout, current.nodeWidths,
+    val geometry = remember(visibleTopics, current.layout, current.nodeWidths, rootBranchIndices,
         visiblePreviewId, expandedPreviewHeight) {
         arrange(
             visibleTopics,
             current.layout,
             visiblePreviewId?.takeIf { expandedPreviewHeight > 0f }?.let { it to expandedPreviewHeight },
             current.nodeWidths,
+            rootBranchIndices,
         )
     }
     val byId = remember(geometry) { geometry.topics.associateBy { it.id } }
@@ -629,11 +659,12 @@ fun VirlinProjectMindMap(
             val startZoom = zoom
             val startX = offsetX
             val startY = offsetY
-            val nextVisible = foldedMapTopics(baseTopics, next)
+            val available = if (showHidden) baseTopics else baseTopics.filterNot { it.id in ghostIds }
+            val nextVisible = foldedMapTopics(available, if (showHidden) emptySet() else next)
             val nextPreview = visiblePreviewId?.takeIf { id -> nextVisible.any { it.id == id } }
             val nextGeometry = arrange(nextVisible, current.layout,
                 nextPreview?.takeIf { expandedPreviewHeight > 0f }?.let { it to expandedPreviewHeight },
-                current.nodeWidths)
+                current.nodeWidths, rootBranchIndices)
             val margin = 72f * density
             val targetZoom = if (fitAfter && viewport != IntSize.Zero)
                 fitMapZoom(viewport.width - margin, viewport.height - margin,
@@ -929,6 +960,7 @@ fun VirlinProjectMindMap(
                         native.saveLayerAlpha(null, (geometryFade.value * 255).roundToInt().coerceIn(0, 255))
                     else null
                     paintMap(native, geometry, current, visible, selectedId,
+                        ghostIds = if (showHidden) ghostIds else emptySet(),
                         previewOwners = visiblePreviewOwners,
                         expandedId = visiblePreviewId,
                         showPreviewControls = !tasksOnly && !focusMode,
@@ -1057,30 +1089,29 @@ fun VirlinProjectMindMap(
                     expandedPreviewContent?.invoke(rect)
                 }
             }
-            // A selected task or workstream gets a real 48dp drag handle. This owns its pointer sequence;
+            // The armed node gets a visible, screen-space resize handle. This owns its pointer sequence;
             // the canvas's pan/zoom/tap recognizers cannot steal a drag from this child.
             // A tap selects the node first. The handle remains usable even at Fit zoom.
             val selectedTask = selectedId?.let(byId::get)
             val selectedFrame = selectedId?.let(geometry.frames::get)
-            if (structureMode && !focusMode && !tasksOnly && selectedTask != null &&
+            if (structureMode && resizeModeId == selectedId && !focusMode && !tasksOnly && selectedTask != null &&
                 selectedFrame != null && visiblePreviewId != selectedTask.id && dragId == null &&
                 viewport != IntSize.Zero && offsetX.isFinite() && offsetY.isFinite()
             ) {
-                // The transparent touch strip hugs the box border; no separate resize button.
-                // Its minimum screen-space height keeps the edge usable at Fit zoom.
-                val edgeWidthPx = 24f * density
-                val edgeHeightPx = max(selectedFrame.h * density * zoom, 44f * density)
+                // Keep the handle visible and 44dp touchable even when the map is fitted small.
+                val edgeWidthPx = 44f * density
+                val edgeHeightPx = 44f * density
                 val right = (selectedFrame.x + selectedFrame.w) * density * zoom + offsetX
                 val centreY = (selectedFrame.y + selectedFrame.h / 2f) * density * zoom + offsetY
                 val left = if (resizingNodeId == selectedTask.id) resizeEdgeLeft else
-                    (right - 4f * density).coerceIn(0f,
+                    (right - 22f * density).coerceIn(0f,
                         (viewport.width - edgeWidthPx).coerceAtLeast(0f))
                 val top = (centreY - edgeHeightPx / 2f)
                     .coerceIn(0f, (viewport.height - edgeHeightPx).coerceAtLeast(0f))
                 val latestLeft by rememberUpdatedState(left)
                 Box(
                     Modifier.offset { IntOffset(left.roundToInt(), top.roundToInt()) }
-                        .size(width = 24.dp, height = (edgeHeightPx / density).dp)
+                        .size(44.dp)
                         .zIndex(1f)
                         .testTag("mind_map_resize_edge_${selectedTask.id}")
                         .semantics { contentDescription =
@@ -1114,7 +1145,16 @@ fun VirlinProjectMindMap(
                                 },
                             )
                         },
-                )
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(width = 34.dp, height = 30.dp)
+                        .background(projectMenuSurface, RoundedCornerShape(11.dp))
+                        .border(1.dp, projectAccent.copy(alpha = .45f), RoundedCornerShape(11.dp)),
+                        contentAlignment = Alignment.Center) {
+                        Text("↔", color = projectAccent, fontSize = 20.sp,
+                            fontWeight = FontWeight.SemiBold)
+                    }
+                }
             }
             // Canvas glyphs shrink with zoom. Give each disclosure/edit glyph a real screen-space
             // target so the pan recognizer cannot consume a tap intended for a tiny symbol.
@@ -1273,7 +1313,7 @@ fun VirlinProjectMindMap(
                     modifier = Modifier.align(Alignment.BottomCenter)
                         .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
                     onOpenTask = onNodeOpen,
-                    onMove = onMoveTask,
+                    onFlashcards = onOpenFlashcards,
                     onPage = onOpenTaskPage,
                     onAdd = { task ->
                         addPaletteTaskId = task.id
@@ -1323,6 +1363,7 @@ fun VirlinProjectMindMap(
                 )
             }
             if (!focusMode && offsetX.isFinite() && offsetY.isFinite() && dragId == null) {
+                val foldTints = remember(geometry, appearance) { mapBranchTints(geometry, appearance) }
                 geometry.frames.values.forEach { frame ->
                     val count = branchCounts[frame.id] ?: 0
                     if (count > 0) {
@@ -1332,19 +1373,28 @@ fun VirlinProjectMindMap(
                             if (frame.id == selectedId) 52f * density else 0f
                         if (x in -48f..viewport.width.toFloat() && y in 0f..viewport.height.toFloat()) {
                             val folded = frame.id in collapsedIds
+                            val branchColor = (foldTints[frame.id] ?: 0xFF24A46BL).toInt()
+                            val foldLine = Color(branchColor).copy(alpha = .7f)
+                            val foldFill = Color(androidx.core.graphics.ColorUtils.blendARGB(
+                                android.graphics.Color.WHITE, branchColor, .17f))
+                            val foldInk = Color(androidx.core.graphics.ColorUtils.blendARGB(
+                                branchColor, android.graphics.Color.BLACK, .42f))
                             Box(Modifier.offset { IntOffset(x.roundToInt(), (y - 24.dp.toPx()).roundToInt()) }
                                 .size(48.dp).testTag("map_branch_${frame.id}")
-                                .graphicsLayer { alpha = if (outgoingGeometry != null) geometryFade.value else 1f }
+                                .graphicsLayer {
+                                    alpha = (if (outgoingGeometry != null) geometryFade.value else 1f) *
+                                        (if (frame.id in ghostIds && showHidden) .4f else 1f)
+                                }
                                 .semantics { contentDescription = if (folded) "Expand $count hidden cards" else "Collapse $count descendant cards" }
                                 .clickable(enabled = outgoingGeometry == null, role = Role.Button) {
                                     animateFoldTo((if (folded) collapsedIds - frame.id else collapsedIds + frame.id).toSet())
                                 }, contentAlignment = Alignment.Center) {
                                 Canvas(Modifier.fillMaxSize()) {
-                                    drawLine(Color(0xFF76B99C), Offset(0f, size.height/2), Offset(12.dp.toPx(), size.height/2), 1.dp.toPx())
+                                    drawLine(foldLine, Offset(0f, size.height/2), Offset(12.dp.toPx(), size.height/2), 1.dp.toPx())
                                 }
                                 Text(if (folded) count.toString() else "−", fontSize = 12.sp,
-                                    color = Color(0xFF07533E), modifier = Modifier
-                                        .background(Color(0xFFE0F5EB), RoundedCornerShape(50))
+                                    color = foldInk, modifier = Modifier
+                                        .background(foldFill, RoundedCornerShape(50))
                                         .padding(horizontal = 7.dp, vertical = 4.dp))
                             }
                         }
@@ -1874,6 +1924,7 @@ private fun drawLayoutNode(
 internal fun paintMap(
     canvas: android.graphics.Canvas, g: MapGeometry, appearance: MapAppearance,
     viewport: RectF, selectedId: String?,
+    ghostIds: Set<String> = emptySet(),
     dragId: String? = null, hoverId: String? = null, hoverValid: Boolean = false,
     /** Node ids that have a saved preview, so the selected one shows a pencil rather than a plus. */
     previewOwners: Set<String> = emptySet(),
@@ -1881,19 +1932,15 @@ internal fun paintMap(
     expandedId: String? = null,
     showPreviewControls: Boolean = true,
 ) {
-    val palette = appearance.customPalette.takeIf { it.isNotEmpty() }
-        ?: mapPalettes[appearance.paletteIndex.mod(mapPalettes.size)]
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    val branchTint = mutableMapOf<String, Long>()
+    val branchTint = mapBranchTints(g, appearance)
     val tint = mutableMapOf<String, Int>()
     for (topic in g.topics) {
-        val inherited = g.parent[topic.id]?.let(branchTint::get)
-        val branchColor = appearance.branchColors[topic.id] ?: inherited
-            ?: palette[g.branch.getValue(topic.id) % palette.size]
-        branchTint[topic.id] = branchColor
+        val branchColor = branchTint.getValue(topic.id)
         tint[topic.id] = (appearance.nodeColors[topic.id] ?: branchColor).toInt()
     }
     fun accent(topic: MapTopic): Int = tint.getValue(topic.id)
+    fun connectorAccent(topic: MapTopic): Int = branchTint.getValue(topic.id).toInt()
 
     if (appearance.layout == MapLayout.SECTION_BANDS) {
         // Background bands are presentation-only: the real tree and hit frames are unchanged.
@@ -1907,7 +1954,7 @@ internal fun paintMap(
             if (!RectF.intersects(viewport, band)) continue
             paint.shader = null
             paint.style = Paint.Style.FILL
-            paint.color = accent(group.first())
+            paint.color = connectorAccent(group.first())
             paint.alpha = 32
             canvas.drawRoundRect(band, 26f, 26f, paint)
         }
@@ -1931,8 +1978,8 @@ internal fun paintMap(
             else -> 14f
         }
         val ys = children.map { g.frames.getValue(it.id).let { f -> f.y + f.h / 2f } }
-        paint.color = accent(g.topics.first { it.id == parentId })
-        paint.alpha = if (bracketStyle) 190 else 170
+        paint.color = connectorAccent(g.topics.first { it.id == parentId })
+        paint.alpha = if (parentId in ghostIds) 65 else if (bracketStyle) 190 else 170
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = if (bracketStyle) 2f else 1.5f
         canvas.drawLine(fromX, fromY, spineX, fromY, paint)
@@ -1940,6 +1987,7 @@ internal fun paintMap(
         children.forEach { child ->
             val f = g.frames.getValue(child.id)
             val y = f.y + f.h / 2f
+            paint.alpha = if (child.id in ghostIds) 65 else if (bracketStyle) 190 else 170
             canvas.drawLine(spineX, y, f.x, y, paint)
             if (bracketStyle) {
                 // A short vertical cap makes a sibling group read as one logic bracket.
@@ -2004,7 +2052,7 @@ internal fun paintMap(
                 else -> lineTo(toX, toY)
             }
         }
-        paint.color = accent(topic); paint.alpha = 210
+        paint.color = connectorAccent(topic); paint.alpha = if (topic.id in ghostIds) 65 else 210
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = if (appearance.layout == MapLayout.FLOW_FORKS ||
             appearance.layout == MapLayout.ROUNDED_FORKS ||
@@ -2023,7 +2071,9 @@ internal fun paintMap(
         // drawn here without reimplementing text layout and paging by hand. Its connectors are
         // still drawn above, from the reflowed frame, so the geometry stays in one place.
         if (topic.id == expandedId) continue
+        val ghostLayer = if (topic.id in ghostIds) canvas.saveLayerAlpha(r, 100) else null
         val color = accent(topic)
+        val customBoxColor = appearance.nodeColors.containsKey(topic.id)
         val selected = selectedId == topic.id
         val finish = appearance.nodeFinishes[topic.id] ?: appearance.boxFinish
         val isLeaf = g.topics.none { g.parent[it.id] == topic.id }
@@ -2058,11 +2108,14 @@ internal fun paintMap(
             r.left, r.top, r.right, r.bottom,
             intArrayOf(
                 android.graphics.Color.rgb(253, 255, 252),
-                androidx.core.graphics.ColorUtils.blendARGB(android.graphics.Color.WHITE, color, if (selected) .12f else .05f),
-                androidx.core.graphics.ColorUtils.blendARGB(android.graphics.Color.WHITE, color, if (selected) .25f else .14f),
+                androidx.core.graphics.ColorUtils.blendARGB(android.graphics.Color.WHITE, color,
+                    if (customBoxColor) .32f else if (selected) .12f else .05f),
+                androidx.core.graphics.ColorUtils.blendARGB(android.graphics.Color.WHITE, color,
+                    if (customBoxColor) .48f else if (selected) .25f else .14f),
             ), floatArrayOf(0f, .45f, 1f), android.graphics.Shader.TileMode.CLAMP,
         )
-        if (finish.isHandDrawn()) drawHandDrawnBox(canvas, r, paint, finish, selected)
+        if (finish.isHandDrawn()) drawHandDrawnBox(canvas, r, paint, finish, selected,
+            appearance.nodeColors[topic.id]?.toInt())
         else drawLayoutNode(canvas, r, appearance.layout, isLeaf, radius, paint)
         paint.shader = null
         if (finish != MapBoxFinish.SMOOTH && !finish.isHandDrawn()) {
@@ -2128,7 +2181,7 @@ internal fun paintMap(
         // why a tap looked like it did nothing. A selection now reads as one.
         paint.strokeWidth = if (selected) 2f else 1f
         paint.color = color
-        paint.alpha = if (selected) 255 else if (dimmed) 55 else 130
+        paint.alpha = if (selected || customBoxColor) 255 else if (dimmed) 55 else 130
         if (!finish.isHandDrawn())
             drawLayoutNode(canvas, r, appearance.layout, isLeaf, radius, paint)
         if (appearance.layout == MapLayout.FAN_FORKS && isLeaf) {
@@ -2150,7 +2203,7 @@ internal fun paintMap(
             )
         }
         paint.style = Paint.Style.FILL; paint.alpha = 255
-        paint.color = color
+        paint.color = connectorAccent(topic)
         canvas.drawCircle(f.x, f.y + f.h / 2f, 3f, paint)
         paint.color = android.graphics.Color.rgb(25, 34, 41)
         paint.typeface =
@@ -2179,6 +2232,7 @@ internal fun paintMap(
 
         // Disclosure is visible by default; the edit icon appears only on the selected node.
         if (showPreviewControls) drawPreviewAffordances(canvas, paint, f, topic.id in previewOwners, false, selected)
+        if (ghostLayer != null) canvas.restoreToCount(ghostLayer)
     }
 }
 

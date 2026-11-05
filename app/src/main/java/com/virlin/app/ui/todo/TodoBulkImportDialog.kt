@@ -9,25 +9,31 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.virlin.app.domain.action.BulkHierarchy
 import com.virlin.app.ui.components.SafeDialog
 import com.virlin.app.ui.hierarchy.ProjectPalette
 
 internal object TodoBulkImport {
-    const val sample = """{"version":2,"items":[{"name":"Review requirements"},{"name":"Check final result"}]}"""
+    const val sample = """Review requirements
+- Check the first version
+3. Verify the final result"""
+    private val marker = Regex("""^(?:[-*•]\s+|(?:\d+[.)])\s+)""")
+    private val checkbox = Regex("^(?:\\[(?: |x|X)]|[☐☑✓])\\s+")
 
-    fun parse(json: String): List<String> {
-        val nodes = BulkHierarchy.parse(json)
-        require(nodes.all { it.children.isEmpty() }) {
-            "To-dos are a flat list. Remove children from the JSON."
-        }
-        return nodes.map { it.name }
+    fun parse(text: String): List<String> {
+        require(!text.trimStart().startsWith("{")) { "Paste one to-do per line, not JSON." }
+        val names = text.lineSequence().map { raw ->
+            raw.trim().replaceFirst(marker, "").replaceFirst(checkbox, "").trim()
+        }.filter { it.isNotEmpty() }.toList()
+        require(names.isNotEmpty()) { "Paste at least one to-do." }
+        require(names.size <= BulkHierarchy.MAX_ITEMS) { "You can add at most ${BulkHierarchy.MAX_ITEMS} to-dos at once." }
+        require(names.all { it.length <= 200 }) { "Each to-do must be 200 characters or fewer." }
+        return names
     }
 }
 
-/** The same bounded JSON/preview flow used by hierarchy import, adapted for flat checkboxes. */
+/** Plain-text checklist import; all rows are previewed before one atomic bulk write. */
 @Composable
 internal fun TodoBulkImportDialog(
     palette: ProjectPalette?,
@@ -47,13 +53,12 @@ internal fun TodoBulkImportDialog(
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (preview == null) {
-                        Text("Paste the same JSON format used by Bulk Import. Each item becomes a to-do.")
+                        Text("Paste one to-do per line. Bullets, numbers and checkboxes are optional; each line becomes one item in this task's list.")
                         OutlinedTextField(input, { input = it; error = null },
                             Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 220.dp),
-                            enabled = !busy, label = { Text("JSON") }, minLines = 4,
-                            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
-                        Text("Sample JSON", style = MaterialTheme.typography.labelMedium, color = accent)
-                        Text(TodoBulkImport.sample, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                            enabled = !busy, label = { Text("Paste to-dos") }, minLines = 4)
+                        Text("Example", style = MaterialTheme.typography.labelMedium, color = accent)
+                        Text(TodoBulkImport.sample, style = MaterialTheme.typography.bodySmall)
                         Text("Up to ${BulkHierarchy.MAX_ITEMS} items. Preview before adding.",
                             style = MaterialTheme.typography.bodySmall)
                     } else {
@@ -72,7 +77,7 @@ internal fun TodoBulkImportDialog(
                     Button(onClick = {
                         if (preview == null) {
                             try { preview = TodoBulkImport.parse(input); error = null }
-                            catch (e: Exception) { error = e.message ?: "Invalid JSON." }
+                            catch (e: Exception) { error = e.message ?: "Could not read that list." }
                         } else {
                             busy = true
                             onImport(preview!!) { success ->

@@ -27,6 +27,9 @@ fun encodeVirlinMap(snapshot: VirlinMapSnapshot): ByteArray {
     val branches = JSONObject()
     snapshot.appearance.branchColors.forEach { (id, argb) -> branches.put(id, argb.toString(16)) }
     appearance.put("branchColors", branches)
+    appearance.put("hiddenNodeIds", JSONArray().also { a ->
+        snapshot.appearance.hiddenNodeIds.forEach(a::put)
+    })
     appearance.put("customPalette", JSONArray().also { a -> snapshot.appearance.customPalette.forEach { a.put(it.toString(16)) } })
     appearance.put("savedColors", JSONArray().also { a -> snapshot.appearance.savedColors.forEach { a.put(it.toString(16)) } })
     appearance.put("boxFinish", snapshot.appearance.boxFinish.name)
@@ -101,6 +104,11 @@ fun decodeVirlinMap(bytes: ByteArray): VirlinMapSnapshot {
             paletteIndex = a.optInt("paletteIndex", 0),
             nodeColors = a.colorMap("nodeColors", ids),
             branchColors = a.colorMap("branchColors", ids),
+            hiddenNodeIds = a.optJSONArray("hiddenNodeIds")?.let { hidden ->
+                (0 until hidden.length()).mapNotNullTo(mutableSetOf()) { index ->
+                    hidden.optString(index).takeIf(ids::contains)
+                }
+            } ?: emptySet(),
             customPalette = a.colorList("customPalette"),
             savedColors = a.colorList("savedColors"),
             boxFinish = enumOrNull<MapBoxFinish>(a.optString("boxFinish")) ?: MapBoxFinish.SMOOTH,

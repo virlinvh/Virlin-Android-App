@@ -2,6 +2,8 @@ package com.virlin.app.domain.action
 
 import android.util.JsonReader
 import android.util.JsonToken
+import android.util.JsonWriter
+import java.io.StringWriter
 import java.util.Locale
 
 data class BulkNode(val name: String, val children: List<BulkNode> = emptyList()) {
@@ -22,6 +24,71 @@ data class BulkNode(val name: String, val children: List<BulkNode> = emptyList()
 object BulkHierarchy {
     const val MAX_ITEMS = 500
     const val MAX_CHARACTERS = 250_000
+    data class RecognizedInput(val nodes: List<BulkNode>, val json: String, val format: String)
+
+    /** Plain outlines are converted to the existing validated JSON contract before any write. */
+    fun recognize(source: String): RecognizedInput {
+        require(source.isNotBlank()) { "Paste at least one task." }
+        require(source.length <= MAX_CHARACTERS) { "Maximum 250,000 characters." }
+        if (source.trimStart().startsWith("{")) {
+            return RecognizedInput(parse(source), source, "JSON")
+        }
+        data class DraftNode(val name: String, val children: MutableList<DraftNode> = mutableListOf()) {
+            fun frozen(): BulkNode = BulkNode(name, children.map { it.frozen() })
+        }
+        val bullet = Regex("""^(?:[-*•+]\s+|\[(?: |x|X)]\s+)""")
+        val number = Regex("""^(\d+(?:\.\d+)*)(?:[.)])?\s+""")
+        val roots = mutableListOf<DraftNode>()
+        val parents = mutableListOf<DraftNode>()
+        val indentLevels = mutableListOf<Int>()
+        var count = 0
+        source.lineSequence().filter { it.isNotBlank() }.forEach { raw ->
+            require(++count <= MAX_ITEMS) { "Maximum 500 items including tasks and subtasks." }
+            val indentation = raw.takeWhile { it == ' ' || it == '\t' }
+                .fold(0) { width, character -> width + if (character == '\t') 2 else 1 }
+            if (indentLevels.isEmpty()) indentLevels += indentation
+            else if (indentation > indentLevels.last()) indentLevels += indentation
+            else {
+                while (indentLevels.size > 1 && indentation < indentLevels.last())
+                    indentLevels.removeAt(indentLevels.lastIndex)
+                require(indentation == indentLevels.last()) { "Use consistent indentation for each level." }
+            }
+            val trimmed = raw.trim().replaceFirst(bullet, "")
+            val numbered = number.find(trimmed)
+            val depth = maxOf(indentLevels.lastIndex,
+                numbered?.groupValues?.get(1)?.split('.')?.size?.minus(1) ?: 0)
+            require(depth <= 5) { "Maximum six levels in the imported hierarchy." }
+            require(depth <= parents.size) { "A nested task needs a parent above it." }
+            val name = trimmed.replaceFirst(number, "")
+                .replaceFirst(Regex("""^\[(?: |x|X)]\s+"""), "").trim()
+            require(name.isNotEmpty() && name.length <= 200) { "Task names must be 1–200 characters." }
+            val node = DraftNode(name)
+            if (depth == 0) roots += node else parents[depth - 1].children += node
+            while (parents.size > depth) parents.removeAt(parents.lastIndex)
+            parents += node
+        }
+        val json = StringWriter().also { output ->
+            JsonWriter(output).use { writer ->
+                fun write(nodes: List<DraftNode>) {
+                    writer.beginArray()
+                    nodes.forEach { node ->
+                        writer.beginObject().name("name").value(node.name)
+                        if (node.children.isNotEmpty()) {
+                            writer.name("children")
+                            write(node.children)
+                        }
+                        writer.endObject()
+                    }
+                    writer.endArray()
+                }
+                writer.beginObject().name("version").value(2).name("items")
+                write(roots)
+                writer.endObject()
+            }
+        }.toString()
+        return RecognizedInput(parse(json), json, "Outline")
+    }
+
     fun parse(source: String): List<BulkNode> {
         require(source.length <= MAX_CHARACTERS) { "Maximum 250,000 characters." }
         var count = 0

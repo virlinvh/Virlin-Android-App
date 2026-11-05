@@ -185,7 +185,7 @@ fun VirlinTodoScreen(
                         Icon(Icons.Outlined.MoreVert, contentDescription = "Checklist options", tint = ink)
                     }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        if (actions.onBulkImport != null) DropdownMenuItem(text = { Text("Bulk Import") }, onClick = {
+                        if (actions.onBulkImport != null) DropdownMenuItem(text = { Text("Paste multiple to-dos") }, onClick = {
                             menu = false; bulkImport = true
                         })
                         DropdownMenuItem(text = { Text("Arrange") }, onClick = {
@@ -288,6 +288,12 @@ fun VirlinTodoScreen(
                         else if (filter == "done") "Completed to-dos will appear here."
                         else "Everything is checked off.", color = muted, fontSize = 14.sp,
                         textAlign = TextAlign.Center)
+                    if (ordered.isEmpty() && actions.onBulkImport != null) {
+                        TextButton(onClick = { bulkImport = true },
+                            modifier = Modifier.testTag("todo_bulk_import_open")) {
+                            Text("Paste multiple to-dos", color = accent)
+                        }
+                    }
                 }
             }
             displayed.forEach { item ->

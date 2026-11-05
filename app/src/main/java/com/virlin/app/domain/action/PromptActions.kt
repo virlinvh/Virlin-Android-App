@@ -7,6 +7,7 @@ import com.virlin.app.domain.model.NoteBlock
 import com.virlin.app.domain.model.NoteBlockType
 import com.virlin.app.domain.model.PromptDocument
 import com.virlin.app.domain.model.PromptContentMode
+import com.virlin.app.domain.model.editToken
 import com.virlin.app.domain.prompt.PromptDocumentCodec
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.domain.repository.WorkStreamWriter
@@ -34,7 +35,8 @@ internal class PromptActions(
         sourceText: String = "",
         mode: PromptContentMode = PromptContentMode.PROMPT,
         language: String? = null,
-        responseText: String? = null
+        responseText: String? = null,
+        codeText: String? = null
     ): ActionResult<PromptDocument> = tx {
         val now = clock.now()
         val doc = PromptDocument(
@@ -48,6 +50,7 @@ internal class PromptActions(
             mode = mode,
             language = language,
             responseText = responseText,
+            codeText = codeText,
             createdAt = now,
             updatedAt = now
         )
@@ -79,13 +82,17 @@ internal class PromptActions(
         sourceText: String = "",
         mode: PromptContentMode = PromptContentMode.PROMPT,
         language: String? = null,
-        responseText: String? = null
+        responseText: String? = null,
+        expectedToken: String? = null,
+        codeText: String? = null
     ): ActionResult<PromptDocument> = tx {
         val cap = getCapture(captureItemId)
             ?: return@tx ActionResult.Rejected(DomainError.CaptureNotFound(captureItemId))
         if (cap.type != CaptureType.PROMPT) return@tx ActionResult.Rejected(DomainError.NotAPrompt)
         val now = clock.now()
         val existing = getPromptByCaptureId(captureItemId)
+        if (expectedToken != null && existing?.editToken() != expectedToken)
+            return@tx ActionResult.Rejected(DomainError.PlacementRejected("Prompt changed on the phone. Reload before saving."))
         val doc = (existing ?: PromptDocument(
             id = ids.newId("prm"),
             captureItemId = captureItemId,
@@ -102,6 +109,7 @@ internal class PromptActions(
             mode = mode,
             language = language,
             responseText = responseText,
+            codeText = codeText ?: existing?.codeText,
             updatedAt = now
         )
         if (!doc.hasMeaningfulContent()) return@tx ActionResult.Rejected(DomainError.EmptyCapture)

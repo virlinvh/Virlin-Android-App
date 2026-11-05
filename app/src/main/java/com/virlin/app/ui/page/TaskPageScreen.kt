@@ -32,7 +32,11 @@ import androidx.navigation.NavController
 import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.domain.action.TaskPageActions
 import com.virlin.app.domain.capture.LinkDocumentCodec
+import com.virlin.app.domain.activity.NoteBlockText
 import com.virlin.app.domain.model.*
+import com.virlin.app.ui.hierarchy.MasterDocumentEntry
+import com.virlin.app.ui.hierarchy.MasterDocumentItem
+import com.virlin.app.ui.hierarchy.taskPageBody
 import com.virlin.app.ui.hierarchy.rememberProjectPalette
 import kotlinx.coroutines.launch
 
@@ -45,6 +49,8 @@ data class TaskPageRow(
     val title: String,
     val preview: String,
     val attachmentKind: AttachmentKind? = null,
+    val fullBody: String = preview,
+    val mediaPath: String? = null,
 )
 data class TaskPageState(
     val task: Task? = null,
@@ -101,20 +107,44 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
           return ownerBlocks.map { block ->
             val capture = captures[block.contentId]
             when (block.typeKey) {
-                TaskPageTypeKeys.TODO -> TaskPageRow(block, "To-do", "Checklist",
-                    if (steps.isEmpty()) "No items yet" else "${steps.count { it.done }} of ${steps.size} complete · " + steps.take(2).joinToString(" · ") { it.text })
-                TaskPageTypeKeys.NOTE -> TaskPageRow(block, "Note", "Notes", "Open the rich note document")
+                TaskPageTypeKeys.TODO -> {
+                    val body = taskPageBody(block.typeKey, ownerId, steps, null)
+                    TaskPageRow(block, "To-do", "Checklist", body.lineSequence().first(), fullBody = body)
+                }
+                TaskPageTypeKeys.NOTE -> {
+                    val body = taskPageBody(block.typeKey, ownerId, steps,
+                        repository.getNoteDoc(TaskPageTypeKeys.noteOwner(ownerId)))
+                    TaskPageRow(block, "Note", "Notes", body.lineSequence().first(), fullBody = body)
+                }
                 else -> {
                     val label = TaskPageBlockRegistry.label(block.typeKey)
                     val title = capture?.title?.takeIf { it.isNotBlank() } ?: label
-                    val preview = when (capture?.type) {
-                        CaptureType.LINK -> LinkDocumentCodec.decode(capture.content).note.ifBlank { capture.sourceUrl.orEmpty() }
-                        else -> capture?.content.orEmpty()
-                    }.lineSequence().firstOrNull().orEmpty().ifBlank { "Content unavailable" }
-                    val attachmentKind = if (capture?.type == CaptureType.FILE) {
-                        repository.getAttachmentByCaptureId(capture.id)?.kind
+                    val attachment = if (capture?.type == CaptureType.FILE) {
+                        repository.getAttachmentByCaptureId(capture.id)
                     } else null
-                    TaskPageRow(block, if (attachmentKind == AttachmentKind.PDF) "PDF" else label, title, preview, attachmentKind)
+                    val body = when (capture?.type) {
+                        CaptureType.LINK -> listOfNotNull(capture.sourceUrl,
+                            LinkDocumentCodec.decode(capture.content).note.takeIf { it.isNotBlank() })
+                            .joinToString("\n")
+                        CaptureType.PROMPT -> repository.getPromptByCaptureId(capture.id)?.let { prompt ->
+                            listOfNotNull(prompt.sourceText.takeIf { it.isNotBlank() }
+                                ?: NoteBlockText.render(prompt.blocks),
+                                prompt.codeText?.takeIf { it.isNotBlank() }?.let { "Code\n$it" },
+                                prompt.responseText?.takeIf { it.isNotBlank() }?.let { "Response\n$it" })
+                                .joinToString("\n\n")
+                        } ?: capture.content
+                        CaptureType.NOTE -> repository.getNoteByCaptureId(capture.id)?.blocks
+                            ?.let(NoteBlockText::render) ?: capture.content
+                        else -> capture?.content.orEmpty()
+                    }.ifBlank { attachment?.displayName ?: "Content unavailable" }
+                    val typeLabel = when (attachment?.kind) {
+                        AttachmentKind.PDF -> "PDF"
+                        AttachmentKind.VIDEO -> "Video"
+                        AttachmentKind.IMAGE -> "Image"
+                        else -> label
+                    }
+                    TaskPageRow(block, typeLabel, title, body.lineSequence().first(),
+                        attachment?.kind, body, attachment?.relativePath)
                 }
             }
           }
@@ -203,11 +233,11 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
                         Text(if (acrossBranch) "Items added to this task and its subtasks will appear here."
                              else "Items added from this task's + menu will appear here.", color = Color.Gray)
                     }
-                } else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
+                } else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
                   sections.forEach { section ->
                     item("heading-${section.task.id}") {
-                        Row(Modifier.fillMaxWidth().then(if (section.task.id == taskId) Modifier
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).then(if (section.task.id == taskId) Modifier
                             else Modifier.clickable { navController.navigate(taskPage(section.task.id)) }),
                             verticalAlignment = Alignment.CenterVertically) {
                             Text(if (section.task.id == taskId) "Added to ${section.task.title}"
@@ -222,12 +252,22 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
                         Text("Nothing added here yet", color = Color.Gray, fontSize = 13.sp)
                     }
                     items(section.rows, key = { it.block.id }) { row ->
-                    Surface(shape = RoundedCornerShape(18.dp), color = Color.White, tonalElevation = 1.dp) {
-                        Row(Modifier.fillMaxWidth().clickable { openBlock(navController, row, vm::notify) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(iconFor(row.block.typeKey), null, tint = green, modifier = Modifier.size(25.dp)); Spacer(Modifier.width(14.dp))
-                            Column(Modifier.weight(1f)) { Text(row.label.uppercase(), color = green, fontSize = 11.sp, fontWeight = FontWeight.Bold); Text(row.title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1); Text(row.preview, color = Color.Gray, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                            if (!organize) IconButton({ openBlock(navController, row, vm::notify) }) { Icon(Icons.Default.Edit, "Edit ${row.label}", tint = Color.Gray) }
-                            else if (row.block.taskId == taskId) Column { Row { IconButton({ vm.moveBy(row.block.id, -1) }) { Icon(Icons.Default.KeyboardArrowUp, "Move up") }; IconButton({ vm.moveBy(row.block.id, 1) }) { Icon(Icons.Default.KeyboardArrowDown, "Move down") } }; Row { IconButton({ transfer = row to false }) { Icon(Icons.Default.DriveFileMove, "Move") }; IconButton({ transfer = row to true }, enabled = row.block.typeKey.startsWith("capture.")) { Icon(Icons.Default.ContentCopy, "Duplicate") } } }
+                    Column {
+                        MasterDocumentItem(
+                            MasterDocumentEntry(row.block.id, row.title, row.label, row.fullBody,
+                                row.block.contentId, row.mediaPath,
+                                row.attachmentKind == AttachmentKind.IMAGE),
+                            ink, green) { openBlock(navController, row, vm::notify) }
+                        if (organize && row.block.taskId == taskId) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                                horizontalArrangement = Arrangement.End) {
+                                IconButton({ vm.moveBy(row.block.id, -1) }) { Icon(Icons.Default.KeyboardArrowUp, "Move up") }
+                                IconButton({ vm.moveBy(row.block.id, 1) }) { Icon(Icons.Default.KeyboardArrowDown, "Move down") }
+                                IconButton({ transfer = row to false }) { Icon(Icons.Default.DriveFileMove, "Move") }
+                                IconButton({ transfer = row to true }, enabled = row.block.typeKey.startsWith("capture.")) {
+                                    Icon(Icons.Default.ContentCopy, "Duplicate")
+                                }
+                            }
                         }
                     }
                     }

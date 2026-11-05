@@ -37,6 +37,11 @@ class MapAppearanceStore(context: Context) {
     fun appearanceOf(projectId: String): MapAppearance =
         cache.value[projectId] ?: MapAppearance()
 
+    suspend fun snapshot(projectId: String): MapAppearance = mutex.withLock {
+        if (!loaded) { cache.value = read(); loaded = true }
+        cache.value[projectId] ?: MapAppearance()
+    }
+
     fun save(projectId: String, appearance: MapAppearance) {
         scope.launch { mutex.withLock {
             if (!loaded) { cache.value = read(); loaded = true }
@@ -46,6 +51,18 @@ class MapAppearanceStore(context: Context) {
             }
         } }
     }
+
+    /** Phone-confirmed desktop edit: update one field without replacing concurrent Android edits. */
+    suspend fun update(projectId: String, change: (MapAppearance) -> MapAppearance): MapAppearance =
+        mutex.withLock {
+            if (!loaded) { cache.value = read(); loaded = true }
+            require(projectId !in removedProjects) { "Project was removed" }
+            val next = prune(change(cache.value[projectId] ?: MapAppearance()))
+            val all = cache.value + (projectId to next)
+            write(all).getOrThrow()
+            cache.value = all
+            next
+        }
 
     suspend fun remove(projectId: String) = mutex.withLock {
         // Do not erase another project's configuration if the shared file is unreadable.
@@ -63,6 +80,7 @@ class MapAppearanceStore(context: Context) {
         branchColors = appearance.branchColors - removedOwners,
         nodeFinishes = appearance.nodeFinishes - removedOwners,
         nodeWidths = appearance.nodeWidths - removedOwners,
+        hiddenNodeIds = appearance.hiddenNodeIds - removedOwners,
     )
     suspend fun removeOwners(ids: Set<String>) = mutex.withLock {
         if (file.exists() || File(file.path + ".bak").exists()) JSONObject(android.util.AtomicFile(file).openRead().bufferedReader().use { it.readText() })
@@ -88,6 +106,9 @@ class MapAppearanceStore(context: Context) {
                             paletteIndex = o.optInt("paletteIndex", 0),
                             nodeColors = o.longMap("nodeColors"),
                             branchColors = o.longMap("branchColors"),
+                            hiddenNodeIds = o.optJSONArray("hiddenNodeIds")?.let { a ->
+                                (0 until a.length()).mapTo(mutableSetOf()) { a.getString(it) }
+                            } ?: emptySet(),
                             customPalette = o.longList("customPalette"),
                             savedColors = o.longList("savedColors"),
                             boxFinish = enumValueOrDefault(o.optString("boxFinish")),
@@ -112,6 +133,9 @@ class MapAppearanceStore(context: Context) {
                         .put("paletteIndex", appearance.paletteIndex)
                         .put("nodeColors", appearance.nodeColors.toJson())
                         .put("branchColors", appearance.branchColors.toJson())
+                        .put("hiddenNodeIds", org.json.JSONArray().also { a ->
+                            appearance.hiddenNodeIds.forEach(a::put)
+                        })
                         .put("customPalette", org.json.JSONArray().also { a -> appearance.customPalette.forEach { a.put(it.toString(16)) } })
                         .put("savedColors", org.json.JSONArray().also { a -> appearance.savedColors.forEach { a.put(it.toString(16)) } })
                         .put("boxFinish", appearance.boxFinish.name)

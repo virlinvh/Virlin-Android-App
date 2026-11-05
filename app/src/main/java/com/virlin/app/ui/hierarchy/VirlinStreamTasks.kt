@@ -41,6 +41,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -123,7 +125,8 @@ private val Muted: Color @Composable get() = LocalProjectPalette.current?.let { 
 private val Line: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFE4E9ED)
 private val Green: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.primary) } ?: Color(0xFF65BB31)
 private val DeepGreen: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.secondary) } ?: Color(0xFF176B45)
-private val Mint = Color(0xFFEAF7EC)
+private val Mint: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFEAF7EC)
+private val ProjectSurface: Color @Composable get() = LocalProjectPalette.current?.let { Color(it.surface) } ?: Color.White
 private val Amber = Color(0xFFE5A000)
 private val AmberWash = Color(0xFFFFF5DB)
 private val Danger = Color(0xFFC73728)
@@ -284,7 +287,7 @@ fun VirlinStreamTasks(
                         Box(Modifier.fillMaxWidth().height(14.dp).background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(LocalProjectPalette.current?.let { Color(it.surface) } ?: Color.White, Color.Transparent))))
                     }
                 }
-                LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("hierarchy_task_list"), state = listState, contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 84.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("hierarchy_task_list"), state = listState, contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = if (organize && selected.isNotEmpty()) 152.dp else 84.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     if (visible.isEmpty()) item { Text(if (siblings.isEmpty()) "No tasks here yet" else "No matching tasks", color = Muted, modifier = Modifier.padding(20.dp)) }
                     itemsIndexed(visible, key = { _, task -> task.id }) { index, task ->
                         TaskRow(task, index + 1, task.id in ancestorIds, task.id in selected, organize, ui.visualState,
@@ -302,22 +305,58 @@ fun VirlinStreamTasks(
     }
     // Anchor the overlay to the route's full viewport, as on the project overview.
     // The nested Scaffold's content slot can reserve space independently of the root footer.
-    Box(Modifier.align(Alignment.BottomCenter)) {
-        BottomListFeather(palette?.let { Color(it.surface) } ?: Color.White)
-    }
-    Row(Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 12.dp),
-        horizontalArrangement = Arrangement.End) {
-        if (organize && selected.isNotEmpty()) {
-            TextButton(onClick = { moveFor = selected.toList() }) { Text("Move") }
-            TextButton(onClick = { deleteFor = selected.toList() }) { Text("Cancel tasks") }
-        } else FloatingActionButton(
+    if (organize && selected.isNotEmpty()) {
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            .background(ProjectSurface).border(1.dp, Line).testTag("task_selection_dock")
+            .padding(horizontal = 20.dp, vertical = 11.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("${selected.size} selected", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Choose tasks, then an action", color = Muted, fontSize = 12.sp)
+                }
+                TextButton(onClick = { selected = emptySet() }, modifier = Modifier.testTag("clear_task_selection")) {
+                    Text("Clear", color = DeepGreen)
+                }
+            }
+            Spacer(Modifier.height(7.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                Button(onClick = { moveFor = selected.toList() }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                    .testTag("move_selected_tasks"), shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = DeepGreen, contentColor = readableOn(DeepGreen))) {
+                    Icon(Icons.Default.Folder, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(7.dp))
+                    Text("Move", maxLines = 1)
+                }
+                OutlinedButton(onClick = { deleteFor = selected.toList() },
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("cancel_selected_tasks"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger)) {
+                    Icon(Icons.Default.Close, null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Cancel tasks", maxLines = 1, fontSize = 13.sp)
+                }
+            }
+        }
+    } else {
+        Box(Modifier.align(Alignment.BottomCenter)) {
+            BottomListFeather(palette?.let { Color(it.surface) } ?: Color.White)
+        }
+        FloatingActionButton(
             onClick = { addFor = parentId; showAdd = true },
-            modifier = Modifier.size(56.dp).testTag(AddTaskButtonTag),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 12.dp)
+                .size(56.dp).testTag(AddTaskButtonTag),
             shape = RoundedCornerShape(20.dp),
             containerColor = LocalProjectPalette.current?.let { Color(it.main) } ?: Green,
             contentColor = LocalProjectPalette.current?.let { readableOn(Color(it.main)) } ?: Color.White
         ) {
             Icon(Icons.Default.Add, if (parentId == null) "Add task" else "Add subtask", modifier = Modifier.size(28.dp))
+        }
+    }
+    moveFor?.let { ids ->
+        MoveSheet(ui, ids, { moveFor = null }) { destination ->
+            actions.move(ids, destination, null)
+            moveFor = null
+            selected = emptySet()
         }
     }
     if (showAdd) {
@@ -354,7 +393,6 @@ fun VirlinStreamTasks(
             })
     }
     renameFor?.let { id -> RenameDialog(tasksById[id]?.title.orEmpty(), { renameFor = null }) { actions.rename(id, it); renameFor = null } }
-    moveFor?.let { ids -> MoveSheet(ui, ids, { moveFor = null; selected = emptySet() }) { destination -> actions.move(ids, destination, null); moveFor = null; selected = emptySet() } }
     deleteFor?.let { ids ->
         val subtree = remember(ids, ui.tasks) {
             val byParent = ui.tasks.groupBy { it.parentId }
@@ -387,11 +425,6 @@ fun VirlinStreamTasks(
 }
 }
 private const val STREAM_KEY = "__stream__"
-private fun pathLabel(task: StreamTaskUi, byId: Map<String, StreamTaskUi>): String {
-    val names = mutableListOf<String>(); var cursor = task.parentId
-    while (cursor != null && cursor in byId) { names += byId.getValue(cursor).title; cursor = byId[cursor]?.parentId }
-    return names.reversed().joinToString(" / ")
-}
 @Composable private fun FilterPill(label: String, chosen: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Box(modifier.background(if (chosen) Green else Color(0xFFF4F5F6), RoundedCornerShape(15.dp)).clickable(onClick = onClick).padding(vertical = 13.dp), contentAlignment = Alignment.Center) {
         Text(label, color = if (chosen) { if(LocalProjectPalette.current==null) Color.White else readableOn(Green) } else Muted, fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium)
@@ -413,7 +446,9 @@ private fun executionWash(state: WorkstreamState): Color = when (state) {
 }
 @Composable internal fun TaskRow(task: StreamTaskUi, number: Int, containsCurrent: Boolean, selected: Boolean, organize: Boolean, executionState: WorkstreamState, modifier: Modifier = Modifier, onOpen: () -> Unit, onComplete: () -> Unit, onWorkControls: () -> Unit, onMenu: () -> Unit, onReorder: (Int) -> Unit) {
     val rowState = task.activityState.takeIf { it != WorkstreamState.READY } ?: if (task.isCurrent) executionState else WorkstreamState.READY
-    val tint = if (rowState != WorkstreamState.READY) executionWash(rowState) else if (selected || containsCurrent) Mint else Color.White
+    // Selection must remain visible even when the task has an activity/status wash.
+    val tint = if (selected) Mint else if (rowState != WorkstreamState.READY) executionWash(rowState)
+        else if (containsCurrent) Mint else Color.White
     Row(modifier.fillMaxWidth().circularOrbCutout().background(tint, CardShape).border(1.dp, if (selected) Green else Line, CardShape).clickable(onClick = onOpen).avoidOrbCircle().padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
         if (organize) {
             TextButton(onClick = onOpen) { Text(if (selected) "Selected" else "Select", color = DeepGreen, fontSize = 10.sp) }
@@ -506,18 +541,113 @@ private fun executionWash(state: WorkstreamState): Color = when (state) {
     var name by remember(initial) { mutableStateOf(initial) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit task name") }, text = { OutlinedTextField(name, { name = it }, singleLine = true) }, confirmButton = { TextButton(onClick = { onSave(name.trim()) }, enabled = name.isNotBlank()) { Text("Save", color = DeepGreen) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun MoveSheet(ui: StreamTasksUi, ids: List<String>, onDismiss: () -> Unit, onMove: (String?) -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.White) {
-        Column(Modifier.verticalScroll(rememberScrollState()).padding(22.dp)) {
-            Text("Move ${ids.size} ${if (ids.size == 1) "task" else "tasks"}", fontWeight = FontWeight.Bold, fontSize = 22.sp, color = Ink)
-            Text("Choose a parent in this stream", color = Muted)
-            TextButton(onClick = { onMove(null) }) { Text("Stream root", color = DeepGreen) }
-            val excluded = buildSet { addAll(ids); var changed: Boolean; do { val sizeBefore = size; ui.tasks.filter { it.parentId in this }.forEach { add(it.id) }; changed = size != sizeBefore } while (changed) }
-            ui.tasks.filterNot { it.id in excluded }.sortedBy { it.order }.forEach { target ->
-                TextButton(onClick = { onMove(target.id) }) { Text("${pathLabel(target, ui.tasks.associateBy { it.id })} / ${target.title}", color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+    val byId = remember(ui.tasks) { ui.tasks.associateBy { it.id } }
+    val excluded = remember(ids, ui.tasks) {
+        buildSet {
+            addAll(ids)
+            var changed: Boolean
+            do {
+                val before = size
+                ui.tasks.filter { it.parentId in this }.forEach { add(it.id) }
+                changed = size != before
+            } while (changed)
+        }
+    }
+    var browsingParent by remember(ids, ui.streamId) { mutableStateOf<String?>(null) }
+    var destination by remember(ids, ui.streamId) { mutableStateOf<String?>(null) }
+    val choices = remember(browsingParent, ui.tasks, excluded) {
+        ui.tasks.filter { it.parentId == browsingParent && it.id !in excluded }.sortedBy { it.order }
+    }
+    val destinationName = destination?.let { byId[it]?.title } ?: if (ui.standalone) "Project root" else "Stream root"
+    BackHandler { if (browsingParent != null) browsingParent = byId[browsingParent]?.parentId else onDismiss() }
+    Box(Modifier.fillMaxSize().testTag("move_destination_overlay")) {
+        Box(Modifier.fillMaxSize().background(Color(0x660F241B)).clickable(onClick = onDismiss))
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(0.79f)
+            .background(ProjectSurface, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))) {
+            Box(Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp, bottom = 15.dp)
+                .size(width = 36.dp, height = 4.dp).background(Line, RoundedCornerShape(4.dp)))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f)) {
+                    Text("MOVE ${ids.size} ${if (ids.size == 1) "TASK" else "TASKS"}", color = DeepGreen,
+                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
+                    Text("Choose a destination", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.testTag("move_destination_close")) {
+                    Icon(Icons.Default.Close, contentDescription = "Close move destinations", tint = Muted)
+                }
             }
-            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)
+                .background(Mint, RoundedCornerShape(12.dp)).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(ui.streamName, color = Muted, fontSize = 12.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.clickable { browsingParent = null })
+                browsingParent?.let { parentId ->
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Muted, modifier = Modifier.size(16.dp))
+                    Text(byId[parentId]?.title.orEmpty(), color = Ink, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                }
+            }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
+                if (browsingParent != null) {
+                    TextButton(onClick = { browsingParent = byId[browsingParent]?.parentId }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Back one level", color = DeepGreen)
+                    }
+                }
+                MoveDestinationRow(
+                    title = if (browsingParent == null) destinationName.takeIf { destination == null }
+                        ?: if (ui.standalone) "Project root" else "Stream root"
+                    else byId[browsingParent]?.title.orEmpty(),
+                    subtitle = if (browsingParent == null) "Keep as a top-level task" else "Place inside this task",
+                    selected = destination == browsingParent,
+                    onSelect = { destination = browsingParent }, onExplore = null,
+                    modifier = Modifier.testTag("move_destination_current")
+                )
+                choices.forEach { task ->
+                    MoveDestinationRow(task.title,
+                        "${task.childCount} ${if (task.childCount == 1) "subtask" else "subtasks"} · Tap to explore",
+                        selected = destination == task.id,
+                        onSelect = { destination = task.id },
+                        onExplore = { browsingParent = task.id },
+                        modifier = Modifier.testTag("move_destination_${task.id}"))
+                }
+            }
+            Row(Modifier.fillMaxWidth().border(1.dp, Line).padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("DESTINATION", color = Muted, fontSize = 10.sp, letterSpacing = 1.sp)
+                    Text(destinationName, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Button(onClick = { onMove(destination) }, modifier = Modifier.testTag("move_destination_confirm"),
+                    colors = ButtonDefaults.buttonColors(containerColor = DeepGreen, contentColor = readableOn(DeepGreen)),
+                    shape = RoundedCornerShape(12.dp)) { Text("Move here") }
+            }
+        }
+    }
+}
+
+@Composable private fun MoveDestinationRow(
+    title: String, subtitle: String, selected: Boolean,
+    onSelect: () -> Unit, onExplore: (() -> Unit)?, modifier: Modifier = Modifier
+) {
+    Row(modifier.fillMaxWidth().padding(bottom = 5.dp)
+        .background(if (selected) Mint else ProjectSurface, RoundedCornerShape(13.dp))
+        .border(if (selected) 1.dp else 0.dp, if (selected) Green else Color.Transparent, RoundedCornerShape(13.dp))
+        .clickable(onClick = onSelect).padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Default.Folder, null, tint = DeepGreen, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (selected) Icon(Icons.Default.Check, "Selected destination", tint = DeepGreen, modifier = Modifier.size(20.dp))
+        if (onExplore != null) IconButton(onClick = onExplore, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Explore $title", tint = DeepGreen)
         }
     }
 }

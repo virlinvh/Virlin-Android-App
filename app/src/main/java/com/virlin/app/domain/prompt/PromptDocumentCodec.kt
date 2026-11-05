@@ -55,7 +55,8 @@ object PromptDocumentCodec {
      */
     fun encodeDocument(doc: PromptDocument): String {
         val base = NoteDocumentCodec.encodePayload(doc.blocks).dropLast(1)
-        val exactSource = doc.sourceText.ifEmpty { NotePlainTextSerializer.serializeBlocks(doc.blocks) }
+        val exactSource = if (doc.codeText != null) doc.sourceText
+            else doc.sourceText.ifEmpty { NotePlainTextSerializer.serializeBlocks(doc.blocks) }
         return buildString {
             append(base)
             append(",\"promptV\":2")
@@ -65,6 +66,8 @@ object PromptDocumentCodec {
             if (doc.language == null) append("null") else appendJsonString(doc.language)
             append(",\"response\":")
             if (doc.responseText == null) append("null") else appendJsonString(doc.responseText)
+            append(",\"codeSource\":")
+            if (doc.codeText == null) append("null") else appendJsonString(doc.codeText)
             append('}')
         }
     }
@@ -101,6 +104,7 @@ object PromptDocumentCodec {
                 ?: PromptContentMode.PROMPT,
             language = root?.strOrNull("language"),
             responseText = root?.strOrNull("response"),
+            codeText = root?.strOrNull("codeSource"),
             createdAt = meta.createdAt,
             updatedAt = meta.updatedAt
         )
@@ -109,6 +113,7 @@ object PromptDocumentCodec {
     /** Plain-text projection for Copy / Inbox preview (title + body). */
     fun plainText(doc: PromptDocument): String {
         if (doc.sourceText.isNotEmpty()) return doc.sourceText
+        if (!doc.codeText.isNullOrEmpty()) return doc.codeText
         val body = NotePlainTextSerializer.serialize(
             com.virlin.app.domain.model.NoteDocument(
                 id = doc.id,

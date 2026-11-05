@@ -66,6 +66,8 @@ data class MapAppearance(
     val nodeFinishes: Map<String, MapBoxFinish> = emptyMap(),
     /** Optional box widths in map units, keyed by stable node id. */
     val nodeWidths: Map<String, Float> = emptyMap(),
+    /** Map-only visibility; hiding never removes the underlying project, workstream, or task. */
+    val hiddenNodeIds: Set<String> = emptySet(),
 )
 
 /**

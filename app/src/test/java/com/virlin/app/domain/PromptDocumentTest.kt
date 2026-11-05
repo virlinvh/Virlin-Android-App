@@ -127,6 +127,27 @@ class PromptDocumentTest {
         assertEquals(source, PromptDocumentCodec.plainText(decoded))
     }
 
+    @Test fun promptCodeAndResponse_areIndependentAndBackwardCompatible() {
+        val original = PromptDocument(
+            id = "p", captureItemId = "c", title = "Release checklist",
+            blocks = listOf(NoteBlock("1", NoteBlockType.TEXT)),
+            sourceText = "Explain the release", codeText = "./gradlew assembleRelease",
+            responseText = "Build succeeded", createdAt = clock.now(), updatedAt = clock.now()
+        )
+        val decoded = PromptDocumentCodec.decodeInto(
+            PromptDocumentCodec.Meta("p", "c", original.title, null, "[]", clock.now(), clock.now()),
+            PromptDocumentCodec.encodeDocument(original)
+        )
+        assertEquals(original.sourceText, decoded.sourceText)
+        assertEquals(original.codeText, decoded.codeText)
+        assertEquals(original.responseText, decoded.responseText)
+        val legacy = PromptDocumentCodec.decodeInto(
+            PromptDocumentCodec.Meta("p", "c", null, null, "[]", clock.now(), clock.now()),
+            PromptDocumentCodec.encodeDocument(original.copy(codeText = null))
+        )
+        assertEquals(null, legacy.codeText)
+    }
+
     @Test fun responseParser_separatesProseAndEveryFencedCodeBlock_withoutChangingSource() {
         val raw = "Before\n```kotlin\nval x = 1\n```\nMiddle\n```sql\nSELECT 1;\n```\nAfter"
         val segments = PromptContentParser.responseSegments(raw)
@@ -150,14 +171,16 @@ class PromptDocumentTest {
         val vm = PromptEditorViewModel(null, actions, repo, ids, clock)
         val source = "  fun main() {\n    println(\"Hi\")\n  }  "
         val response = "Use this:\n```kotlin\nprintln(\"Hi\")\n```"
-        vm.onSourceTextChange(source)
+        vm.onSourceTextChange("Explain the build")
         vm.setMode(PromptContentMode.CODE)
+        vm.onSourceTextChange(source)
         vm.setLanguage("Kotlin")
         vm.onResponseTextChange(response)
         vm.saveToInbox()
         val captureId = vm.state.value.captureId!!
         val loaded = actions.getPromptByCaptureId(captureId)!!
-        assertEquals(source, loaded.sourceText)
+        assertEquals("Explain the build", loaded.sourceText)
+        assertEquals(source, loaded.codeText)
         assertEquals(source, vm.copyPromptPlainText())
         assertEquals(PromptContentMode.CODE, loaded.mode)
         assertEquals("Kotlin", loaded.language)

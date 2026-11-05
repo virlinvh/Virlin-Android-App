@@ -46,4 +46,20 @@ class PromptPasteFormattingTest {
         assertEquals(pasted, loaded.sourceText)
         assertEquals(pasted, loaded.responseText)
     }
+
+    @Test fun importedLongFencePreservesNestedFencesAndCodeWhitespace() {
+        val code = "  const example = `literal`;\n```\n  keep  spaces\n"
+        val source = "Before\n\n````javascript\n${code}````\n\nAfter"
+        val segments = PromptContentParser.responseSegments(source)
+        assertEquals(code, (segments[1] as ResponseSegment.Code).text)
+        assertEquals("JavaScript", (segments[1] as ResponseSegment.Code).language)
+        assertEquals("\n\nAfter", (segments[2] as ResponseSegment.Prose).text)
+    }
+
+    @Test fun tildeFencedResponseIsAlsoRecognizedWithoutChangingStoredText() {
+        val source = "~~~python\nprint('hello')\n~~~"
+        val code = PromptContentParser.responseSegments(source).single() as ResponseSegment.Code
+        assertEquals("Python", code.language)
+        assertEquals("print('hello')\n", code.text)
+    }
 }

@@ -81,9 +81,9 @@ class VirlinTodoRedesignUiTest {
             }
         }
         compose.onNodeWithContentDescription("Checklist options").performClick()
-        compose.onNodeWithText("Bulk Import").performClick()
+        compose.onAllNodesWithText("Paste multiple to-dos")[1].performClick()
         compose.onNodeWithTag("todo_bulk_import_dialog").assertExists()
-        compose.onNodeWithText("JSON").performTextInput("""{"version":2,"items":[{"name":"A"},{"name":"B"}]}""")
+        compose.onNodeWithText("Paste to-dos").performTextInput("A\n- B")
         compose.onNodeWithText("Preview", useUnmergedTree = true).performClick()
         compose.onNodeWithText("Add 2 items").performClick()
         compose.runOnIdle { assertEquals(listOf("A", "B"), imported) }

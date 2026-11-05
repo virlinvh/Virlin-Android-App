@@ -17,7 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.OpenWith
+import androidx.compose.material.icons.outlined.Style
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -45,14 +45,14 @@ fun mapTaskActionTag(label: String) = "map_task_action_${label.lowercase().repla
  * would change when a task was selected, which moves the canvas out from under a finger that is
  * already dragging. The host hides it while a drag or a modal is in progress.
  *
- * Order is fixed - Open Task | Move | Page | Add - so the destructive-ish actions never swap
+ * Order is fixed - Open Task | Flashcard | Page | Add - so the actions never swap
  * places under a thumb that has learned where they are.
  */
 @Composable
 internal fun MapSelectedTaskBar(
     task: MapTopic,
     onOpenTask: (MapTopic) -> Unit,
-    onMove: (MapTopic) -> Unit,
+    onFlashcards: (MapTopic) -> Unit,
     onPage: (MapTopic) -> Unit,
     onAdd: (MapTopic) -> Unit,
     modifier: Modifier = Modifier,
@@ -82,9 +82,8 @@ internal fun MapSelectedTaskBar(
             Box(Modifier.width(1.dp).height(38.dp)) {
                 Surface(color = hairline, modifier = Modifier.width(1.dp).height(38.dp)) {}
             }
-            if (task.kind != MapKind.PROJECT) {
-                MapTaskAction(Icons.Outlined.OpenWith, "Move", task.title, Modifier.weight(1f)) { onMove(task) }
-            }
+            MapTaskAction(Icons.Outlined.Style, "Flashcard", task.title,
+                Modifier.weight(1f)) { onFlashcards(task) }
             MapTaskAction(Icons.Outlined.Description,
                 "Page",
                 task.title, Modifier.weight(1f)) { onPage(task) }
@@ -99,26 +98,27 @@ private fun MapTaskAction(
     label: String,
     taskTitle: String,
     modifier: Modifier,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     val ink = com.virlin.app.ui.hierarchy.LocalProjectPalette.current?.let { Color(it.text) } ?: MapInk
     Column(
         modifier = modifier
             .testTag(mapTaskActionTag(label))
-            // A screen reader hears which task this acts on, not just "Move".
+            // A screen reader hears which box this acts on, not just the action name.
             .semantics { contentDescription = "$label, $taskTitle" }
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             // 48dp is Android's minimum touch target; the icon+label is shorter than that.
             .defaultMinSize(minHeight = 48.dp)
             .padding(vertical = 7.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = ink)
+        Icon(icon, contentDescription = null, tint = if (enabled) ink else ink.copy(alpha = .55f))
         Spacer(Modifier.height(5.dp))
         Text(
             label, fontSize = 11.sp, fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center, color = ink, maxLines = 1,
+            textAlign = TextAlign.Center, color = if (enabled) ink else ink.copy(alpha = .55f), maxLines = 1,
         )
     }
 }

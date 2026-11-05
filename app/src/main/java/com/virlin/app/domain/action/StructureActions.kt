@@ -707,11 +707,16 @@ internal class StructureActions(
         taskIds: List<String>,
         newParentId: String?,
         afterId: String?,
-        withinStreamId: String
+        withinStreamId: String,
+        expectedSiblingIds: List<String>? = null
     ): ActionResult<List<Task>> = tx {
         if (taskIds.isEmpty()) return@tx ActionResult.Success(emptyList())
         val stream = getStream(withinStreamId) ?: return@tx ActionResult.NotFound(withinStreamId)
         val all = allTasks()
+        if (expectedSiblingIds != null && all.filter { it.workStreamId == stream.id &&
+                    it.parentTaskId == newParentId }
+                .sortedWith(compareBy({ it.order }, { it.id })).map { it.id } != expectedSiblingIds)
+            return@tx ActionResult.Rejected(DomainError.PlacementRejected("Task order changed"))
         val moving = taskIds.map { id ->
             val task = all.firstOrNull { it.id == id }
                 ?: return@tx ActionResult.Rejected(DomainError.TaskNotFound(id))

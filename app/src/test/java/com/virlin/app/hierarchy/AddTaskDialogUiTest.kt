@@ -41,6 +41,21 @@ class AddTaskDialogUiTest {
     @Test fun taskBulkKeepsOriginalPopupAndPreviewsChildren() = checkBulk(null)
     @Test fun nestedSubtaskBulkKeepsOriginalPopupAndPreviewsChildren() = checkBulk("nested-parent")
 
+    @Test fun taskBulkRecognizesPlainIndentedOutline() {
+        compose.setContent {
+            Box(Modifier.size(360.dp, 640.dp)) {
+                AddTaskSheet("Parent", StreamExecutionMode.HUMAN, emptyList(), {}, { _, _, _ -> },
+                    bulkDestination = com.virlin.app.domain.action.CreateTask("", parentTaskId = "parent"))
+            }
+        }
+        compose.onNodeWithText("Bulk").performClick()
+        compose.onNode(hasSetTextAction()).performScrollTo()
+            .performTextInput("- First\n  - Child\n- Second")
+        compose.onNodeWithText("Preview").performClick()
+        compose.onNodeWithText("Outline recognized · 2 top-level tasks").assertExists()
+        compose.onNodeWithText("Preview · 3 items").assertExists()
+    }
+
     @Test fun bulkCreationUsesExplicitExecutionSelection() {
         compose.setContent {
             Box(Modifier.size(360.dp, 640.dp)) {
