@@ -42,9 +42,15 @@ jobs:
       - name: Build NSIS installer
         working-directory: desktop/virlin-connect
         run: npm run desktop:build
+      - name: Verify publisher signatures before release
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath 'desktop/virlin-connect/src-tauri/target/release/bundle/nsis' -File -Filter '*setup.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'Installer was not produced.' }
+          ./desktop/virlin-connect/Verify-WindowsRelease.ps1 -InstallerPath $installer.FullName -AppPath 'desktop/virlin-connect/src-tauri/target/release/virlin-connect.exe'
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: Virlin-Connect-0.6.1-Windows-installer
+          name: Virlin-Connect-0.6.9-Windows-installer
           path: desktop/virlin-connect/src-tauri/target/release/bundle/nsis/*setup.exe
           if-no-files-found: error

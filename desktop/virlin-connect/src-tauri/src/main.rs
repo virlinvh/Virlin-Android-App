@@ -1,16 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod pairing;
+mod offline_copy;
 
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc, atomic::{AtomicBool, Ordering}};
 use std::io::{Read, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Manager, State, path::BaseDirectory};
+use tauri::{Manager, State};
 
 #[derive(Default)]
 struct PairingState(Mutex<Option<PairingSession>>);
@@ -94,6 +93,14 @@ fn start_pairing(address: String, state: State<PairingState>) -> Result<PairingO
         return Err("Choose a listed local network address".into());
     }
     let mut guard = state.0.lock().map_err(|_| "Pairing state unavailable")?;
+    // A dropped/expired connection leaves its session handle behind until the
+    // UI explicitly cancels it. Allow a fresh QR after that terminal state.
+    if guard.as_ref().is_some_and(|session| {
+        let status = session.status.lock().unwrap();
+        !status.starts_with("Connected") && !status.starts_with("Waiting for phone approval")
+    }) {
+        if let Some(ended) = guard.take() { ended.cancelled.store(true, Ordering::Relaxed); }
+    }
     if guard.is_some() { return Err("Disconnect the current session first".into()); }
     let listener = pairing::PairingListener::bind(ip)?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
@@ -164,7 +171,255 @@ fn project_tree(state: State<PairingState>) -> Result<String, String> {
     workspace_request(&state, serde_json::json!({"v": 1, "type": "get_tree"}).to_string())
 }
 
+#[tauri::command]
+fn map_appearance(project_id: String, state: State<PairingState>) -> Result<String, String> {
+    if !valid_map_id(&project_id) { return Err("Invalid project ID".into()); }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "get_map_appearance",
+        "projectId": project_id}).to_string())
+}
+
+fn valid_map_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 &&
+        id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+#[tauri::command]
+fn set_map_appearance(project_id: String, node_id: String, operation: String,
+    color: Option<u64>, width: Option<f32>, expected_color: Option<u64>,
+    expected_width: Option<f32>, has_expected: bool, key: String,
+    state: State<PairingState>) -> Result<String, String> {
+    if !valid_map_id(&project_id) || !valid_map_id(&node_id) || !is_uuid_key(&key) ||
+        !matches!(operation.as_str(), "color" | "width") ||
+        color.is_some_and(|value| !(0xff000000..=0xffffffff).contains(&value)) ||
+        width.is_some_and(|value| !value.is_finite() || !(110.0..=560.0).contains(&value)) ||
+        expected_color.is_some_and(|value| !(0xff000000..=0xffffffff).contains(&value)) ||
+        expected_width.is_some_and(|value| !value.is_finite() || !(110.0..=560.0).contains(&value)) {
+        return Err("Invalid map appearance edit".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "set_map_appearance",
+        "projectId": project_id, "nodeId": node_id, "operation": operation,
+        "color": color, "width": width, "expectedColor": expected_color,
+        "expectedWidth": expected_width, "hasExpected": has_expected,
+        "key": key}).to_string())
+}
+
+#[tauri::command]
+fn map_place(project_id: String, source_id: String, target_parent_id: String,
+    insert_before_id: Option<String>, operation: String, expected_revision: String, key: String,
+    state: State<PairingState>) -> Result<String, String> {
+    if !valid_map_id(&project_id) || !valid_map_id(&source_id) ||
+        !valid_map_id(&target_parent_id) ||
+        insert_before_id.as_ref().is_some_and(|id| !valid_map_id(id)) ||
+        !matches!(operation.as_str(), "MOVE" | "COPY") || expected_revision.parse::<i64>().is_err() ||
+        !is_uuid_key(&key) { return Err("Invalid map placement".into()); }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "map_place",
+        "projectId": project_id, "sourceId": source_id,
+        "targetParentId": target_parent_id, "insertBeforeId": insert_before_id,
+        "operation": operation, "expectedRevision": expected_revision,
+        "key": key}).to_string())
+}
+
+#[tauri::command]
+fn map_delete(project_id: String, node_id: String, kind: String,
+    confirm_title: String, key: String, state: State<PairingState>) -> Result<String, String> {
+    if !valid_map_id(&project_id) || !valid_map_id(&node_id) ||
+        !matches!(kind.as_str(), "project" | "workstream" | "task") ||
+        confirm_title.is_empty() || confirm_title.chars().count() > 200 || !is_uuid_key(&key) {
+        return Err("Invalid map delete request".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "map_delete",
+        "projectId": project_id, "nodeId": node_id, "kind": kind,
+        "confirmTitle": confirm_title, "key": key}).to_string())
+}
+
+#[tauri::command]
+fn map_rename(project_id: String, node_id: String, kind: String,
+    title: String, key: String, state: State<PairingState>) -> Result<String, String> {
+    if !valid_map_id(&project_id) || !valid_map_id(&node_id) ||
+        !matches!(kind.as_str(), "project" | "workstream" | "task") ||
+        title.trim().is_empty() || title.chars().count() > 200 || !is_uuid_key(&key) {
+        return Err("Invalid map rename request".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "map_rename",
+        "projectId": project_id, "nodeId": node_id, "kind": kind,
+        "title": title, "key": key}).to_string())
+}
+
+#[tauri::command]
+fn project_knowledge(project_id: String, state: State<PairingState>) -> Result<String, String> {
+    if project_id.is_empty() || project_id.len() > 128 ||
+        !project_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err("Invalid project ID".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "get_knowledge", "projectId": project_id}).to_string())
+}
+
+#[tauri::command]
+fn knowledge_capabilities(state: State<PairingState>) -> Result<String, String> {
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "get_capabilities"}).to_string())
+}
+
+#[tauri::command]
+fn knowledge_item(project_id: String, capture_id: String, state: State<PairingState>) -> Result<String, String> {
+    for id in [&project_id, &capture_id] {
+        if id.is_empty() || id.len() > 128 ||
+            !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return Err("Invalid knowledge ID".into());
+        }
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "get_knowledge_item",
+        "projectId": project_id, "captureId": capture_id}).to_string())
+}
+
+#[tauri::command]
+fn voice_chunk(project_id: String, capture_id: String, clip_id: String, offset: u64,
+    state: State<PairingState>) -> Result<String, String> {
+    for id in [&project_id, &capture_id, &clip_id] {
+        if id.is_empty() || id.len() > 128 ||
+            !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return Err("Invalid voice ID".into());
+        }
+    }
+    if offset > 20 * 1024 * 1024 { return Err("Clip is too large".into()); }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "read_voice_chunk",
+        "projectId": project_id, "captureId": capture_id, "clipId": clip_id,
+        "offset": offset}).to_string())
+}
+
+#[tauri::command]
+fn upload_note_image(project_id: String, upload_id: String, total_bytes: u64, offset: u64,
+    sha256: String, data: String, state: State<PairingState>) -> Result<String, String> {
+    if project_id.is_empty() || project_id.len() > 128 ||
+        !project_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') ||
+        !is_uuid_key(&upload_id) || total_bytes == 0 || total_bytes > 25 * 1024 * 1024 ||
+        offset >= total_bytes || sha256.len() != 64 ||
+        !sha256.bytes().all(|b| b.is_ascii_hexdigit()) || data.len() > 90_000 {
+        return Err("Invalid image upload".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "upload_note_image",
+        "projectId": project_id, "uploadId": upload_id, "totalBytes": total_bytes,
+        "offset": offset, "sha256": sha256, "data": data}).to_string())
+}
+
+#[tauri::command]
+fn note_image_chunk(project_id: String, capture_id: String, image_path: String, offset: u64,
+    state: State<PairingState>) -> Result<String, String> {
+    if [&project_id, &capture_id].iter().any(|id| id.is_empty() || id.len() > 128 ||
+        !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')) ||
+        !is_uuid_key(&image_path) || offset > 25 * 1024 * 1024 {
+        return Err("Invalid note image".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "read_note_image_chunk",
+        "projectId": project_id, "captureId": capture_id,
+        "imagePath": image_path, "offset": offset}).to_string())
+}
+
+#[tauri::command]
+fn save_knowledge_note(project_id: String, capture_id: String, expected_revision: i32,
+    title: Option<String>, blocks: serde_json::Value, key: String,
+    state: State<PairingState>) -> Result<String, String> {
+    for id in [&project_id, &capture_id] {
+        if id.is_empty() || id.len() > 128 ||
+            !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return Err("Invalid knowledge ID".into());
+        }
+    }
+    if !is_uuid_key(&key) || expected_revision < 0 ||
+        title.as_ref().is_some_and(|t| t.chars().count() > 200) ||
+        !blocks.as_array().is_some_and(|items| items.len() <= 500) {
+        return Err("Invalid note edit".into());
+    }
+    let request = serde_json::json!({"v": 1, "type": "save_knowledge_note", "projectId": project_id,
+        "captureId": capture_id, "expectedRevision": expected_revision, "title": title,
+        "blocks": blocks, "key": key}).to_string();
+    if request.len() > 512 * 1024 { return Err("Note edit is too large".into()); }
+    workspace_request(&state, request)
+}
+
+#[tauri::command]
+fn save_knowledge_prompt(project_id: String, capture_id: String, expected_token: String,
+    title: Option<String>, description: Option<String>, tags: Vec<String>, mode: String,
+    language: Option<String>, content: String, response_text: Option<String>, key: String,
+    state: State<PairingState>) -> Result<String, String> {
+    for id in [&project_id, &capture_id] {
+        if id.is_empty() || id.len() > 128 ||
+            !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return Err("Invalid knowledge ID".into());
+        }
+    }
+    if !is_uuid_key(&key) || expected_token.len() != 64 ||
+        !expected_token.bytes().all(|b| b.is_ascii_hexdigit()) ||
+        title.as_ref().is_some_and(|t| t.chars().count() > 200) ||
+        description.as_ref().is_some_and(|d| d.chars().count() > 4096) ||
+        content.chars().count() > 32768 || response_text.as_ref().is_some_and(|r| r.chars().count() > 32768) ||
+        language.as_ref().is_some_and(|l| l.chars().count() > 40) ||
+        !matches!(mode.as_str(), "PROMPT" | "CODE") ||
+        tags.len() > 20 || tags.iter().any(|tag| tag.chars().count() > 80) {
+        return Err("Invalid prompt edit".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "save_knowledge_prompt",
+        "projectId": project_id, "captureId": capture_id, "expectedToken": expected_token,
+        "title": title, "description": description, "tags": tags, "mode": mode,
+        "language": language, "content": content, "responseText": response_text, "key": key}).to_string())
+}
+
+#[tauri::command]
+fn save_knowledge_link(project_id: String, capture_id: String, expected_token: String,
+    title: Option<String>, url: String, content: String, key: String,
+    state: State<PairingState>) -> Result<String, String> {
+    let valid_id = |id: &str| !id.is_empty() && id.len() <= 128 &&
+        id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if !valid_id(&project_id) || !valid_id(&capture_id) || !is_uuid_key(&key) ||
+        expected_token.len() != 64 || !expected_token.bytes().all(|b| b.is_ascii_hexdigit()) ||
+        title.as_ref().is_some_and(|t| t.chars().count() > 200) ||
+        url.len() > 2048 || content.chars().count() > 32768 {
+        return Err("Invalid link edit".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "save_knowledge_link",
+        "projectId": project_id, "captureId": capture_id, "expectedToken": expected_token,
+        "title": title, "url": url, "content": content, "key": key}).to_string())
+}
+
+#[tauri::command]
+fn create_knowledge(project_id: String, task_id: Option<String>, kind: String, title: Option<String>, content: String,
+    url: Option<String>, description: Option<String>, tags: Option<Vec<String>>, mode: Option<String>,
+    language: Option<String>, response_text: Option<String>, note_blocks: Option<serde_json::Value>, key: String, state: State<PairingState>) -> Result<String, String> {
+    if project_id.is_empty() || project_id.len() > 128 ||
+        !project_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err("Invalid project ID".into());
+    }
+    if task_id.as_ref().is_some_and(|id| id.is_empty() || id.len() > 128 ||
+        !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')) {
+        return Err("Invalid task ID".into());
+    }
+    if !matches!(kind.as_str(), "note" | "checklist" | "steps" | "prompt" | "link") {
+        return Err("Unsupported knowledge type".into());
+    }
+    if !is_uuid_key(&key) || title.as_ref().is_some_and(|t| t.chars().count() > 200) ||
+        content.chars().count() > 32768 || url.as_ref().is_some_and(|u| u.chars().count() > 2048) ||
+        description.as_ref().is_some_and(|d| d.chars().count() > 4096) ||
+        response_text.as_ref().is_some_and(|r| r.chars().count() > 32768) ||
+        language.as_ref().is_some_and(|l| l.chars().count() > 40) ||
+        mode.as_ref().is_some_and(|m| m != "PROMPT" && m != "CODE") ||
+        tags.as_ref().is_some_and(|items| items.len() > 20 || items.iter().any(|tag| tag.chars().count() > 80)) {
+        return Err("Knowledge item exceeds its limit".into());
+    }
+    if note_blocks.as_ref().is_some_and(|blocks| kind != "note" || !blocks.is_array() ||
+        blocks.as_array().is_some_and(|items| items.len() > 500)) {
+        return Err("Invalid rich note blocks".into());
+    }
+    let request = serde_json::json!({"v": 1, "type": "create_knowledge", "projectId": project_id,
+        "taskId": task_id,
+        "kind": kind, "title": title, "content": content, "url": url,
+        "description": description, "tags": tags, "mode": mode,
+        "language": language, "responseText": response_text, "noteBlocks": note_blocks, "key": key}).to_string();
+    workspace_request(&state, request)
+}
+
 fn workspace_request(state: &State<PairingState>, request: String) -> Result<String, String> {
+    // The phone closes an oversized line before it can reply. Reject locally so the
+    // authenticated session remains usable and the editor can show a normal error.
+    if request.len() >= 512 * 1024 { return Err("Request is too large for the phone; reduce this note and retry".into()); }
     let sender = {
         let guard = state.0.lock().map_err(|_| "Pairing state unavailable")?;
         let session = guard.as_ref().ok_or("Connect a phone first")?;
@@ -192,6 +447,66 @@ fn create_workspace_item(kind: String, owner_type: Option<String>, owner_id: Opt
     let request = serde_json::json!({"v": 1, "type": action, "ownerType": owner_type,
         "ownerId": owner_id, "title": title, "description": description, "key": key}).to_string();
     workspace_request(&state, request)
+}
+
+#[tauri::command]
+fn task_action(action: String, task_id: String, title: Option<String>, preference: Option<String>, key: String,
+    state: State<PairingState>) -> Result<String, String> {
+    if !matches!(action.as_str(), "rename" | "complete" | "duplicate" | "cancel" | "set_execution") {
+        return Err("Unsupported task action".into());
+    }
+    if task_id.is_empty() || task_id.len() > 128 ||
+        !task_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err("Invalid task ID".into());
+    }
+    if !is_uuid_key(&key) { return Err("Invalid request key".into()); }
+    if action == "rename" && !title.as_ref().is_some_and(|t| !t.trim().is_empty() && t.chars().count() <= 200) {
+        return Err("Invalid task title".into());
+    }
+    if action == "set_execution" && !preference.as_deref().is_some_and(|p| matches!(p, "INHERIT" | "HUMAN" | "EXTERNAL")) {
+        return Err("Invalid execution preference".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "task_action", "action": action,
+        "taskId": task_id, "title": title, "preference": preference, "key": key}).to_string())
+}
+
+#[tauri::command]
+fn reorder_task(task_id: String, after_id: Option<String>, expected_sibling_ids: Vec<String>, key: String,
+    state: State<PairingState>) -> Result<String, String> {
+    let valid_id = |id: &str| !id.is_empty() && id.len() <= 128 &&
+        id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if !is_uuid_key(&key) || !valid_id(&task_id) ||
+        after_id.as_ref().is_some_and(|id| !valid_id(id)) ||
+        !(2..=200).contains(&expected_sibling_ids.len()) ||
+        expected_sibling_ids.iter().any(|id| !valid_id(id)) {
+        return Err("Invalid task order request".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "reorder_task",
+        "taskId": task_id, "afterId": after_id, "expectedSiblingIds": expected_sibling_ids,
+        "key": key}).to_string())
+}
+
+#[tauri::command]
+fn focus_preview(task_id: String, state: State<PairingState>) -> Result<String, String> {
+    if task_id.is_empty() || task_id.len() > 128 ||
+        !task_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err("Invalid task ID".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "focus_preview", "taskId": task_id}).to_string())
+}
+
+#[tauri::command]
+fn focus_start(task_id: String, expected_work_item_id: String, expected_displaced_stream_id: Option<String>,
+    key: String, state: State<PairingState>) -> Result<String, String> {
+    let valid_id = |id: &str| !id.is_empty() && id.len() <= 128 &&
+        id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if !valid_id(&task_id) || !valid_id(&expected_work_item_id) ||
+        expected_displaced_stream_id.as_deref().is_some_and(|id| !valid_id(id)) || !is_uuid_key(&key) {
+        return Err("Invalid focus request".into());
+    }
+    workspace_request(&state, serde_json::json!({"v": 1, "type": "focus_start", "taskId": task_id,
+        "expectedWorkItemId": expected_work_item_id, "expectedDisplacedStreamId": expected_displaced_stream_id,
+        "key": key}).to_string())
 }
 
 #[tauri::command]
@@ -228,110 +543,47 @@ fn cancel_pairing(state: State<PairingState>) -> Result<(), String> {
     Ok(())
 }
 
-const PACKAGE: &str = "com.virlin.app";
-
-#[derive(Serialize)]
-struct Device {
-    serial: String,
-    state: String,
-    kind: String,
-    model: Option<String>,
-}
-
-fn tool_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .resolve("resources/scrcpy", BaseDirectory::Resource)
-        .map_err(|e| e.to_string())
-}
-
-fn adb(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let path = tool_dir(app)?.join("adb.exe");
-    if path.is_file() { Ok(path) } else { Err("Bundled Android tools are missing. Reinstall Virlin Connect.".into()) }
-}
-
-fn adb_output(app: &tauri::AppHandle, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(adb(app)?)
-        .args(args)
-        .creation_flags_no_window()
-        .output()
-        .map_err(|e| format!("Could not run Android tools: {e}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    if output.status.success() { Ok(stdout) } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
-}
-
-#[cfg(windows)]
-trait NoWindow {
-    fn creation_flags_no_window(&mut self) -> &mut Self;
-}
-#[cfg(windows)]
-impl NoWindow for Command {
-    fn creation_flags_no_window(&mut self) -> &mut Self {
-        use std::os::windows::process::CommandExt;
-        self.creation_flags(0x08000000)
-    }
+fn offline_base(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_local_data_dir().map_err(|e| format!("Offline storage unavailable: {e}"))
 }
 
 #[tauri::command]
-fn list_devices(app: tauri::AppHandle) -> Result<Vec<Device>, String> {
-    let raw = adb_output(&app, &["devices", "-l"])?;
-    Ok(parse_devices(&raw))
-}
-
-fn parse_devices(raw: &str) -> Vec<Device> {
-    let mut devices = Vec::new();
-    for line in raw.lines().skip(1) {
-        let mut parts = line.split_whitespace();
-        let (Some(serial), Some(state)) = (parts.next(), parts.next()) else { continue };
-        if serial.starts_with('*') { continue }
-        let model = line.split_whitespace().find_map(|p| p.strip_prefix("model:")).map(|s| s.replace('_', " "));
-        let kind = if serial.starts_with("emulator-") || model.as_deref().is_some_and(|m| m.starts_with("sdk ")) {
-            "Emulator"
-        } else if serial.contains(':') { "Wi-Fi" } else { "USB" };
-        devices.push(Device { serial: serial.into(), state: state.into(), kind: kind.into(), model });
-    }
-    devices
+fn offline_copy_list(app: tauri::AppHandle) -> Result<Vec<offline_copy::CopySummary>, String> {
+    offline_copy::list(&offline_base(&app)?)
 }
 
 #[tauri::command]
-fn open_virlin(app: tauri::AppHandle, serial: String) -> Result<(), String> {
-    // A serial supplied by the UI is never passed to a shell, but still must match
-    // a currently authorized physical device. This also prevents stale selections.
-    let devices = list_devices(app.clone())?;
-    let device = devices.iter().find(|d| d.serial == serial && d.state == "device" && d.kind == "USB")
-        .ok_or("Select an authorized physical phone and try again.")?;
-    let installed = adb_output(&app, &["-s", &device.serial, "shell", "pm", "path", PACKAGE])?;
-    if !installed.lines().any(|line| line.starts_with("package:")) {
-        return Err("Virlin is not installed on this phone. Install it first; Connect will not alter your app or data.".into());
-    }
-    adb_output(&app, &["-s", &device.serial, "shell", "monkey", "-p", PACKAGE, "-c", "android.intent.category.LAUNCHER", "1"])?;
-    let dir = tool_dir(&app)?;
-    let scrcpy = dir.join("scrcpy.exe");
-    if !scrcpy.is_file() { return Err("Bundled mirroring tool is missing. Reinstall Virlin Connect.".into()) }
-    Command::new(scrcpy)
-        .arg(format!("--serial={}", device.serial))
-        .env("ADB", adb(&app)?)
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Could not open the mirrored window: {e}"))?;
-    Ok(())
+async fn offline_copy_capture(app: tauri::AppHandle) -> Result<offline_copy::CopySummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let base = offline_base(&app)?;
+        let state = app.state::<PairingState>();
+        offline_copy::capture(&base, &mut |request| workspace_request(&state, request))
+    }).await.map_err(|error| format!("Offline copy interrupted: {error}"))?
+}
+
+#[tauri::command]
+fn offline_copy_read(app: tauri::AppHandle, device_id: String, kind: String,
+    project_id: Option<String>, item_id: Option<String>) -> Result<String, String> {
+    offline_copy::read_data(&offline_base(&app)?, &device_id, &kind, project_id.as_deref(), item_id.as_deref())
+}
+
+#[tauri::command]
+fn offline_copy_media_chunk(app: tauri::AppHandle, device_id: String, kind: String,
+    project_id: String, item_id: String, media_id: String, offset: usize) -> Result<String, String> {
+    offline_copy::media_chunk(&offline_base(&app)?, &device_id, &kind, &project_id, &item_id, &media_id, offset)
 }
 
 fn main() {
     tauri::Builder::default()
         .manage(PairingState::default())
-        .invoke_handler(tauri::generate_handler![list_lan_addresses, start_pairing, pairing_status, project_tree, create_workspace_item, preview_workspace_bulk, apply_workspace_bulk, cancel_pairing, list_devices, open_virlin])
+        .invoke_handler(tauri::generate_handler![list_lan_addresses, start_pairing, pairing_status, project_tree, map_appearance, set_map_appearance, map_place, map_delete, map_rename, project_knowledge, knowledge_capabilities, knowledge_item, voice_chunk, upload_note_image, note_image_chunk, save_knowledge_note, save_knowledge_prompt, save_knowledge_link, create_knowledge, create_workspace_item, task_action, reorder_task, focus_preview, focus_start, preview_workspace_bulk, apply_workspace_bulk, cancel_pairing, offline_copy_list, offline_copy_capture, offline_copy_read, offline_copy_media_chunk])
         .run(tauri::generate_context!())
         .expect("Virlin Connect failed to start");
 }
 
 #[cfg(test)]
 mod device_tests {
-    use super::{is_usb_tether_description, parse_devices};
+    use super::is_usb_tether_description;
 
     #[test]
     fn workspace_frames_are_bounded_and_line_delimited() {
@@ -356,15 +608,4 @@ mod device_tests {
         assert!(!is_usb_tether_description("Killer Wi-Fi 6 Adapter"));
     }
 
-    #[test]
-    fn usb_detection_excludes_emulators_and_wifi_transports() {
-        let devices = parse_devices("List of devices attached\nABC123 device product:panther model:Pixel_8\nemulator-5554 device model:sdk_gphone64_x86_64\n192.168.1.12:5555 device model:Pixel_8\nDEF456 unauthorized\n");
-        assert_eq!(devices.len(), 4);
-        assert_eq!(devices[0].kind, "USB");
-        assert_eq!(devices[0].model.as_deref(), Some("Pixel 8"));
-        assert_eq!(devices[1].kind, "Emulator");
-        assert_eq!(devices[2].kind, "Wi-Fi");
-        assert_eq!(devices[3].kind, "USB");
-        assert_eq!(devices[3].state, "unauthorized");
-    }
 }
