@@ -45,7 +45,7 @@ class NoteDocumentLayoutTest {
 
     @Test fun quoteAndCodeHaveDistinctRhythmWithoutRewritingTheirText() {
         val code = NoteDocBlock("code", NoteDocBlockType.CODE, "  val x = 1\n\n")
-        assertEquals(25.6f, NoteDocumentLayout.lineHeightSp(code), .01f)
+        assertEquals(14f * 1.6f, NoteDocumentLayout.lineHeightSp(code), .01f)
         assertEquals(16, NoteDocumentLayout.afterDp(code, null))
         assertEquals("  val x = 1\n\n", code.text)
         assertEquals(16, NoteDocumentLayout.afterDp(NoteDocBlock("quote", NoteDocBlockType.QUOTE, "Quote"), null))
