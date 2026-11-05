@@ -26,6 +26,10 @@ import kotlinx.coroutines.flow.StateFlow
  * `withTransaction` later without changing any action.
  */
 interface WorkStreamRepository : CaptureRepository {
+    suspend fun externalRunIntervals(): List<com.virlin.app.domain.model.ExternalRunInterval> = emptyList()
+    suspend fun pendingProjectDeletions(): List<com.virlin.app.domain.action.ProjectDeletion> = emptyList()
+    /** Schema-v20 independent execution; legacy adapters can continue stream-only operation. */
+    val taskExecutionEnabled: Boolean get() = false
     /** Observable current state of every stream. UI observes this; it never writes to it. */
     val streams: StateFlow<List<WorkStream>>
 
@@ -34,6 +38,8 @@ interface WorkStreamRepository : CaptureRepository {
     suspend fun getOpenFocusSession(streamId: String): FocusSession?
     suspend fun getCurrentCycle(streamId: String): Cycle?
     suspend fun getLatestSnapshot(streamId: String): ContextSnapshot?
+    /** Project archive history; adapters without history retain their latest snapshot. */
+    suspend fun getSnapshots(streamId: String): List<ContextSnapshot> = listOfNotNull(getLatestSnapshot(streamId))
     suspend fun getEvents(streamId: String): List<WorkStreamEvent>
 
     /**
@@ -86,12 +92,26 @@ interface WorkStreamRepository : CaptureRepository {
      */
     suspend fun getNoteDoc(ownerKey: String): VirlinNoteDoc?
 
+    /**
+     * One mind-map node's optional compact preview, keyed by the node's own stable entity id.
+     * Presentation data owned by the node: never a Capture, never a Task Page block.
+     */
+    suspend fun getMapNodePreview(ownerId: String): com.virlin.app.domain.mappreview.MapNodePreview?
+
+    /** Every stored preview, used to render a map without one query per node. */
+    suspend fun allMapNodePreviews(): Map<String, com.virlin.app.domain.mappreview.MapNodePreview>
+
     /** Atomic unit of work. Either every write in [block] is published, or none is. */
     suspend fun <T> transaction(block: suspend WorkStreamWriter.() -> T): T
 }
 
 /** Write surface available only inside a [WorkStreamRepository.transaction]. */
 interface WorkStreamWriter : CaptureWriter {
+    suspend fun deleteProjectTree(projectId: String): com.virlin.app.domain.action.ProjectDeletion = error("Project deletion is not supported by this repository.")
+    suspend fun deleteWorkStreamTree(id: String): com.virlin.app.domain.action.ProjectDeletion = error("Workstream deletion is not supported.")
+    suspend fun deleteTaskTree(id: String): com.virlin.app.domain.action.ProjectDeletion = error("Task deletion is not supported.")
+    suspend fun acknowledgeProjectDeletion(projectId: String) { error("Cleanup acknowledgement is not supported.") }
+    suspend fun getCycle(id: String): Cycle? = null
     suspend fun getStream(id: String): WorkStream?
     suspend fun getActiveFocus(): WorkStream?
     suspend fun getOpenFocusSession(streamId: String): FocusSession?
@@ -114,6 +134,8 @@ interface WorkStreamWriter : CaptureWriter {
     suspend fun stagesOf(workStreamId: String): List<ExternalStage>
     suspend fun saveStage(stage: ExternalStage)
     suspend fun appendEvent(event: WorkStreamEvent)
+    /** Transaction-consistent history for restoring a master-paused execution. */
+    suspend fun executionEvents(streamId: String): List<WorkStreamEvent> = emptyList()
 
     // ---- Tags and task steps, inside the same transaction as everything else.
     suspend fun allTags(): List<ProjectTag>
@@ -142,4 +164,7 @@ interface WorkStreamWriter : CaptureWriter {
      */
     suspend fun noteDocOf(ownerKey: String): VirlinNoteDoc?
     suspend fun saveNoteDoc(doc: VirlinNoteDoc)
+    suspend fun mapNodePreviewOf(ownerId: String): com.virlin.app.domain.mappreview.MapNodePreview?
+    suspend fun saveMapNodePreview(preview: com.virlin.app.domain.mappreview.MapNodePreview)
+    suspend fun deleteMapNodePreview(ownerId: String)
 }

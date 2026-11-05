@@ -122,12 +122,12 @@ class AttentionSchedulingTest {
         actions.completeStream("x"); assertNull(scheduler.current["x"])
     }
 
-    @Test fun completingActiveTask_keepsPendingCheck() = runTest {
-        // Task completion is not an attention change: the stream's own timing wins.
+    @Test fun completingActiveTask_cancelsItsPendingReturn() = runTest {
+        // The completed active task must not return to the attention queue.
         actions.leaveFocus("h", at(5))
         repo.transaction { saveTask(com.virlin.app.domain.model.Task("q17", "Q17", workStreamId = "h", status = com.virlin.app.domain.model.TaskStatus.IN_PROGRESS, createdAt = t0, updatedAt = t0)) }
         actions.completeTask("q17")
-        assertEquals(at(5), scheduler.current["h"]!!.dueAt)
+        assertNull(scheduler.current["h"])
     }
 
     // ------------------------------------------------------------------ stale alarms

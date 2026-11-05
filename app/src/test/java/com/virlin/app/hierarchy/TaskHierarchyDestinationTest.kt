@@ -32,7 +32,7 @@ class TaskHierarchyDestinationTest {
 
     @Test fun standaloneTask_opensTheGreenProjectTaskIndex() {
         val task = Task("task", "Standalone", projectId = "project", createdAt = now, updatedAt = now)
-        assertEquals("project_task_index/project", taskHierarchyDestination(task.id, listOf(task), emptyList()))
+        assertEquals("standalone_tasks/project?path=task", taskHierarchyDestination(task.id, listOf(task), emptyList()))
     }
 
     @Test fun missingOrUnplacedTask_hasNoInventedDestination() {

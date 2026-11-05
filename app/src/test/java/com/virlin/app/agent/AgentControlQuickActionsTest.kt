@@ -155,7 +155,7 @@ class AgentControlQuickActionsTest {
         vm.selectQuick(QuickAction.COMPLETE, onCommand)
         advanceUntilIdle()
         assertEquals(TaskStatus.DONE, repo.getTask("p_q17")!!.status)
-        assertEquals(FOCUS, repo.getStream("s1")!!.state)
+        assertEquals(com.virlin.app.domain.model.WorkStreamState.READY, repo.getStream("s1")!!.state)
         assertNull(vm.intents.pendingWorkStreamCompletion.value)
     }
 

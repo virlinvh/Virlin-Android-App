@@ -29,7 +29,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.virlin.app.ui.components.SafeDialog as Dialog
 import com.virlin.app.domain.attention.AttentionTiming
 import com.virlin.app.domain.external.ExternalWorkItem
 import com.virlin.app.domain.model.ExternalStage
@@ -55,7 +55,7 @@ fun ExternalWorkDetailSheet(
     var stages by remember(item.id) { mutableStateOf<List<ExternalStage>>(emptyList()) }
     LaunchedEffect(item.id) { stages = viewModel.stagesOf(item.id) }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(onDismissRequest = onDismiss, scrollContent = true) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -94,6 +94,9 @@ fun ExternalWorkDetailSheet(
                     fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CharcoalLight
                 )
             }
+
+            Text("External elapsed: ${com.virlin.app.domain.model.ExecutionTiming.formatClock(com.virlin.app.domain.model.ExternalTiming.seconds(item.stream, now))}",
+                fontSize = 13.sp, color = Charcoal, modifier = Modifier.padding(top = 8.dp))
 
             if (stages.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))

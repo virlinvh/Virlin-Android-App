@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +28,10 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.animation.core.*
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,6 +42,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -54,6 +61,7 @@ private val Mint = Color(0xFFE4FAE9)
  * the fallback renders the same four-tile visual using `elapsedTime`.
  */
 @Composable
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 fun VirlinCurrentFocusCard(
     projectName: String,
     /** The big line. Defaults to [projectName] so the supplied call shape still works. */
@@ -73,7 +81,19 @@ fun VirlinCurrentFocusCard(
     motto: String? = null,
     onContextClick: (() -> Unit)? = null,
     timerContent: (@Composable () -> Unit)? = null,
+    hierarchyLabels: List<String> = listOf(headline),
 ) {
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    val lifecycleState by lifecycle.currentStateFlow.collectAsState()
+    val motion = android.animation.ValueAnimator.areAnimatorsEnabled() &&
+        lifecycleState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+    val focusLabelAlpha = if (motion) {
+        val transition = rememberInfiniteTransition(label = "focusLabelPulse")
+        val alpha by transition.animateFloat(1f, .72f,
+            infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "focusLabelAlpha")
+        alpha
+    } else 1f
     val cardShape = RoundedCornerShape(28.dp)
     Box(
         modifier = modifier
@@ -111,7 +131,8 @@ fun VirlinCurrentFocusCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                StatusPill("FOCUSING NOW", Color(0xFF14A74C), filled = true)
+                StatusPill("FOCUSING NOW", Color(0xFF14A74C), filled = true,
+                    labelModifier = Modifier.graphicsLayer { alpha = focusLabelAlpha })
                 // The invested time lives IN the pill now — same value, same live source, one row.
                 StatusPill(
                     // `investedTime` already reads "18m invested" — the caller formats it.
@@ -132,14 +153,29 @@ fun VirlinCurrentFocusCard(
                     .then(if (onContextClick != null) Modifier.clickable(onClickLabel = "Open WorkStream") { onContextClick() } else Modifier)
             ) {
                 if (projectName.isNotBlank()) {
-                    Text(projectName, color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag(FocusProjectTag))
+                    Text(projectName, color = Ink, fontSize = 27.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag(FocusProjectTag))
                 }
-                Text(headline, color = Ink, fontSize = 30.sp, lineHeight = 35.sp,
-                    fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val ancestors = hierarchyLabels.filter { it.isNotBlank() }
+                if (ancestors.isNotEmpty()) {
+                    Spacer(Modifier.height(3.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(1.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("focus_hierarchy")) {
+                        ancestors.forEachIndexed { index, fullName ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (index > 0) Text("›  ", color = Muted, fontSize = 12.sp)
+                                Text(compactFocusHierarchyLabel(fullName), color = Muted,
+                                    fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
+                                    maxLines = 1, modifier = Modifier.semantics { contentDescription = fullName })
+                            }
+                        }
+                    }
+                }
                 if (taskName.isNotBlank()) {
-                    Text(taskName, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Medium,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag(FocusTaskTag))
+                    Spacer(Modifier.height(4.dp))
+                    Text(taskName, color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.testTag(FocusTaskTag))
                 }
             }
 

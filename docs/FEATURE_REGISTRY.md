@@ -6,6 +6,7 @@ Updated: 2026-10-01
 |---|---|---|---|
 | Now / attention | Implemented; approved/frozen surfaces | `CLAUDE.md` | Integration-only changes |
 | Project/WorkStream/Task hierarchy | Green hierarchy canonical | `TASK_HIERARCHY_CLEANUP.md` | Shared foundation |
+| Project settings | Category-first centered modal; name, icon, execution and task restoration live | `PROJECT_SETTINGS_FOUNDATION.md` | Extend after schema v18 integration |
 | Mind map | Implemented structure/navigation | `NAVIGATION_AND_FEATURES.md` | Shared foundation |
 | Task Page | Implemented extensible blocks | `TASK_PAGE_FOUNDATION.md` | Shared foundation |
 | To-do | Implemented task steps | `TASK_PAGE_FOUNDATION.md` | Maintained |

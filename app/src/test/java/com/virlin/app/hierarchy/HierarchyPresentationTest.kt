@@ -32,6 +32,35 @@ import java.time.Instant
 /** Presentation logic + ViewModel intents over the seeded demo hierarchy. Deterministic. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class HierarchyPresentationTest {
+    @Test fun workstreamFocus_resolvesTaskInsteadOfTreatingStreamIdAsTask() = runTest {
+        val local = InMemoryWorkStreamRepository(seed = listOf(
+            ws("human", "Human", WorkStreamState.FOCUS, null), ws("s9", "Target", WorkStreamState.READY, null)),
+            seedTasks = listOf(com.virlin.app.domain.model.Task("task", "Exact task", workStreamId = "s9", createdAt = t0, updatedAt = t0)))
+        val controls = HierarchyViewModel(local, DefaultVirlinActions(local, FakeClock(t0), SequentialIdProvider()))
+        controls.focusWorkItem("s9"); advanceUntilIdle()
+        val pending = controls.pendingSwitch.value!!
+        assertEquals("s9", pending.target!!.workStreamId)
+        assertEquals("task", pending.target.workItem.id)
+        controls.confirmSwitch(); advanceUntilIdle()
+        assertEquals(WorkStreamState.FOCUS, local.getStream("s9")!!.state)
+        assertEquals(pending.target.workItem.id, local.getStream("s9")!!.activeTaskId)
+        assertEquals(1, local.streams.value.count { it.state == WorkStreamState.FOCUS })
+    }
+    @Test fun workstreamFocus_withoutTasks_requiresSwitchConfirmation() = runTest {
+        val local = InMemoryWorkStreamRepository(seed = listOf(
+            ws("human", "Human", WorkStreamState.FOCUS, null),
+            ws("empty", "Empty stream", WorkStreamState.SNOOZED, null)))
+        val controls = HierarchyViewModel(local, DefaultVirlinActions(local, FakeClock(t0), SequentialIdProvider()))
+        controls.focusWorkItem("empty"); advanceUntilIdle()
+        assertEquals("Empty stream", controls.pendingSwitch.value!!.nextTitle)
+        assertEquals(WorkStreamState.FOCUS, local.getStream("human")!!.state)
+        controls.cancelSwitch(); advanceUntilIdle()
+        assertEquals(WorkStreamState.SNOOZED, local.getStream("empty")!!.state)
+        controls.focusWorkItem("empty"); advanceUntilIdle()
+        controls.confirmSwitch(); advanceUntilIdle()
+        assertEquals(WorkStreamState.FOCUS, local.getStream("empty")!!.state)
+        assertEquals(1, local.streams.value.count { it.state == WorkStreamState.FOCUS })
+    }
 
     private val t0: Instant = Instant.parse("2026-09-11T10:00:00Z")
     private val dispatcher = StandardTestDispatcher()

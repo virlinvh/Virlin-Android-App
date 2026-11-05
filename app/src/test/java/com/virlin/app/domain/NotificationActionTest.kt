@@ -178,9 +178,9 @@ class NotificationActionTest {
     @Test fun cancelledActiveTask_domainWins_onResume() = runTest {
         humanReturnDue(); actions.cancelTask("q17")                                  // cleared active task via another surface
         assertNull(s("h").activeTaskId)
-        assertTrue(run("h", ScheduleKind.HUMAN_RETURN, NotificationAction.RESUME) is Outcome.Applied)
-        assertEquals(FOCUS, s("h").state); assertNull(s("h").activeTaskId)           // not revived
-        assertNull(repo.getOpenFocusSession("h")!!.taskId)
+        assertTrue(run("h", ScheduleKind.HUMAN_RETURN, NotificationAction.RESUME) is Outcome.Stale)
+        assertEquals(READY, s("h").state); assertNull(s("h").activeTaskId)           // not revived
+        assertNull(repo.getOpenFocusSession("h"))
     }
 
     @Test fun bodyTapAndDismissal_mutateNothing_multipleIdsIndependent() = runTest {

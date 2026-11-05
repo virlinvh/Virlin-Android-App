@@ -25,7 +25,10 @@ data class CurrentFocusProjection(
     val nextHumanAction: String?,
     val state: WorkStreamState,
     /** From effective execution of deepest active node — decides LEAVE/COMPLETE vs LEAVE/HAND OFF. */
-    val isExternal: Boolean = false
+    val isExternal: Boolean = false,
+    val taskPath: List<String> = emptyList(),
+    val ownerWorkStreamId: String = streamId,
+    val taskIdPath: List<String> = emptyList()
 )
 
 /**
@@ -57,6 +60,9 @@ object NowPresentation {
             workStreamTitle = stream.title,
             activeTaskId = task?.id,
             activeTaskTitle = task?.title,
+            ownerWorkStreamId = task?.workStreamId ?: stream.id,
+            taskIdPath = task?.let { com.virlin.app.domain.model.TaskHierarchy.ancestry(tasks, it.id)?.reversed()?.map { node -> node.id } }.orEmpty(),
+            taskPath = task?.let { com.virlin.app.domain.model.TaskHierarchy.ancestry(tasks, it.id)?.reversed()?.map { node -> node.title } }.orEmpty(),
             nextHumanAction = stream.nextHumanAction?.takeIf { it.isNotBlank() },
             state = stream.state,
             isExternal = ExecutionModeResolver.resolveCurrent(stream, projects, tasks) ==
@@ -79,12 +85,15 @@ object NowPresentation {
         streams.filter { it.state == WorkStreamState.CHECK }.associate { s -> s.id to com.virlin.app.domain.attention.NeedsYouOrder.waitingSince(s) }
 
     /** Streams currently in CHECK, classified. Pure; nothing is scheduled or mutated here. */
-    fun attention(streams: List<WorkStream>): Map<String, AttentionKind> =
+    fun attention(streams: List<WorkStream>, projects: List<Project> = emptyList(), tasks: List<Task> = emptyList()): Map<String, AttentionKind> =
         streams.filter { it.state == WorkStreamState.CHECK }.associate { s ->
             s.id to when (s.snoozeReason) {
                 SnoozeReason.HUMAN_RETURN -> AttentionKind.RETURN_DUE
                 SnoozeReason.EXTERNAL_RESULT_READY -> AttentionKind.RESULT_READY
-                null -> AttentionKind.CHECK_DUE
+                null -> if (s.processingStartedAt == null && s.externalTrackedSeconds == 0L &&
+                    s.externalActorId == null && !s.externalTrackingPaused &&
+                    ExecutionModeResolver.resolveCurrent(s, projects, tasks) ==
+                    com.virlin.app.domain.model.EffectiveExecutionMode.HUMAN) AttentionKind.RETURN_DUE else AttentionKind.CHECK_DUE
             }
         }
 }

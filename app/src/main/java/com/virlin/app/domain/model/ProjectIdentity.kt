@@ -41,6 +41,21 @@ object ProjectIdentity {
     fun resolve(projectId: String?, projects: List<Project>): Project? =
         projectId?.let { id -> projects.firstOrNull { it.id == id } }
 
+    /** Resolve an exact work item through its nearest owning hierarchy, without inventing a project. */
+    fun resolveWorkItem(itemId: String, projectId: String?, projects: List<Project>,
+                        tasks: List<Task>, streams: List<WorkStream>): Project? {
+        val byId = tasks.associateBy { it.id }
+        val visited = mutableSetOf<String>()
+        var task = byId[itemId]
+        while (task != null && visited.add(task.id)) {
+            resolve(task.projectId, projects)?.let { return it }
+            resolve(task.workStreamId?.let { owner -> streams.firstOrNull { it.id == owner }?.projectId }, projects)
+                ?.let { return it }
+            task = task.parentTaskId?.let(byId::get)
+        }
+        return resolve(projectId, projects) ?: resolve(streams.firstOrNull { it.id == itemId }?.projectId, projects)
+    }
+
     /** Whether a persisted reference should be treated as "no custom icon". */
     fun hasCustomIcon(iconPath: String?): Boolean = !iconPath.isNullOrBlank()
 }

@@ -50,7 +50,10 @@ fun StreamsScreen(navController: NavController) {
     val hierarchy: com.virlin.app.ui.hierarchy.HierarchyViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
     val snapshot by hierarchy.snapshot.collectAsState()
-    val now = com.virlin.app.domain.VirlinGraph.clock.now()
+    val now by rememberSecondTicker()
+    var tasksView by rememberSaveable { mutableStateOf(true) }
+    var sessions by remember { mutableStateOf(emptyList<com.virlin.app.domain.model.FocusSession>()) }
+    LaunchedEffect(snapshot.streams, snapshot.tasks) { sessions = hierarchy.allFocusSessions() }
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var filterName by rememberSaveable { mutableStateOf(ProjectDirectoryFilter.ALL.name) }
@@ -58,24 +61,29 @@ fun StreamsScreen(navController: NavController) {
         ?: ProjectDirectoryFilter.ALL
     var addingProject by rememberSaveable { mutableStateOf(false) }
     var pickingFilter by remember { mutableStateOf(false) }
+    if (addingProject || pickingFilter) com.virlin.app.ui.hierarchy.HideProjectOrb()
 
-    if (addingProject) com.virlin.app.ui.hierarchy.AddNameDialog(
-        "New project", "Project name", onDismiss = { addingProject = false }
-    ) { hierarchy.addProject(it) }
+    if (addingProject) com.virlin.app.ui.hierarchy.BulkCreationDialog(
+        "New project", "Project name", projectId = null, onDismiss = { addingProject = false },
+        onSingle = { hierarchy.addProject(it) })
 
     val summaries = remember(snapshot) { hierarchy.projectSummaries(snapshot) }
+    val matchingWork = remember(snapshot, sessions, filter, searchQuery, now) {
+        DirectoryWorkProjection.items(snapshot.projects, snapshot.streams, snapshot.tasks,
+            sessions, filter, searchQuery, now)
+    }
 
     // A project's status is its WorkStreams' status, read from the domain's own projection.
     // Nothing here is inferred from a progress percentage.
     val items = remember(summaries, snapshot, searchQuery, filter, now) {
         summaries.asSequence()
             .filter { summary ->
-                searchQuery.isBlank() || summary.project.title.contains(searchQuery, ignoreCase = true)
+                if (filter == ProjectDirectoryFilter.ALL)
+                    searchQuery.isBlank() || summary.project.title.contains(searchQuery, ignoreCase = true)
+                else matchingWork.any { it.project?.id == summary.project.id }
             }
             .filter { summary ->
-                filter == ProjectDirectoryFilter.ALL || snapshot.streams.any { stream ->
-                    stream.projectId == summary.project.id && stream.matches(filter, now)
-                }
+                filter == ProjectDirectoryFilter.ALL || matchingWork.any { it.project?.id == summary.project.id }
             }
             .map { summary ->
                 ProjectDirectoryItem(
@@ -101,10 +109,22 @@ fun StreamsScreen(navController: NavController) {
         actions = ProjectDirectoryActions(
             onSearchChanged = { searchQuery = it },
             onAdvancedFilter = { pickingFilter = true },
-            onFilterChanged = { filterName = it.name },
+            onFilterChanged = { filterName = it.name; tasksView = true },
             onCreateProject = { addingProject = true },
             onOpenProject = { navController.navigate(com.virlin.app.ui.hierarchy.projectDetail(it)) }
         ),
+        viewControls = {
+            if (filter != ProjectDirectoryFilter.ALL) DirectoryViewSwitch(tasksView) { tasksView = it }
+        },
+        taskContent = if (filter != ProjectDirectoryFilter.ALL && tasksView) ({
+            FilteredProjectTasks(matchingWork, filter) { item ->
+                val owner = item.task?.workStreamId
+                navController.navigate(if (item.task == null)
+                    com.virlin.app.ui.hierarchy.workStreamDetailAt(item.work.id, emptyList())
+                else if (owner != null) com.virlin.app.ui.hierarchy.workStreamDetailAt(owner, item.path)
+                else com.virlin.app.ui.hierarchy.taskDetail(item.task.id))
+            }
+        }) else null,
         projectIcon = { item ->
             val project = snapshot.projects.firstOrNull { it.id == item.id }
             if (project != null) {
@@ -157,6 +177,7 @@ private fun com.virlin.app.domain.model.WorkStream.matches(
         ProjectDirectoryFilter.READY -> state == com.virlin.app.domain.model.WorkStreamState.READY
         // The app's own FOCUS state: the one stream consuming human attention.
         ProjectDirectoryFilter.FREE_FOCUS -> state == com.virlin.app.domain.model.WorkStreamState.FOCUS
+        ProjectDirectoryFilter.PAUSED -> externalTrackingPaused || state == com.virlin.app.domain.model.WorkStreamState.PAUSED
         ProjectDirectoryFilter.SNOOZED -> state == com.virlin.app.domain.model.WorkStreamState.SNOOZED
         ProjectDirectoryFilter.BLOCKED -> state == com.virlin.app.domain.model.WorkStreamState.BLOCKED
     }
@@ -232,7 +253,6 @@ fun StreamRow(stream: WorkStream, navController: NavController) {
             Text(stream.title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Charcoal)
             Text(stream.subtitle, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
         }
-        
         when (stream.state) {
             StreamState.FOCUS -> {
                 val m = (stream.focusInvestedSec / 60).toString().padStart(2, '0')

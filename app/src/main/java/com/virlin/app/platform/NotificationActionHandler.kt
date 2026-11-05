@@ -1,5 +1,7 @@
 package com.virlin.app.platform
 
+import com.virlin.app.domain.model.executionStream
+
 import com.virlin.app.domain.action.ActionResult
 import com.virlin.app.domain.action.VirlinActions
 import com.virlin.app.domain.model.SnoozeReason
@@ -29,7 +31,7 @@ object NotificationActionHandler {
     /** Does the stream currently present as [kind] (SNOOZED before due, or the surfaced CHECK)? */
     fun presentsAs(stream: com.virlin.app.domain.model.WorkStream, kind: ScheduleKind): Boolean = when (kind) {
         ScheduleKind.HUMAN_RETURN ->
-            stream.state in setOf(WorkStreamState.SNOOZED, WorkStreamState.CHECK) && stream.snoozeReason == SnoozeReason.HUMAN_RETURN
+            stream.state in setOf(WorkStreamState.SNOOZED, WorkStreamState.CHECK, WorkStreamState.PAUSED) && stream.snoozeReason == SnoozeReason.HUMAN_RETURN
         ScheduleKind.EXTERNAL_RESULT_READY ->
             stream.state in setOf(WorkStreamState.SNOOZED, WorkStreamState.CHECK) && stream.snoozeReason == SnoozeReason.EXTERNAL_RESULT_READY
         ScheduleKind.EXTERNAL_CHECK ->
@@ -40,7 +42,7 @@ object NotificationActionHandler {
         repository: WorkStreamRepository, actions: VirlinActions,
         streamId: String, kind: ScheduleKind, action: NotificationAction, now: Instant
     ): Outcome {
-        val stream = repository.getStream(streamId) ?: return Outcome.Stale("stream missing")
+        val stream = repository.getTask(streamId)?.executionStream() ?: repository.getStream(streamId) ?: return Outcome.Stale("stream missing")
         if (stream.state.isTerminal) return Outcome.Stale("stream is ${stream.state}")
         if (!presentsAs(stream, kind)) return Outcome.Stale("no longer $kind (${stream.state}/${stream.snoozeReason})")
         if (!action.mutates) return Outcome.Stale("$action is navigation only")
@@ -50,7 +52,8 @@ object NotificationActionHandler {
         val r: ActionResult<*> = when (action) {
             // Same accepted focus path as Needs You RESUME / FOCUS NOW: displacement, session
             // attributed to activeTaskId, snooze/processing fields cleared, scheduler synced.
-            NotificationAction.RESUME, NotificationAction.FOCUS_NOW -> actions.focusStream(streamId)
+            NotificationAction.RESUME, NotificationAction.FOCUS_NOW -> if (stream.externalTrackingPaused)
+                actions.resumeExternalTracking(streamId) else actions.focusStream(streamId)
             NotificationAction.DEFER_5 -> actions.deferReturn(streamId, now.plus(FIVE))
             NotificationAction.CHECK_AGAIN_5 -> actions.stillRunning(streamId, now.plus(FIVE))
             NotificationAction.CHECK -> return Outcome.Stale("navigation only")

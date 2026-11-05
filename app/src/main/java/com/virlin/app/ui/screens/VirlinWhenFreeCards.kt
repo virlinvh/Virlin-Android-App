@@ -59,8 +59,8 @@ data class WhenFreeCardUi(
     val id: String,
     val title: String,
     val detail: String,
-    /** Null when the recommendation has no recorded estimate; no placeholder is invented. */
-    val durationLabel: String?,
+    /** Accumulated recorded focus, null only while history is loading. */
+    val focusedLabel: String?,
     /** Null when the stream belongs to no project. */
     val projectIcon: (@Composable () -> Unit)?,
 )
@@ -147,14 +147,12 @@ private fun WhenFreeCard(
                     overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(4.dp))
                 Text(item.detail, fontSize = 12.sp, color = Color(0xFF617087),
-                    maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 15.sp)
-                item.durationLabel?.let { label ->
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, lineHeight = 15.sp)
+                item.focusedLabel?.let { label ->
                     Spacer(Modifier.height(6.dp))
-                    Box(Modifier.clip(RoundedCornerShape(50))
-                        .background(colors.accent.copy(alpha = .14f))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)) {
+                    Box {
                         Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                            color = colors.ink, maxLines = 1)
+                            color = Color(0xFF617087), maxLines = 1)
                     }
                 }
             }

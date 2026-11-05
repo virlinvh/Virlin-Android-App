@@ -36,7 +36,7 @@ object DemoSeed {
         db.withTransaction {
             f.projects.forEach { db.projects().upsert(it.toEntity()) }
             f.streams.forEach { db.workStreams().upsert(it.toEntity()) }
-            f.tasks.forEach { db.tasks().upsert(it.toEntity()) }
+            f.tasks.forEach { task -> db.tasks().upsert(task.copy(execution = com.virlin.app.domain.model.TaskExecution()).toEntity()) }
             db.meta().put(MetaEntity(MARKER_KEY, now.toString()))
         }
         return true

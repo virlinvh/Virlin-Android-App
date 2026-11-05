@@ -16,7 +16,7 @@ import com.virlin.app.domain.model.CaptureType
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
 import com.virlin.app.ui.link.LinkEditorViewModel
 import com.virlin.app.ui.link.LinkIntents
-import com.virlin.app.ui.link.youtubePlayerHtml
+import com.virlin.app.ui.link.youtubeEmbedUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -204,19 +204,18 @@ class LinkCaptureTest {
         assertNull(LinkPresentation.youtubeVideoId("https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ"))
     }
 
-    @Test fun embeddedPlayer_cuesExactSavedSegment_andDoesNotAutoplay() {
-        val html = youtubePlayerHtml("dQw4w9WgXcQ", 135, 510)
-        assertTrue(html.contains("cueVideoById"))
-        assertTrue(html.contains("startSeconds:135"))
-        assertTrue(html.contains("endSeconds:510"))
-        assertFalse(html.contains("playVideo()"))
-        assertFalse(html.contains("addJavascriptInterface"))
+    @Test fun embeddedPlayer_usesOfficialEmbedWithSavedSegmentAndNoAutoplay() {
+        val url = youtubeEmbedUrl("dQw4w9WgXcQ", 135, 510)
+        assertTrue(url.startsWith("https://www.youtube.com/embed/dQw4w9WgXcQ?"))
+        assertTrue(url.contains("start=135"))
+        assertTrue(url.contains("end=510"))
+        assertFalse(url.contains("autoplay=1"))
     }
 
     @Test fun embeddedPlayer_omitsInvalidEndBoundary() {
-        val html = youtubePlayerHtml("dQw4w9WgXcQ", 510, 135)
-        assertTrue(html.contains("startSeconds:510"))
-        assertFalse(html.contains("endSeconds:"))
+        val url = youtubeEmbedUrl("dQw4w9WgXcQ", 510, 135)
+        assertTrue(url.contains("start=510"))
+        assertFalse(url.contains("&end="))
     }
 
     @Test fun timeParsingRejectsMalformedAndEndBeforeStart() {

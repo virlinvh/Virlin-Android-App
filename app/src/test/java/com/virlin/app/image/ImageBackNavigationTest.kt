@@ -62,6 +62,22 @@ class ImageBackNavigationTest {
         }
     }
 
+    @Test
+    fun previewReturnsToItsOwnerOrLibrary() {
+        assertEquals(ImageBackAction.EXIT, imageBackAction(ImageWorkspaceMode.PREVIEW, hasCaptureOwner = true))
+        assertEquals(ImageBackAction.TO_LIBRARY, imageBackAction(ImageWorkspaceMode.PREVIEW, hasCaptureOwner = false))
+    }
+
+    @Test
+    fun editorOpenedFromPreviewReturnsToPreview() {
+        for (owner in listOf(true, false)) {
+            assertEquals(
+                ImageBackAction.TO_PREVIEW,
+                imageBackAction(ImageWorkspaceMode.EDIT, hasCaptureOwner = owner, editOpenedFromPreview = true),
+            )
+        }
+    }
+
     /** No mode may resolve to the mode it is already in, or back becomes a self-loop. */
     @Test
     fun noModeResolvesToItself() {
@@ -70,6 +86,7 @@ class ImageBackNavigationTest {
                 val action = imageBackAction(mode, hasCaptureOwner = owner)
                 val sameMode = when (mode) {
                     ImageWorkspaceMode.EDIT -> ImageBackAction.TO_EDIT
+                    ImageWorkspaceMode.PREVIEW -> ImageBackAction.TO_PREVIEW
                     ImageWorkspaceMode.LIBRARY -> ImageBackAction.TO_LIBRARY
                     else -> null
                 }

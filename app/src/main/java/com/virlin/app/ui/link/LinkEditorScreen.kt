@@ -41,6 +41,10 @@ import com.virlin.app.domain.action.CaptureContext
 import com.virlin.app.domain.capture.LinkDocument
 import com.virlin.app.domain.capture.LinkPresentation
 import com.virlin.app.domain.capture.LinkProvider
+import com.virlin.app.domain.VirlinGraph
+import com.virlin.app.ui.hierarchy.ProjectPalette
+import com.virlin.app.ui.hierarchy.rememberProjectPalette
+import com.virlin.app.ui.hierarchy.readableOn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -65,12 +69,13 @@ const val LinkSaveStatusTag = "link_save_status"
 const val LinkInlinePlayTag = "link_inline_play"
 const val LinkInlinePlayerTag = "link_inline_player"
 
-private val Paper = Color(0xFFFAF9F7)
-private val Ink = Color(0xFF17221D)
-private val Green = Color(0xFF087F55)
-private val Mint = Color(0xFFEAF7F1)
-private val Line = Color(0xFFD8E4DE)
-private val Muted = Color(0xFF66756E)
+private val LocalLinkPalette = staticCompositionLocalOf<ProjectPalette?> { null }
+private val Paper: Color @Composable get() = LocalLinkPalette.current?.let { Color(it.surface) } ?: Color(0xFFFAF9F7)
+private val Ink: Color @Composable get() = LocalLinkPalette.current?.let { Color(it.text) } ?: Color(0xFF17221D)
+private val Green: Color @Composable get() = LocalLinkPalette.current?.let { Color(it.secondary) } ?: Color(0xFF087F55)
+private val Mint: Color @Composable get() = LocalLinkPalette.current?.let { Color(it.tertiary) } ?: Color(0xFFEAF7F1)
+private val Line: Color @Composable get() = LocalLinkPalette.current?.let { Color(it.primary).copy(alpha = .25f) } ?: Color(0xFFD8E4DE)
+private val Muted: Color @Composable get() = LocalLinkPalette.current?.let { Color(it.muted) } ?: Color(0xFF66756E)
 private val Danger = Color(0xFFB3261E)
 
 @Composable
@@ -83,6 +88,12 @@ fun LinkEditorScreen(
     val state by vm.state.collectAsState()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val tasks by VirlinGraph.repository.tasks.collectAsState()
+    val streams by VirlinGraph.repository.streams.collectAsState()
+    val projectId = state.context.projectId
+        ?: state.context.taskId?.let { id -> tasks.firstOrNull { it.id == id }?.projectId }
+        ?: state.context.workStreamId?.let { id -> streams.firstOrNull { it.id == id }?.projectId }
+    val palette = rememberProjectPalette(projectId)
 
     fun openLink() {
         val url = state.canonicalUrl ?: return
@@ -96,6 +107,9 @@ fun LinkEditorScreen(
     BackHandler { goBack() }
     LaunchedEffect(state.toast) { if (state.toast != null) { delay(1800); vm.clearToast() } }
 
+    CompositionLocalProvider(LocalLinkPalette provides palette) {
+    MaterialTheme(colorScheme = lightColorScheme(primary = Green, onPrimary = readableOn(Green),
+        surface = Paper, onSurface = Ink, secondary = Green, onSecondary = readableOn(Green))) {
     Column(
         Modifier.fillMaxSize().background(Paper).statusBarsPadding().navigationBarsPadding()
             .imePadding().testTag(LinkScreenTag)
@@ -114,7 +128,7 @@ fun LinkEditorScreen(
         if (state.loading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = Green)
         } else if (state.editing) {
-            LinkEditPage(state, vm, Modifier.weight(1f))
+            LinkEditPage(state, vm, Modifier.weight(1f), ::openLink)
             EditActions(
                 canSave = state.canSave,
                 existing = state.committedToInbox,
@@ -123,7 +137,7 @@ fun LinkEditorScreen(
                 onSave = vm::save,
             )
         } else {
-            LinkDetailPage(state, Modifier.weight(1f))
+            LinkDetailPage(state, Modifier.weight(1f), ::openLink)
             DetailActions(
                 onCopy = {
                     state.canonicalUrl?.let { clipboard.setText(AnnotatedString(it)); vm.copyUrlFeedback() }
@@ -132,7 +146,7 @@ fun LinkEditorScreen(
             )
         }
         state.toast?.let { ToastBar(it) }
-    }
+    } } }
 }
 
 @Composable private fun LinkHeader(
@@ -156,7 +170,7 @@ fun LinkEditorScreen(
 @Composable private fun ContextStrip(label: String) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 5.dp)
-            .background(Color(0xFFF0F5F2), RoundedCornerShape(14.dp)).padding(14.dp),
+            .background(Mint, RoundedCornerShape(14.dp)).padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Outlined.Link, null, tint = Green, modifier = Modifier.size(19.dp))
@@ -164,7 +178,7 @@ fun LinkEditorScreen(
     }
 }
 
-@Composable private fun LinkEditPage(state: LinkUiState, vm: LinkEditorViewModel, modifier: Modifier) {
+@Composable private fun LinkEditPage(state: LinkUiState, vm: LinkEditorViewModel, modifier: Modifier, onOpenLink: () -> Unit) {
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionCard {
             Text("Paste a link", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
@@ -188,7 +202,7 @@ fun LinkEditorScreen(
         }
 
         SettingCard("Show preview", "Show a thumbnail or cover from the link", state.showPreview, vm::setShowPreview)
-        if (state.canonicalUrl != null && state.showPreview) PreviewCard(state)
+        if (state.canonicalUrl != null && state.showPreview) PlayablePreview(state, onOpenLink)
 
         if (state.canonicalUrl != null) {
             OutlinedTextField(state.title, vm::onTitleChange, Modifier.fillMaxWidth().testTag(LinkTitleTag),
@@ -219,36 +233,9 @@ fun LinkEditorScreen(
     }
 }
 
-@Composable private fun LinkDetailPage(state: LinkUiState, modifier: Modifier) {
-    val youtubeId = state.canonicalUrl?.let(LinkPresentation::youtubeVideoId)
-    var inlinePlaying by remember(state.canonicalUrl) { mutableStateOf(false) }
-    var inlineFailed by remember(state.canonicalUrl) { mutableStateOf(false) }
-    var inlineReady by remember(state.canonicalUrl) { mutableStateOf(false) }
+@Composable private fun LinkDetailPage(state: LinkUiState, modifier: Modifier, onOpenLink: () -> Unit) {
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        if (state.showPreview && youtubeId != null && inlinePlaying && !inlineFailed) {
-            YouTubeInlinePlayer(
-                videoId = youtubeId,
-                startSeconds = state.document.startSeconds ?: 0,
-                endSeconds = state.document.endSeconds,
-                onReady = { inlineReady = true },
-                onFailed = { inlineFailed = true; inlinePlaying = false; inlineReady = false },
-                modifier = Modifier.testTag(LinkInlinePlayerTag),
-            )
-            Text(
-                if (!inlineReady) "Loading YouTube player…"
-                else if (state.document.playbackEnabled) "Saved segment ready in Virlin"
-                else "Ready to play in Virlin",
-                color = Muted, fontSize = 12.sp,
-            )
-        } else if (state.showPreview) PreviewCard(
-            state = state,
-            canPlayInline = youtubeId != null && !inlineFailed,
-            onPlayInline = { inlinePlaying = true },
-        )
-        if (inlineFailed) Text(
-            "This video cannot be embedded. Use Open link to watch it in YouTube.",
-            color = Muted, fontSize = 12.sp,
-        )
+        if (state.showPreview) PlayablePreview(state, onOpenLink)
         Text(state.displayTitle, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink)
         Text(providerName(state.preview?.provider), fontSize = 13.sp, color = Muted)
         if (state.note.isNotBlank()) Text(state.note, fontSize = 14.sp, color = Muted, lineHeight = 20.sp)
@@ -271,20 +258,53 @@ fun LinkEditorScreen(
     }
 }
 
+@Composable private fun PlayablePreview(state: LinkUiState, onOpenLink: () -> Unit) {
+    val youtubeId = state.canonicalUrl?.let(LinkPresentation::youtubeVideoId)
+    var inlinePlaying by remember(state.canonicalUrl) { mutableStateOf(false) }
+    var inlineFailed by remember(state.canonicalUrl) { mutableStateOf(false) }
+    var inlineReady by remember(state.canonicalUrl) { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (state.showPreview && youtubeId != null && inlinePlaying && !inlineFailed) {
+            YouTubeInlinePlayer(
+                videoId = youtubeId,
+                startSeconds = state.document.startSeconds ?: 0,
+                endSeconds = state.document.endSeconds,
+                onReady = { inlineReady = true },
+                onFailed = { inlineFailed = true; inlinePlaying = false; inlineReady = false },
+                modifier = Modifier.testTag(LinkInlinePlayerTag),
+            )
+            Text(
+                if (!inlineReady) "Loading YouTube player…"
+                else "If playback is restricted here, open the video in YouTube.",
+                color = Muted, fontSize = 12.sp,
+            )
+            TextButton(onClick = onOpenLink) { Text("Open video externally", color = Green) }
+        } else PreviewCard(
+            state = state,
+            canPlay = state.preview?.provider != LinkProvider.WEBSITE,
+            onPlay = { if (youtubeId != null && !inlineFailed) inlinePlaying = true else onOpenLink() },
+        )
+        if (inlineFailed) Text(
+            "Inline playback is unavailable for this video. Tap the preview to open it in your video app.",
+            color = Muted, fontSize = 12.sp,
+        )
+    }
+}
+
 @Composable private fun PreviewCard(
     state: LinkUiState,
-    canPlayInline: Boolean = false,
-    onPlayInline: () -> Unit = {},
+    canPlay: Boolean = false,
+    onPlay: () -> Unit = {},
 ) {
     val preview = state.preview ?: return
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White).border(1.dp, Line, RoundedCornerShape(16.dp)).testTag(LinkCardTag)) {
         val thumb = preview.thumbnailUrl
         if (thumb != null) Box(
             Modifier.fillMaxWidth().height(190.dp)
-                .then(if (canPlayInline) Modifier.clickable(onClick = onPlayInline) else Modifier)
+                .then(if (canPlay) Modifier.clickable(onClick = onPlay) else Modifier)
         ) {
             RemoteImage(thumb, Modifier.matchParentSize())
-            if (canPlayInline) Box(
+            if (canPlay) Box(
                 Modifier.align(Alignment.Center).size(62.dp).clip(RoundedCornerShape(50))
                     .background(Color.White.copy(alpha = 0.94f)).testTag(LinkInlinePlayTag)
                     .semantics { contentDescription = "Play video here" },
@@ -293,8 +313,9 @@ fun LinkEditorScreen(
                 Icon(Icons.Outlined.PlayArrow, null, tint = Green, modifier = Modifier.size(38.dp))
             }
         }
-        else Box(Modifier.fillMaxWidth().height(130.dp).background(Mint), contentAlignment = Alignment.Center) {
-            Icon(if (preview.provider == LinkProvider.WEBSITE) Icons.Outlined.Language else Icons.Outlined.Videocam,
+        else Box(Modifier.fillMaxWidth().height(130.dp).background(Mint)
+            .then(if (canPlay) Modifier.clickable(onClick = onPlay) else Modifier), contentAlignment = Alignment.Center) {
+            Icon(if (preview.provider == LinkProvider.WEBSITE) Icons.Outlined.Language else Icons.Outlined.PlayCircle,
                 null, tint = Green, modifier = Modifier.size(44.dp))
         }
         Column(Modifier.padding(14.dp)) {
@@ -305,18 +326,32 @@ fun LinkEditorScreen(
 }
 
 @Composable private fun RemoteImage(url: String, modifier: Modifier) {
-    val bitmap by produceState<android.graphics.Bitmap?>(null, url) {
-        value = withContext(Dispatchers.IO) {
+    var bitmap by remember(url) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var failed by remember(url) { mutableStateOf(false) }
+    LaunchedEffect(url) {
+        bitmap = withContext(Dispatchers.IO) {
             runCatching {
                 val connection = URL(url).openConnection() as HttpURLConnection
                 connection.connectTimeout = 5_000; connection.readTimeout = 7_000
                 connection.instanceFollowRedirects = true; connection.setRequestProperty("User-Agent", "Virlin/1.0")
-                connection.inputStream.use(BitmapFactory::decodeStream).also { connection.disconnect() }
+                try {
+                    val bytes = connection.inputStream.use {
+                        com.virlin.app.domain.attachment.readBoundedImport(it, 4L * 1024 * 1024)
+                    }
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    if (bounds.outWidth !in 1..16384 || bounds.outHeight !in 1..16384) return@runCatching null
+                    var sample = 1
+                    while (bounds.outWidth / sample > 1024 || bounds.outHeight / sample > 1024) sample *= 2
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                } finally { connection.disconnect() }
             }.getOrNull()
         }
+        failed = bitmap == null
     }
     Box(modifier.background(Mint), contentAlignment = Alignment.Center) {
-        if (bitmap == null) CircularProgressIndicator(color = Green, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+        if (bitmap == null && !failed) CircularProgressIndicator(color = Green, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+        else if (failed) Icon(Icons.Outlined.PlayCircle, "Video preview unavailable", tint = Green, modifier = Modifier.size(44.dp))
         else Image(bitmap!!.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     }
 }
@@ -349,8 +384,8 @@ fun LinkEditorScreen(
             Icon(Icons.Outlined.Delete, null); Spacer(Modifier.width(6.dp)); Text("Delete link")
         }
         Button(onSave, Modifier.weight(1f).height(52.dp).testTag(LinkInboxActionTag), enabled = canSave && !saving,
-            colors = ButtonDefaults.buttonColors(containerColor = Green), shape = RoundedCornerShape(13.dp)) {
-            if (saving) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+            colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = readableOn(Green)), shape = RoundedCornerShape(13.dp)) {
+            if (saving) CircularProgressIndicator(Modifier.size(20.dp), color = readableOn(Green), strokeWidth = 2.dp)
             else Text(if (existing) "Save changes" else "Save link", fontWeight = FontWeight.Bold)
         }
     }
@@ -361,14 +396,14 @@ fun LinkEditorScreen(
         OutlinedButton(onCopy, Modifier.weight(1f).height(52.dp).testTag(LinkCopyTag), shape = RoundedCornerShape(13.dp)) {
             Icon(Icons.Outlined.ContentCopy, null); Spacer(Modifier.width(7.dp)); Text("Copy link")
         }
-        Button(onOpen, Modifier.weight(1f).height(52.dp).testTag(LinkOpenTag), colors = ButtonDefaults.buttonColors(containerColor = Green), shape = RoundedCornerShape(13.dp)) {
+        Button(onOpen, Modifier.weight(1f).height(52.dp).testTag(LinkOpenTag), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = readableOn(Green)), shape = RoundedCornerShape(13.dp)) {
             Text("Open link", fontWeight = FontWeight.Bold); Spacer(Modifier.width(7.dp)); Icon(Icons.Outlined.OpenInNew, null)
         }
     }
 }
 
 @Composable private fun ToastBar(message: String) {
-    Row(Modifier.fillMaxWidth().background(Color(0xFFDDF5E9)).padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().background(Mint).padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(Icons.Rounded.CheckCircle, null, tint = Green); Spacer(Modifier.width(9.dp)); Text(message, color = Ink, fontWeight = FontWeight.SemiBold)
     }
 }

@@ -66,13 +66,14 @@ import androidx.compose.ui.unit.sp
 /**
  * Content for the existing Virlin Apps tab. Put this INSIDE the current app Scaffold.
  * The host continues to own the persistent bottom navigation, Orb and routing.
- * All four icons are bitmap drawables so their approved 3D artwork is preserved.
+ * App icons are bitmap drawables so their approved 3D artwork is preserved.
  */
 @Composable
 fun VirlinAppsScreen(
     onOpenInbox: () -> Unit,
     onOpenMindMaps: () -> Unit,
     onOpenPages: () -> Unit,
+    onOpenDesktopConnect: () -> Unit = {},
     modifier: Modifier = Modifier,
     flashcardsAvailable: Boolean = false,
     onOpenFlashcards: () -> Unit = {},
@@ -85,6 +86,7 @@ fun VirlinAppsScreen(
         AppEntry("maps", "Mind Maps", R.drawable.virlin_app_mind_maps, onOpenMindMaps),
         AppEntry("cards", "Flashcards", R.drawable.virlin_app_flashcards, onOpenFlashcards),
         AppEntry("pages", "Pages", R.drawable.virlin_app_pages, onOpenPages),
+        AppEntry("link", "Virlin Link", R.drawable.virlin_app_link, onOpenDesktopConnect),
     )
     val visible = apps.filter { it.title.contains(query.trim(), ignoreCase = true) }
 
@@ -209,12 +211,19 @@ private fun AppTile(app: AppEntry, available: Boolean, animate: Boolean) {
             .padding(vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Image(
-            painter = painterResource(app.icon),
-            contentDescription = null, // The whole tile supplies the accessible label.
-            contentScale = ContentScale.Fit,
+        Box(
             modifier = Modifier.size(122.dp).then(iconMovement(app.id, animate)),
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                painter = painterResource(app.icon),
+                contentDescription = null, // The whole tile supplies the accessible label.
+                contentScale = ContentScale.Fit,
+                // This square artwork fills its bitmap edge-to-edge; the original
+                // icons have internal breathing room. Keep one common layout slot.
+                modifier = Modifier.size(if (app.id == "link") 104.dp else 122.dp),
+            )
+        }
         Spacer(Modifier.height(6.dp))
         Text(
             text = app.title,

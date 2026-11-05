@@ -281,7 +281,7 @@ fun AgentShell(
                                 .align(Alignment.CenterEnd)
                                 .size(44.dp)
                                 .testTag(AgentCloseTestTag)
-                                .clickable(interactionSource = MutableInteractionSource(), indication = null, role = Role.Button, onClick = onDismiss)
+                                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onDismiss)
                                 .semantics { contentDescription = "Close Virlin Agent" },
                             contentAlignment = Alignment.Center
                         ) { Icon(Icons.Rounded.Close, contentDescription = null, tint = VirlinColors.TextSecondary, modifier = Modifier.size(18.dp)) }
@@ -346,7 +346,7 @@ fun AgentShell(
                         .align(Alignment.CenterStart)
                         .size(44.dp)
                         .testTag(AgentBackTestTag)
-                        .clickable(interactionSource = MutableInteractionSource(), indication = null, role = Role.Button, onClick = onBackToEntry)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onBackToEntry)
                         .semantics { contentDescription = "Back to Agent entry" },
                     contentAlignment = Alignment.Center
                 ) { Icon(Icons.Rounded.ArrowBack, contentDescription = null, tint = VirlinColors.TextSecondary, modifier = Modifier.size(20.dp)) }
@@ -355,7 +355,7 @@ fun AgentShell(
                         .align(Alignment.CenterEnd)
                         .size(44.dp)
                         .testTag(AgentCloseTestTag)
-                        .clickable(interactionSource = MutableInteractionSource(), indication = null, role = Role.Button, onClick = onDismiss)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onDismiss)
                         .semantics { contentDescription = "Close Virlin Agent" },
                     contentAlignment = Alignment.Center
                 ) { Icon(Icons.Rounded.Close, contentDescription = null, tint = VirlinColors.TextSecondary, modifier = Modifier.size(18.dp)) }

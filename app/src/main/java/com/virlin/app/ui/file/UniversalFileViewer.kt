@@ -367,11 +367,26 @@ private fun ImageViewer(file: File) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
-    val bitmap = remember(file.absolutePath) {
-        runCatching { android.graphics.BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
+    var bitmap by remember(file.absolutePath) { mutableStateOf<Bitmap?>(null) }
+    var loadFailed by remember(file.absolutePath) { mutableStateOf(false) }
+    LaunchedEffect(file.absolutePath) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+                val sample = ((maxOf(bounds.outWidth, bounds.outHeight).toLong() + 4095L) / 4096L)
+                    .coerceAtLeast(1L).toInt()
+                android.graphics.BitmapFactory.decodeFile(file.absolutePath,
+                    android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+            }.getOrNull()
+        }
+        loadFailed = bitmap == null
     }
-    if (bitmap == null) {
-        Text("Could not decode image", modifier = Modifier.padding(16.dp), color = Color(0xFFB45309))
+    val loaded = bitmap
+    if (loaded == null) {
+        Text(if (loadFailed) "Could not decode image" else "Loading image…",
+            modifier = Modifier.padding(16.dp), color = if (loadFailed) Color(0xFFB45309) else Color(0xFF647087))
         return
     }
     Box(
@@ -387,7 +402,7 @@ private fun ImageViewer(file: File) {
         contentAlignment = Alignment.Center
     ) {
         Image(
-            bitmap = bitmap.asImageBitmap(),
+            bitmap = loaded.asImageBitmap(),
             contentDescription = file.name,
             contentScale = ContentScale.Fit,
             modifier = Modifier
@@ -604,7 +619,7 @@ private fun CsvViewer(file: File) {
 private fun DocxViewer(file: File) {
     var view by remember(file.absolutePath) { mutableStateOf<OoxmlReaders.DocView?>(null) }
     LaunchedEffect(file.absolutePath) {
-        view = withContext(Dispatchers.IO) {
+        view = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
             FileInputStream(file).use { OoxmlReaders.readDocx(it) }
         }
     }
@@ -641,7 +656,7 @@ private fun XlsxViewer(file: File) {
     var workbook by remember(file.absolutePath) { mutableStateOf<OoxmlReaders.WorkbookView?>(null) }
     var sheetIndex by remember { mutableIntStateOf(0) }
     LaunchedEffect(file.absolutePath) {
-        workbook = withContext(Dispatchers.IO) {
+        workbook = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
             FileInputStream(file).use { OoxmlReaders.readXlsx(it) }
         }
     }
@@ -707,7 +722,7 @@ private fun XlsxViewer(file: File) {
 private fun PptxViewer(file: File) {
     var deck by remember(file.absolutePath) { mutableStateOf<OoxmlReaders.DeckView?>(null) }
     LaunchedEffect(file.absolutePath) {
-        deck = withContext(Dispatchers.IO) {
+        deck = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
             FileInputStream(file).use { OoxmlReaders.readPptx(it) }
         }
     }

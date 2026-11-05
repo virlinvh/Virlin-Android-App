@@ -38,7 +38,7 @@ enum class RootDestination(val route: String, val label: String, val selectedIco
     NOW("now", "Now", Icons.Filled.Home, Icons.Outlined.Home),
     // The route and the destination keep their name; only what the tab is called changed.
     STREAMS("streams", "Projects", Icons.Filled.Layers, Icons.Outlined.Layers),
-    PULSE("pulse", "Pulse", Icons.Filled.Timeline, Icons.Outlined.Timeline),
+    PULSE("pulse", "Momentum", Icons.Filled.Timeline, Icons.Outlined.Timeline),
     // The fourth tab is now the Apps gallery; the capture Inbox is the first app inside it.
     // The constant keeps its name so the live capture-count badge below is unchanged.
     INBOX("apps", "Apps", Icons.Filled.Apps, Icons.Outlined.Apps);

@@ -2,6 +2,7 @@ package com.virlin.app.data.db
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverter
@@ -63,7 +64,9 @@ data class PriorityPreferenceEntity(
     val scopeType: String,
     val createdAt: Instant,
     /** Set only for UNTIL. */
-    val expiresAt: Instant?
+    val expiresAt: Instant?,
+    /** Remaining future Needs You entries for NEXT_RETURNS policies. */
+    val remainingReturns: Int? = null
 )
 
 @Entity(
@@ -100,7 +103,9 @@ data class WorkStreamEntity(
     /** v12: stable id of the external actor doing the work (Phase 10); null = unknown/none. */
     val externalActorId: String? = null,
     /** v14: the user's sibling position under the project (0-based). Backfilled on migration. */
-    @ColumnInfo(name = "sortOrder") val sortOrder: Int = 0
+    @ColumnInfo(name = "sortOrder") val sortOrder: Int = 0,
+    @ColumnInfo(defaultValue = "0") val externalTrackedSeconds: Long = 0,
+    @ColumnInfo(defaultValue = "0") val externalTrackingPaused: Boolean = false
 )
 
 /**
@@ -145,7 +150,20 @@ data class TaskEntity(
     val executionPreference: String,
     val createdAt: Instant,
     val updatedAt: Instant,
-    val completedAt: Instant?
+    val completedAt: Instant?,
+    val executionState: String? = null,
+    val executionStartedAt: Instant? = null,
+    @ColumnInfo(defaultValue = "0") val executionExternalSeconds: Long = 0,
+    @ColumnInfo(defaultValue = "0") val executionPaused: Boolean = false,
+    val executionCheckAt: Instant? = null,
+    val executionReason: String? = null,
+    val executionBlocker: String? = null,
+    val executionCycleId: String? = null,
+    @ColumnInfo(defaultValue = "0") val executionCycleCount: Int = 0,
+    val executionActorId: String? = null,
+    val executionTool: String? = null,
+    val executionInstruction: String? = null,
+    val executionAttentionRank: Int? = null
 )
 
 /**
@@ -352,6 +370,41 @@ data class VirlinNoteEntity(
     val revision: Int,
     val createdAt: Instant,
     val updatedAt: Instant
+)
+
+/** Additive v24 storage for large note documents; older inline rows remain readable. */
+@Entity(
+    tableName = "virlin_note_chunks",
+    primaryKeys = ["ownerKey", "chunkIndex"],
+    indices = [Index("ownerKey")],
+    foreignKeys = [ForeignKey(
+        entity = VirlinNoteEntity::class,
+        parentColumns = ["ownerKey"],
+        childColumns = ["ownerKey"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+)
+data class VirlinNoteChunkEntity(
+    val ownerKey: String,
+    val chunkIndex: Int,
+    val jsonChunk: String,
+)
+
+/**
+ * One mind-map node's optional compact preview.
+ *
+ * Keyed by the node's own stable entity id (Project, WorkStream or Task), mirroring the
+ * `virlin_notes` owner-key shape. The payload is a versioned JSON document rather than columns, so
+ * the description's bold/italic runs and the ordered image metadata evolve without a schema change.
+ * Image BYTES never live here - only relative paths into the preview image root.
+ */
+@Entity(tableName = "map_node_previews")
+data class MapNodePreviewEntity(
+    @PrimaryKey val ownerKey: String,
+    val documentJson: String,
+    val revision: Int,
+    val createdAt: Instant,
+    val updatedAt: Instant,
 )
 
 @Entity(tableName = "task_steps", indices = [Index("taskId")])

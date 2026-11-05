@@ -16,6 +16,7 @@ import com.virlin.app.domain.note.NoteClipboardImporter
 import com.virlin.app.domain.note.NoteEnterSemantics
 import com.virlin.app.domain.prompt.PromptDocumentCodec
 import com.virlin.app.domain.prompt.PromptContentParser
+import com.virlin.app.domain.prompt.importedPromptText
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.domain.time.VirlinClock
 import kotlinx.coroutines.Job
@@ -36,6 +37,8 @@ data class PromptUiState(
     val tags: List<String>,
     val blocks: List<NoteBlock>,
     val sourceText: String = "",
+    val promptText: String = "",
+    val codeText: String = "",
     val mode: PromptContentMode = PromptContentMode.PROMPT,
     val language: String? = null,
     val responseText: String = "",
@@ -104,7 +107,11 @@ class PromptEditorViewModel(
                                 description = doc.description.orEmpty(),
                                 tags = doc.tags,
                                 blocks = doc.blocks.ifEmpty { listOf(NoteBlock(ids.newId("blk"), NoteBlockType.TEXT)) },
-                                sourceText = doc.sourceText.ifEmpty { PromptDocumentCodec.plainText(doc) },
+                                sourceText = if (doc.mode == PromptContentMode.CODE)
+                                    doc.codeText ?: doc.sourceText else if (doc.codeText != null) doc.sourceText
+                                    else doc.sourceText.ifEmpty { PromptDocumentCodec.plainText(doc) },
+                                promptText = if (doc.mode == PromptContentMode.CODE && doc.codeText == null) "" else doc.sourceText,
+                                codeText = doc.codeText ?: if (doc.mode == PromptContentMode.CODE) doc.sourceText else "",
                                 mode = doc.mode,
                                 language = doc.language,
                                 responseText = doc.responseText.orEmpty(),
@@ -132,15 +139,23 @@ class PromptEditorViewModel(
         _state.update { st ->
             val first = st.blocks.firstOrNull()?.copy(type = NoteBlockType.TEXT, plainText = text)
                 ?: NoteBlock(ids.newId("blk"), NoteBlockType.TEXT, plainText = text)
-            st.copy(sourceText = text, blocks = listOf(first))
+            st.copy(sourceText = text,
+                promptText = if (st.mode == PromptContentMode.PROMPT) text else st.promptText,
+                codeText = if (st.mode == PromptContentMode.CODE) text else st.codeText,
+                blocks = listOf(first))
         }
         scheduleAutosave()
+    }
+
+    fun pasteSource(html: String?, plain: String) {
+        onSourceTextChange(importedPromptText(html, plain))
     }
 
     fun setMode(mode: PromptContentMode) {
         _state.update { st ->
             st.copy(
                 mode = mode,
+                sourceText = if (mode == PromptContentMode.CODE) st.codeText else st.promptText,
                 language = if (mode == PromptContentMode.CODE) {
                     st.language ?: PromptContentParser.detectLanguage(st.sourceText)
                 } else st.language
@@ -150,7 +165,7 @@ class PromptEditorViewModel(
     }
 
     fun setLanguage(language: String) {
-        _state.update { it.copy(language = language, mode = PromptContentMode.CODE) }
+        _state.update { it.copy(language = language, mode = PromptContentMode.CODE, sourceText = it.codeText) }
         scheduleAutosave()
     }
 
@@ -159,6 +174,10 @@ class PromptEditorViewModel(
     fun onResponseTextChange(text: String) {
         _state.update { it.copy(responseText = text, responseEditorOpen = true) }
         scheduleAutosave()
+    }
+
+    fun pasteResponse(html: String?, plain: String) {
+        onResponseTextChange(importedPromptText(html, plain))
     }
 
     fun removeResponse() {
@@ -301,7 +320,8 @@ class PromptEditorViewModel(
             description = st.description.ifBlank { null },
             tags = st.tags,
             blocks = st.blocks,
-            sourceText = st.sourceText,
+            sourceText = st.promptText,
+            codeText = st.codeText,
             mode = st.mode,
             language = st.language,
             responseText = st.responseText.takeIf { it.isNotEmpty() },
@@ -363,12 +383,14 @@ class PromptEditorViewModel(
                 sourceText = doc.sourceText,
                 mode = doc.mode,
                 language = doc.language,
-                responseText = doc.responseText
+                responseText = doc.responseText,
+                codeText = doc.codeText
             )
         } else {
             actions.savePrompt(
                 st.captureId!!, doc.title, doc.description, doc.tags, doc.blocks,
-                doc.sourceText, doc.mode, doc.language, doc.responseText
+                doc.sourceText, doc.mode, doc.language, doc.responseText,
+                codeText = doc.codeText
             )
         }
         return when (result) {
@@ -401,7 +423,8 @@ class PromptEditorViewModel(
         if (!doc.hasMeaningfulContent()) return
         when (actions.savePrompt(
             capId, doc.title, doc.description, doc.tags, doc.blocks,
-            doc.sourceText, doc.mode, doc.language, doc.responseText
+            doc.sourceText, doc.mode, doc.language, doc.responseText,
+            codeText = doc.codeText
         )) {
             is ActionResult.Success -> _state.update { it.copy(persisted = true, saveStatus = PromptSaveStatus.Saved) }
             else -> _state.update { it.copy(saveStatus = PromptSaveStatus.Error) }

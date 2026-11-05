@@ -142,6 +142,21 @@ class TagActions(
         ActionResult.Success(step)
     }
 
+    /** Append a validated checklist in one repository transaction. */
+    suspend fun bulkAddSteps(taskId: String, names: List<String>): ActionResult<List<TaskStep>> = tx {
+        getTask(taskId) ?: return@tx ActionResult.Rejected(DomainError.TaskNotFound(taskId))
+        if (names.isEmpty() || names.size > BulkHierarchy.MAX_ITEMS || names.any {
+                it.isBlank() || it != it.trim() || it.length > 200 || '\n' in it || '\r' in it
+            }) return@tx ActionResult.Rejected(DomainError.EmptyTitle)
+        val now = clock.now()
+        val firstOrder = (stepsOf(taskId).maxOfOrNull { it.order } ?: -1) + 1
+        val added = names.mapIndexed { index, name ->
+            TaskStep(ids.newId("step"), taskId, name, false, firstOrder + index, now, now)
+        }
+        added.forEach { saveStep(it) }
+        ActionResult.Success(added)
+    }
+
     /** Toggling a step changes the step. It never completes or reopens the task. */
     suspend fun setStepDone(stepId: String, done: Boolean): ActionResult<TaskStep> = tx {
         val step = stepsOfAll().firstOrNull { it.id == stepId } ?: return@tx ActionResult.NotFound(stepId)

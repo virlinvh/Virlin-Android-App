@@ -159,16 +159,16 @@ class StructureActionsTest {
         assertTrue(EventType.TASK_COMPLETED in repo.getEvents("agent").map { it.type })
     }
 
-    @Test fun completeParent_doesNotMutateChildren_progressIsDerived() = runTest {
+    @Test fun completeParent_closesItsSubtree_progressIsDerived() = runTest {
         seedTree()
         a.completeTask("rc") // parent closed explicitly
-        assertEquals(TaskStatus.TODO, repo.getTask("nl")!!.status)           // children untouched
+        assertEquals(TaskStatus.DONE, repo.getTask("nl")!!.status)           // subtree closed atomically
         // Parent status is never auto-mutated the other way either:
         a.completeTask("tc"); a.completeTask("wc")
         assertEquals(TaskStatus.TODO, repo.getTask("create")!!.status)
         // …but its derived progress is what matters.
         val p = ProgressCalculator.ofTask(tasks(), "create") as ProgressResult.Structured
-        assertEquals(2, p.completedLeaves); assertEquals(5, p.totalLeaves)
+        assertEquals(5, p.completedLeaves); assertEquals(5, p.totalLeaves)
     }
 
     // ================================================================ Active task
@@ -214,18 +214,19 @@ class StructureActionsTest {
 
     // ================================================================ Focus / snapshot attribution
 
-    @Test fun focusSession_capturesActiveTaskAtStart_historyNeverRewritten() = runTest {
+    @Test fun changingCurrentWhileFocused_closesOldAttributionAndStartsNewSession() = runTest {
         seedTree()
         a.setActiveTask("agent", "nl")
         a.focusStream("agent")
         assertEquals("nl", repo.getOpenFocusSession("agent")!!.taskId)
-        a.setActiveTask("agent", "custom")                      // change mid-session
-        assertEquals("nl", repo.getOpenFocusSession("agent")!!.taskId) // unchanged
-        a.handOffStream("agent")
-        assertEquals("custom", repo.getLatestSnapshot("agent")!!.taskId) // snapshot has the current one
-        a.checkDue("agent"); a.focusStream("agent")
-        assertEquals("custom", repo.getOpenFocusSession("agent")!!.taskId) // new session, new attribution
+        a.setActiveTask("agent", "custom")
+        assertEquals("custom", repo.getOpenFocusSession("agent")!!.taskId)
         assertEquals(listOf("nl", "custom"), repo.getFocusSessions("agent").map { it.taskId })
+        a.handOffStream("agent")
+        assertEquals("custom", repo.getLatestSnapshot("agent")!!.taskId)
+        a.checkDue("agent"); a.focusStream("agent")
+        assertEquals("custom", repo.getOpenFocusSession("agent")!!.taskId)
+        assertEquals(listOf("nl", "custom", "custom"), repo.getFocusSessions("agent").map { it.taskId })
     }
 
     // ================================================================ Progress
@@ -381,7 +382,8 @@ class StructureActionsTest {
         a.focusStream("orphan")
         assertEquals("q17", repo.getOpenFocusSession("orphan")!!.taskId)
         a.setActiveTask("orphan", "q1_10")
-        assertEquals("q17", repo.getOpenFocusSession("orphan")!!.taskId)          // history not rewritten
+        assertEquals("q1_10", repo.getOpenFocusSession("orphan")!!.taskId)        // new attribution boundary
+        assertEquals(listOf("q17", "q1_10"), repo.getFocusSessions("orphan").map { it.taskId })
         a.handOffStream("orphan")
         assertEquals("q1_10", repo.getLatestSnapshot("orphan")!!.taskId)
         a.completeTask("q1_10")                                                     // clears while PROCESSING too
@@ -412,6 +414,24 @@ class StructureActionsTest {
         assertEquals(DomainError.TaskAlreadyClosed, a.completeTask("presets").rej())
         assertEquals(DomainError.TaskAlreadyClosed, a.cancelTask("presets").rej())
         assertEquals(DomainError.TaskAlreadyClosed, a.setActiveTask("agent", "presets").rej())
+    }
+
+    @Test fun completedTask_canBeDeliberatelyRestoredToTodo_butCancelledCannot() = runTest {
+        task("Accidental completion", id = "restore-me")
+        val completed = a.completeTask("restore-me").getOrNull()!!
+        assertEquals(TaskStatus.DONE, completed.status)
+        assertNotNull(completed.completedAt)
+
+        clock.advance(Duration.ofMinutes(1))
+        val restored = a.restoreTask("restore-me").getOrNull()!!
+        assertEquals(TaskStatus.TODO, restored.status)
+        assertNull(restored.completedAt)
+        assertEquals(clock.now(), restored.updatedAt)
+
+        task("Cancelled", id = "cancelled")
+        a.cancelTask("cancelled")
+        assertEquals(DomainError.TaskAlreadyClosed, a.restoreTask("cancelled").rej())
+        assertTrue(a.restoreTask("missing").rej() is DomainError.TaskNotFound)
     }
 
     @Test fun cancelled_excludedFromCountDenominator() = runTest {

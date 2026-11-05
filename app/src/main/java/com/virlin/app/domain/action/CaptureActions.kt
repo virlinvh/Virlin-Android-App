@@ -6,6 +6,7 @@ import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.model.CaptureItem
 import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.CaptureType
+import com.virlin.app.domain.model.editToken
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskPageTypeKeys
 import com.virlin.app.domain.repository.WorkStreamRepository
@@ -55,6 +56,8 @@ internal class CaptureActions(
 
     suspend fun updateCapture(id: String, u: CaptureUpdate): ActionResult<CaptureItem> = tx {
         val c = getCapture(id) ?: return@tx ActionResult.Rejected(DomainError.CaptureNotFound(id))
+        if (u.expectedEditToken != null && c.editToken() != u.expectedEditToken)
+            return@tx ActionResult.Rejected(DomainError.PlacementRejected("Capture changed since it was opened"))
         val content = u.content.applyTo(c.content)?.trim() ?: ""
         val urlRaw = u.sourceUrl.applyTo(c.sourceUrl)
         val url = when (c.type) {
