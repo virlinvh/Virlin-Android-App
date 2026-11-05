@@ -171,6 +171,22 @@ class ProjectStorageTools(private val context: Context, private val repository: 
                             mediaManifest.put(ProjectArchive.json("store" to key.first, "path" to key.second,
                                 "entry" to entry, "bytes" to source.length(), "sha256" to digest.digest().joinToString("") { "%02x".format(it) }))
                         }
+                        val missingNoteImages = JSONArray()
+                        s.richNotes.flatMap { note -> note.blocks.mapNotNull { it.imagePath } }.distinct().forEach { name ->
+                            val image = com.virlin.app.data.noteimage.NoteImageStore.resolve(context, name)
+                            if (image == null || !image.isFile) { missingNoteImages.put(name); return@forEach }
+                            val entry = "media/note-images/$name"
+                            val digest = MessageDigest.getInstance("SHA-256")
+                            zip.putNextEntry(ZipEntry(entry))
+                            image.inputStream().buffered().use { input ->
+                                val buffer = ByteArray(64 * 1024)
+                                while (true) { val read = input.read(buffer); if (read < 0) break; digest.update(buffer, 0, read); zip.write(buffer, 0, read) }
+                            }
+                            zip.closeEntry()
+                            mediaManifest.put(ProjectArchive.json("store" to "note-images", "path" to name,
+                                "entry" to entry, "bytes" to image.length(), "sha256" to digest.digest().joinToString("") { "%02x".format(it) }))
+                        }
+                        if (missingNoteImages.length() > 0) manifest.put("missingNoteImages", missingNoteImages)
                         manifest.put("media", mediaManifest)
                         zip.putNextEntry(ZipEntry("project.json")); zip.write(manifest.toString(2).toByteArray(Charsets.UTF_8)); zip.closeEntry()
                         zip.putNextEntry(ZipEntry("project.md")); zip.write(ProjectArchive.markdown(s).toByteArray(Charsets.UTF_8)); zip.closeEntry()

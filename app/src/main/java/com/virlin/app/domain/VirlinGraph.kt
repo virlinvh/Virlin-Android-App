@@ -42,6 +42,8 @@ object VirlinGraph {
 
     @Volatile private var database: VirlinDatabase? = null
     @Volatile private var appContext: Context? = null
+    /** App-owned files are exposed only to the authenticated desktop bridge, never as raw paths. */
+    fun desktopFilesContext(): Context? = appContext
     @Volatile private var platformScheduler: AttentionScheduler? = null
 
     private val bootstrap = BootstrappingWorkStreamRepository()

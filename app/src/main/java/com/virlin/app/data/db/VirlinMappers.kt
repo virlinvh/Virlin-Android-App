@@ -264,20 +264,28 @@ object VirlinMappers {
     fun com.virlin.app.domain.model.TaskStep.toEntity() =
         TaskStepEntity(id, taskId, text, done, order, createdAt, updatedAt)
 
-    // The Notes page's own document. Blocks travel as VirlinNoteCodec JSON, which is this
-    // feature's own format and is never read by the capture note codec.
-    fun VirlinNoteEntity.toDomain() = com.virlin.app.domain.notedoc.VirlinNoteDoc(
-        ownerKey = ownerKey,
-        title = title,
-        blocks = com.virlin.app.domain.notedoc.VirlinNoteCodec.decode(documentJson),
-        createdAt = createdAt,
-        updatedAt = updatedAt,
-        revision = revision,
-    )
+    // The Notes page's own document: RichNoteFormat v1 blocks or v2 rich tree + projection.
+    // An undecodable payload loads as damaged and is written back verbatim, never as empty.
+    fun VirlinNoteEntity.toDomain(): com.virlin.app.domain.notedoc.VirlinNoteDoc {
+        val stored = com.virlin.app.domain.notedoc.rich.RichNoteFormat.decode(documentJson)
+        val damaged = stored as? com.virlin.app.domain.notedoc.rich.RichNoteFormat.Stored.Damaged
+        return com.virlin.app.domain.notedoc.VirlinNoteDoc(
+            ownerKey = ownerKey,
+            title = title,
+            blocks = stored.blocks,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            revision = revision,
+            richDocument = (stored as? com.virlin.app.domain.notedoc.rich.RichNoteFormat.Stored.Rich)?.document,
+            loadError = damaged?.reason,
+            damagedRaw = damaged?.raw,
+        )
+    }
     fun com.virlin.app.domain.notedoc.VirlinNoteDoc.toEntity() = VirlinNoteEntity(
         ownerKey = ownerKey,
         title = title,
-        documentJson = com.virlin.app.domain.notedoc.VirlinNoteCodec.encode(blocks),
+        documentJson = if (loadError != null) damagedRaw.orEmpty()
+            else com.virlin.app.domain.notedoc.rich.RichNoteFormat.encode(blocks, richDocument),
         revision = revision,
         createdAt = createdAt,
         updatedAt = updatedAt,

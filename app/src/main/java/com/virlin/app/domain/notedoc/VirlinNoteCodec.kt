@@ -41,6 +41,7 @@ object VirlinNoteCodec {
         if (b.indent != 0) sb.append(",\"indent\":").append(b.indent)
         if (b.checked) sb.append(",\"checked\":true")
         if (b.isCollapsed) sb.append(",\"collapsed\":true")
+        b.mathMode?.let { sb.append(",\"mathMode\":").append(it) }
         if (b.lineSpacing != 1f) sb.append(",\"spacing\":").append(b.lineSpacing)
         b.promptTitle?.let { sb.append(",\"promptTitle\":").append(quote(it)) }
         b.imagePath?.let { sb.append(",\"imagePath\":").append(quote(it)) }
@@ -109,6 +110,7 @@ object VirlinNoteCodec {
             indent = num(o["indent"])?.toInt() ?: 0,
             checked = o["checked"] == true,
             isCollapsed = o["collapsed"] == true,
+            mathMode = o["mathMode"] as? Boolean,
             lineSpacing = num(o["spacing"])?.toFloat() ?: 1f,
             promptTitle = o["promptTitle"] as? String,
             table = table,

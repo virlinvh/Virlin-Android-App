@@ -80,18 +80,29 @@ data class NoteDocBlock(
     val table: NoteDocTable? = null,
     /** IMAGE only: app-managed file name, never a temporary picker URI. */
     val imagePath: String? = null,
-    /** TOGGLE only: hides all following blocks with a deeper indent. */
+    /** Collapsed toggle or heading section; descendants remain stored intact. */
     val isCollapsed: Boolean = false,
+    /** CODE only: true for imported/inserted math, false for explicit code, null for legacy notes. */
+    val mathMode: Boolean? = null,
 )
 
 /** Visible document order, shared by the editor and preview. Descendants remain stored intact. */
-fun visibleNoteBlocks(blocks: List<NoteDocBlock>): List<NoteDocBlock> {
+fun visibleNoteBlocks(blocks: List<NoteDocBlock>, foldHeadings: Boolean = true): List<NoteDocBlock> {
     val visible = ArrayList<NoteDocBlock>(blocks.size)
     val hiddenAt = ArrayDeque<Int>()
+    val headings = ArrayDeque<Pair<Int, Boolean>>()
     blocks.forEach { block ->
+        val level = when (block.type) {
+            NoteDocBlockType.HEADING_1 -> 1
+            NoteDocBlockType.HEADING_2 -> 2
+            NoteDocBlockType.HEADING_3 -> 3
+            else -> 0
+        }
+        if (level != 0) while (headings.isNotEmpty() && headings.last().first >= level) headings.removeLast()
         while (hiddenAt.isNotEmpty() && block.indent <= hiddenAt.last()) hiddenAt.removeLast()
-        if (hiddenAt.isEmpty()) visible += block
+        if (hiddenAt.isEmpty() && headings.none { it.second }) visible += block
         if (block.type == NoteDocBlockType.TOGGLE && block.isCollapsed) hiddenAt.addLast(block.indent)
+        if (level != 0) headings.addLast(level to (foldHeadings && block.isCollapsed))
     }
     return visible
 }
@@ -107,6 +118,15 @@ data class VirlinNoteDoc(
     val createdAt: Instant = Instant.EPOCH,
     val updatedAt: Instant = Instant.EPOCH,
     val revision: Int = 0,
+    /**
+     * Format v2 rich tree (ProseMirror JSON) when the note was written by the rich editor. When
+     * set it is authoritative and [blocks] is its derived projection.
+     */
+    val richDocument: String? = null,
+    /** Set when the stored document could not be decoded; [blocks] is then empty, not the content. */
+    val loadError: String? = null,
+    /** The undecodable stored payload, kept verbatim so it is never replaced by an empty note. */
+    val damagedRaw: String? = null,
 )
 
 /**

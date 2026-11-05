@@ -3,7 +3,7 @@ package com.virlin.app.data.project
 import com.virlin.app.domain.project.ProjectSnapshot
 import com.virlin.app.domain.model.*
 import com.virlin.app.domain.note.NoteDocumentCodec
-import com.virlin.app.domain.notedoc.VirlinNoteCodec
+import com.virlin.app.domain.notedoc.rich.RichNoteFormat
 import com.virlin.app.domain.mappreview.MapPreviewCodec
 import org.json.JSONArray
 import org.json.JSONObject
@@ -71,7 +71,8 @@ object ProjectArchive {
                     "relativePath" to c.relativePath, "durationMs" to c.durationMs, "sizeBytes" to c.sizeBytes,
                     "mimeType" to c.mimeType, "sortOrder" to c.sortOrder, "createdAt" to c.createdAt) })) }),
             "richNotes" to JSONArray(s.richNotes.map { n -> json("ownerKey" to n.ownerKey, "title" to n.title,
-                "payload" to JSONObject(VirlinNoteCodec.encode(n.blocks)), "revision" to n.revision,
+                "payload" to if (n.loadError == null) JSONObject(RichNoteFormat.encode(n.blocks, n.richDocument)) else null,
+                "damagedRaw" to n.damagedRaw, "revision" to n.revision,
                 "createdAt" to n.createdAt, "updatedAt" to n.updatedAt) }),
             "pageBlocks" to JSONArray(s.pageBlocks.map { b -> json("id" to b.id, "taskId" to b.taskId,
                 "typeKey" to b.typeKey, "contentId" to b.contentId, "order" to b.order, "createdAt" to b.createdAt, "updatedAt" to b.updatedAt) }),

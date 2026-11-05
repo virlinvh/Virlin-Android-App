@@ -17,6 +17,28 @@ import java.time.Instant
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class ProjectKnowledgeRoomTest {
+    @Test fun largeNotesUseChunksAndSurviveRepositoryRecreation() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), VirlinDatabase::class.java)
+            .allowMainThreadQueries().build()
+        try {
+            val repo = RoomWorkStreamRepository.create(db)
+            val actions = DefaultVirlinActions(repo, FakeClock(Instant.EPOCH), SequentialIdProvider())
+            val project = (actions.createProject(CreateProject("Large note")) as ActionResult.Success).value
+            val key = "project-${project.id}"
+            val blocks = (0 until 2_100).map { index ->
+                com.virlin.app.domain.notedoc.NoteDocBlock("block-$index", text = "Entry $index: " + "x".repeat(120))
+            }
+            assertTrue(actions.saveNoteDoc(key, "Treasury", blocks) is ActionResult.Success)
+            assertTrue(db.virlinNoteChunks().byOwner(key).size > 1)
+            val reopened = DefaultVirlinActions(RoomWorkStreamRepository.create(db), FakeClock(Instant.EPOCH), SequentialIdProvider())
+            assertEquals(blocks, reopened.loadNoteDoc(key)!!.blocks)
+            // Replacing a large note with a small one must remove stale chunks.
+            assertTrue(reopened.saveNoteDoc(key, "Short", listOf(blocks.first())) is ActionResult.Success)
+            assertTrue(db.virlinNoteChunks().byOwner(key).isEmpty())
+            assertEquals(listOf(blocks.first()), reopened.loadNoteDoc(key)!!.blocks)
+        } finally { db.close() }
+    }
+
     @Test fun projectKnowledgeDocumentsSurviveRepositoryRecreation() = runTest {
         val db = Room.inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), VirlinDatabase::class.java)
             .allowMainThreadQueries().build()

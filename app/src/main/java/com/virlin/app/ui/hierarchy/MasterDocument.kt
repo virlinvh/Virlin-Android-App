@@ -22,7 +22,7 @@ internal fun taskPageBody(typeKey: String, taskId: String, steps: List<TaskStep>
     TaskPageTypeKeys.TODO -> steps.filter { it.taskId == taskId }.sortedBy { it.order }
         .joinToString("\n") { "${if (it.done) "☑" else "☐"} ${it.text}" }
             .ifBlank { "No to-dos yet" }
-    TaskPageTypeKeys.NOTE -> note?.blocks.orEmpty().joinToString("\n") { block ->
+    TaskPageTypeKeys.NOTE -> if (note?.loadError != null) "This note could not be read. Open it to recover it." else note?.blocks.orEmpty().joinToString("\n") { block ->
         when (block.type) {
             NoteDocBlockType.HEADING_1 -> "# ${block.text}"
             NoteDocBlockType.HEADING_2 -> "## ${block.text}"

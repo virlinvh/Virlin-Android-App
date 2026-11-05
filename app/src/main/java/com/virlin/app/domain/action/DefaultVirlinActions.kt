@@ -123,12 +123,16 @@ class DefaultVirlinActions(
             ActionResult.Success(tree.sumOf { it.count })
         }
     } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+    catch (rejected: BulkTaskPlacementRejected) { ActionResult.Rejected(rejected.reason) }
     catch (e: Exception) { ActionResult.Failure(e) }
+
+    private class BulkTaskPlacementRejected(val reason: DomainError) : RuntimeException()
 
     private suspend fun createBulkTasksIn(writer: WorkStreamWriter, nodes: List<BulkNode>, destination: CreateTask) {
         nodes.forEach { node ->
             val result = structure.createTaskIn(writer, destination.copy(title = node.name, id = null, order = null))
-            check(result is ActionResult.Success) { "Import refused: the destination may be closed, active, or no longer available. Nothing was added." }
+            if (result is ActionResult.Rejected) throw BulkTaskPlacementRejected(result.reason)
+            check(result is ActionResult.Success) { "Import refused: the destination may no longer be available. Nothing was added." }
             // Only root items use the caller's defaults. Descendants inherit their new parent.
             createBulkTasksIn(writer, node.children, CreateTask("", parentTaskId = result.value.id))
         }
@@ -205,8 +209,9 @@ class DefaultVirlinActions(
         sourceText: String,
         mode: com.virlin.app.domain.model.PromptContentMode,
         language: String?,
-        responseText: String?
-    ) = prompts.createPrompt(title, description, tags, blocks, context, captureId, promptId, sourceText, mode, language, responseText)
+        responseText: String?,
+        codeText: String?
+    ) = prompts.createPrompt(title, description, tags, blocks, context, captureId, promptId, sourceText, mode, language, responseText, codeText)
 
     override suspend fun savePrompt(
         captureItemId: String,
@@ -217,8 +222,10 @@ class DefaultVirlinActions(
         sourceText: String,
         mode: com.virlin.app.domain.model.PromptContentMode,
         language: String?,
-        responseText: String?
-    ) = prompts.savePrompt(captureItemId, title, description, tags, blocks, sourceText, mode, language, responseText)
+        responseText: String?,
+        expectedToken: String?,
+        codeText: String?
+    ) = prompts.savePrompt(captureItemId, title, description, tags, blocks, sourceText, mode, language, responseText, expectedToken, codeText)
 
     override suspend fun getOrHydratePrompt(captureItemId: String) = prompts.getOrHydratePrompt(captureItemId)
 
@@ -277,8 +284,9 @@ class DefaultVirlinActions(
     override suspend fun cancelTask(taskId: String) = structure.cancelTask(taskId)
     override suspend fun placeTask(taskId: String, workStreamId: String?) = structure.placeTask(taskId, workStreamId)
     override suspend fun moveTasks(
-        taskIds: List<String>, newParentId: String?, afterId: String?, withinStreamId: String
-    ) = structure.moveTasks(taskIds, newParentId, afterId, withinStreamId)
+        taskIds: List<String>, newParentId: String?, afterId: String?, withinStreamId: String,
+        expectedSiblingIds: List<String>?
+    ) = structure.moveTasks(taskIds, newParentId, afterId, withinStreamId, expectedSiblingIds)
     override suspend fun duplicateTask(taskId: String) = structure.duplicateTask(taskId)
 
     override suspend fun placeBranch(
@@ -332,8 +340,19 @@ class DefaultVirlinActions(
     override suspend fun saveNoteDoc(
         ownerKey: String,
         title: String?,
-        blocks: List<com.virlin.app.domain.notedoc.NoteDocBlock>
-    ) = noteDocs.saveNoteDoc(ownerKey, title, blocks)
+        blocks: List<com.virlin.app.domain.notedoc.NoteDocBlock>,
+        expectedRevision: Int?
+    ) = noteDocs.saveNoteDoc(ownerKey, title, blocks, expectedRevision)
+    override suspend fun saveRichNoteDoc(
+        ownerKey: String,
+        title: String?,
+        richDocument: String,
+        expectedRevision: Int?,
+        replaceDamaged: Boolean,
+    ) = noteDocs.saveRichNoteDoc(ownerKey, title, richDocument, expectedRevision, replaceDamaged)
+    override suspend fun saveNoteRecoveryCopy(ownerKey: String, reason: String, payload: String) =
+        noteDocs.saveNoteRecoveryCopy(ownerKey, reason, payload)
+    override suspend fun recoverDamagedNote(ownerKey: String) = noteDocs.recoverDamagedNote(ownerKey)
     override suspend fun setActiveTask(streamId: String, taskId: String?) = structure.setActiveTask(streamId, taskId)
     override suspend fun activePath(streamId: String) = structure.activePath(streamId)
     override suspend fun nextTaskCandidate(streamId: String) = structure.nextTaskCandidate(streamId)

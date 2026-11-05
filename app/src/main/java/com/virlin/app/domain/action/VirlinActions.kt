@@ -295,7 +295,8 @@ interface VirlinActions {
         sourceText: String = "",
         mode: com.virlin.app.domain.model.PromptContentMode = com.virlin.app.domain.model.PromptContentMode.PROMPT,
         language: String? = null,
-        responseText: String? = null
+        responseText: String? = null,
+        codeText: String? = null
     ): ActionResult<com.virlin.app.domain.model.PromptDocument>
 
     suspend fun savePrompt(
@@ -307,7 +308,9 @@ interface VirlinActions {
         sourceText: String = "",
         mode: com.virlin.app.domain.model.PromptContentMode = com.virlin.app.domain.model.PromptContentMode.PROMPT,
         language: String? = null,
-        responseText: String? = null
+        responseText: String? = null,
+        expectedToken: String? = null,
+        codeText: String? = null
     ): ActionResult<com.virlin.app.domain.model.PromptDocument>
 
     suspend fun getOrHydratePrompt(captureItemId: String): ActionResult<com.virlin.app.domain.model.PromptDocument>
@@ -423,7 +426,8 @@ interface VirlinActions {
         taskIds: List<String>,
         newParentId: String?,
         afterId: String?,
-        withinStreamId: String
+        withinStreamId: String,
+        expectedSiblingIds: List<String>? = null
     ): ActionResult<List<Task>>
 
     /**
@@ -510,8 +514,27 @@ interface VirlinActions {
     suspend fun saveNoteDoc(
         ownerKey: String,
         title: String?,
-        blocks: List<com.virlin.app.domain.notedoc.NoteDocBlock>
+        blocks: List<com.virlin.app.domain.notedoc.NoteDocBlock>,
+        expectedRevision: Int? = null,
     ): ActionResult<com.virlin.app.domain.notedoc.VirlinNoteDoc>
+
+    /**
+     * Writes a rich (format v2) Notes document; its block projection is derived. Refused when
+     * [expectedRevision] is stale or the stored note is damaged (unless [replaceDamaged]).
+     */
+    suspend fun saveRichNoteDoc(
+        ownerKey: String,
+        title: String?,
+        richDocument: String,
+        expectedRevision: Int?,
+        replaceDamaged: Boolean = false,
+    ): ActionResult<com.virlin.app.domain.notedoc.VirlinNoteDoc>
+
+    /** Stores a recovery copy of a note payload under a new owner key, returned on success. */
+    suspend fun saveNoteRecoveryCopy(ownerKey: String, reason: String, payload: String): ActionResult<String>
+
+    /** Backs up a damaged note's raw payload, then replaces the note with its salvaged text. */
+    suspend fun recoverDamagedNote(ownerKey: String): ActionResult<com.virlin.app.domain.notedoc.VirlinNoteDoc>
 
     // ================================================================ Structure: Active task
 
@@ -547,7 +570,8 @@ data class CreateCapture(
 data class CaptureUpdate(
     val content: Field<String> = Field.Keep,
     val title: Field<String> = Field.Keep,
-    val sourceUrl: Field<String> = Field.Keep
+    val sourceUrl: Field<String> = Field.Keep,
+    val expectedEditToken: String? = null
 )
 
 /** Where a converted capture's Task goes: exactly like CREATE mode (WorkStream / Project / parent Task). */

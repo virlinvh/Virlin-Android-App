@@ -30,6 +30,26 @@ import java.time.Instant
  */
 @RunWith(AndroidJUnit4::class)
 class VirlinMigrationTest {
+    @Test fun migrate23To24PreservesInlineNotesAndAddsChunkStorage() {
+        val name = "virlin-note-chunks-migration.db"
+        helper.createDatabase(name, 23).apply {
+            execSQL("INSERT INTO virlin_notes (ownerKey,title,documentJson,revision,createdAt,updatedAt) " +
+                "VALUES ('task-existing','Original','{\"v\":1,\"blocks\":[]}',1,1000,1000)")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 24, true, VirlinDatabase.MIGRATION_23_24).apply {
+            query("SELECT title,documentJson FROM virlin_notes WHERE ownerKey='task-existing'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Original", it.getString(0))
+                assertEquals("{\"v\":1,\"blocks\":[]}", it.getString(1))
+            }
+            query("SELECT COUNT(*) FROM virlin_note_chunks").use {
+                assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0))
+            }
+            close()
+        }
+    }
+
     @Test fun migrate22To23AddsReturnCountWithoutChangingSavedRules() {
         val name = "virlin-priority-returns-migration.db"
         helper.createDatabase(name, 22).apply {

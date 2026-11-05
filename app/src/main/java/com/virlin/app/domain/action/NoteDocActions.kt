@@ -3,11 +3,22 @@ package com.virlin.app.domain.action
 import com.virlin.app.domain.notedoc.NoteDocBlock
 import com.virlin.app.domain.notedoc.VirlinNoteDoc
 import com.virlin.app.domain.notedoc.CaptureNoteBridge
+import com.virlin.app.domain.notedoc.rich.RichJson
+import com.virlin.app.domain.notedoc.rich.RichNoteAdapter
 import com.virlin.app.domain.model.*
 import com.virlin.app.domain.id.IdProvider
 import com.virlin.app.domain.repository.WorkStreamRepository
 import com.virlin.app.domain.repository.WorkStreamWriter
 import com.virlin.app.domain.time.VirlinClock
+
+/** User-facing rejection messages for note saves. Shown verbatim by the editors. */
+object NoteDocMessages {
+    const val STALE = "Note changed on the phone. Reload before saving."
+    const val DAMAGED = "This note could not be read. Recover it before editing."
+    const val RICH_STRUCTURE = "This change affects rich note structure (tables, lists, equations or nested " +
+        "blocks) that can only be edited in the phone's note editor."
+    const val INVALID_DOCUMENT = "The note editor produced an invalid document; nothing was saved."
+}
 
 /**
  * THE NOTES PAGE'S DOCUMENTS.
@@ -15,6 +26,11 @@ import com.virlin.app.domain.time.VirlinClock
  * Ordinary task/project workspace keys remain independent documents. Capture/draft keys use
  * a validated transactional adapter: rich document, Capture lifecycle and Knowledge preview
  * commit together. Legacy content is imported lazily, not rewritten simply by opening it.
+ *
+ * Rich (v2) documents are written by [saveRichNoteDoc]. Block-level writers ([saveNoteDoc]: the
+ * desktop and older editors) are merged into the rich tree by [RichNoteAdapter.applyBlockEdits]
+ * and refused when the merge cannot be expressed. A damaged stored document is never
+ * overwritten except by the explicit recovery path.
  */
 internal class NoteDocActions(
     private val repository: WorkStreamRepository,
@@ -35,7 +51,7 @@ internal class NoteDocActions(
     }
 
     /**
-     * Writes the whole document for [ownerKey], creating it on first save.
+     * Writes the whole document for [ownerKey] from flat blocks, creating it on first save.
      *
      * Idempotent and transactional: saving identical content returns the stored document without
      * a write, so autosave cannot inflate the revision or the timestamp on every recomposition.
@@ -45,24 +61,96 @@ internal class NoteDocActions(
         ownerKey: String,
         title: String?,
         blocks: List<NoteDocBlock>,
+        expectedRevision: Int? = null,
+    ): ActionResult<VirlinNoteDoc> = save(ownerKey, title, expectedRevision, replaceDamaged = false) { stored ->
+        val tree = stored?.richDocument ?: return@save Content(blocks, null)
+        val merged = RichNoteAdapter.applyBlockEdits(tree, blocks)
+            ?: return@save null
+        Content(RichNoteAdapter.project(merged), merged)
+    }
+
+    /** Writes a rich (format v2) document. Its block projection is derived, never supplied. */
+    suspend fun saveRichNoteDoc(
+        ownerKey: String,
+        title: String?,
+        richDocument: String,
+        expectedRevision: Int?,
+        replaceDamaged: Boolean = false,
+    ): ActionResult<VirlinNoteDoc> {
+        val canonical = try {
+            RichNoteAdapter.canonical(richDocument)
+        } catch (e: RichJson.MalformedJson) {
+            return ActionResult.Rejected(DomainError.PlacementRejected(NoteDocMessages.INVALID_DOCUMENT))
+        }
+        val blocks = RichNoteAdapter.project(canonical)
+        return save(ownerKey, title, expectedRevision, replaceDamaged) { Content(blocks, canonical) }
+    }
+
+    /**
+     * Stores [payload] under a new recovery owner key and returns that key. A valid rich tree is
+     * stored as a readable note; anything else is kept verbatim in a code block.
+     */
+    suspend fun saveNoteRecoveryCopy(ownerKey: String, reason: String, payload: String): ActionResult<String> = tx {
+        val now = clock.now()
+        val key = "note-recovery-${ownerKey.take(80)}-${now.toEpochMilli()}-${ids.newId("r")}"
+        val tree = runCatching { RichNoteAdapter.canonical(payload) }.getOrNull()
+            ?: RichNoteAdapter.recoveryDocument("Recovered from $ownerKey: $reason", payload)
+        saveNoteDoc(VirlinNoteDoc(key, "Recovery: $reason", RichNoteAdapter.project(tree), now, now, 1, richDocument = tree))
+        ActionResult.Success(key)
+    }
+
+    /**
+     * Recovers a damaged note: the raw stored payload is first copied to a recovery owner, then
+     * the note is replaced by the salvaged text. Never reinterprets literal Markdown.
+     */
+    suspend fun recoverDamagedNote(ownerKey: String): ActionResult<VirlinNoteDoc> {
+        val stored = loadNoteDoc(ownerKey) ?: return ActionResult.Rejected(DomainError.PlacementRejected(NoteDocMessages.DAMAGED))
+        val raw = stored.damagedRaw ?: return ActionResult.Success(stored)
+        when (val backup = saveNoteRecoveryCopy(stored.ownerKey, "damaged note", raw)) {
+            is ActionResult.Success -> Unit
+            is ActionResult.Rejected -> return ActionResult.Rejected(backup.reason)
+            is ActionResult.NotFound -> return backup
+            is ActionResult.Failure -> return backup
+        }
+        return saveRichNoteDoc(stored.ownerKey, stored.title, RichNoteAdapter.salvage(raw), stored.revision, replaceDamaged = true)
+    }
+
+    private class Content(val blocks: List<NoteDocBlock>, val richDocument: String?)
+
+    private suspend fun save(
+        ownerKey: String,
+        title: String?,
+        expectedRevision: Int?,
+        replaceDamaged: Boolean,
+        content: (VirlinNoteDoc?) -> Content?,
     ): ActionResult<VirlinNoteDoc> = tx {
         if (ownerKey.isBlank()) return@tx ActionResult.Rejected(DomainError.EmptyTitle)
         val captureId = CaptureNoteBridge.captureId(ownerKey)
         val canonicalOwner = captureId?.let(CaptureNoteBridge::owner) ?: ownerKey
+        val stored = noteDocOf(canonicalOwner)
+        if (expectedRevision != null && (stored?.revision ?: 0) != expectedRevision)
+            return@tx ActionResult.Rejected(DomainError.PlacementRejected(NoteDocMessages.STALE))
+        if (stored?.loadError != null && !replaceDamaged)
+            return@tx ActionResult.Rejected(DomainError.PlacementRejected(NoteDocMessages.DAMAGED))
+        val next = content(stored?.takeIf { it.loadError == null })
+            ?: return@tx ActionResult.Rejected(DomainError.PlacementRejected(NoteDocMessages.RICH_STRUCTURE))
+        val blocks = next.blocks
+        val rich = next.richDocument
+        fun sameAs(doc: VirlinNoteDoc?) = doc != null && doc.loadError == null && doc.title == title &&
+            doc.blocks == blocks && doc.richDocument == rich
         if (captureId != null) {
             val previous = getCapture(captureId)
             if (previous != null && previous.type != CaptureType.NOTE) return@tx ActionResult.Rejected(DomainError.NotATextNote)
-            val unchanged = noteDocOf(canonicalOwner)
-            if (previous != null && unchanged != null && unchanged.title == title && unchanged.blocks == blocks) return@tx ActionResult.Success(unchanged)
+            if (previous != null && sameAs(stored)) return@tx ActionResult.Success(stored!!)
             val legacyBlocks = CaptureNoteBridge.toLegacy(blocks)
             // Untouched empty Knowledge drafts are not saved merely by closing the page.
             if (previous == null && legacyBlocks.none { it.hasMeaningfulContent() }) {
                 if (CaptureNoteBridge.draftProject(ownerKey) == null) return@tx ActionResult.Rejected(DomainError.CaptureNotFound(captureId))
-                return@tx ActionResult.Success(VirlinNoteDoc(canonicalOwner, title, blocks))
+                return@tx ActionResult.Success(VirlinNoteDoc(canonicalOwner, title, blocks, richDocument = rich))
             }
             val now = clock.now()
             val oldNote = getNoteByCaptureId(captureId)
-            if (oldNote != null && unchanged == null && noteDocOf("capture-legacy-$captureId") == null) {
+            if (oldNote != null && stored == null && noteDocOf("capture-legacy-$captureId") == null) {
                 // Preserve the exact original payload (including collapsed nested toggles) for recovery.
                 saveNoteDoc(VirlinNoteDoc("capture-legacy-$captureId", oldNote.title,
                     listOf(NoteDocBlock("source", com.virlin.app.domain.notedoc.NoteDocBlockType.CODE,
@@ -84,18 +172,16 @@ internal class NoteDocActions(
             } else saveCapture(previous.copy(title = title, content = preview, updatedAt = now))
             saveNoteDocument(note)
         }
-        val existing = noteDocOf(canonicalOwner)
-        if (existing != null && existing.title == title && existing.blocks == blocks) {
-            return@tx ActionResult.Success(existing)
-        }
+        if (sameAs(stored)) return@tx ActionResult.Success(stored!!)
         val now = clock.now()
         val doc = VirlinNoteDoc(
             ownerKey = canonicalOwner,
             title = title,
             blocks = blocks,
-            createdAt = existing?.createdAt ?: now,
+            createdAt = stored?.createdAt ?: now,
             updatedAt = now,
-            revision = (existing?.revision ?: 0) + 1,
+            revision = (stored?.revision ?: 0) + 1,
+            richDocument = rich,
         )
         saveNoteDoc(doc)
         ActionResult.Success(doc)

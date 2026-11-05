@@ -2,6 +2,7 @@ package com.virlin.app.data.db
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverter
@@ -369,6 +370,24 @@ data class VirlinNoteEntity(
     val revision: Int,
     val createdAt: Instant,
     val updatedAt: Instant
+)
+
+/** Additive v24 storage for large note documents; older inline rows remain readable. */
+@Entity(
+    tableName = "virlin_note_chunks",
+    primaryKeys = ["ownerKey", "chunkIndex"],
+    indices = [Index("ownerKey")],
+    foreignKeys = [ForeignKey(
+        entity = VirlinNoteEntity::class,
+        parentColumns = ["ownerKey"],
+        childColumns = ["ownerKey"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+)
+data class VirlinNoteChunkEntity(
+    val ownerKey: String,
+    val chunkIndex: Int,
+    val jsonChunk: String,
 )
 
 /**

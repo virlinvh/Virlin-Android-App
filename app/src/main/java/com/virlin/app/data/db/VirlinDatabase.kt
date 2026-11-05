@@ -214,6 +214,15 @@ interface VirlinNoteDao {
 }
 
 @Dao
+interface VirlinNoteChunkDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertAll(chunks: List<VirlinNoteChunkEntity>)
+    @Query("SELECT * FROM virlin_note_chunks WHERE ownerKey = :ownerKey ORDER BY chunkIndex")
+    suspend fun byOwner(ownerKey: String): List<VirlinNoteChunkEntity>
+    @Query("DELETE FROM virlin_note_chunks WHERE ownerKey = :ownerKey")
+    suspend fun deleteByOwner(ownerKey: String)
+}
+
+@Dao
 interface MapNodePreviewDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(row: MapNodePreviewEntity)
     @Query("SELECT * FROM map_node_previews WHERE ownerKey = :ownerKey") suspend fun byOwner(ownerKey: String): MapNodePreviewEntity?
@@ -253,10 +262,10 @@ interface TaskPageBlockDao {
         CaptureEntity::class, NoteDocumentEntity::class, PromptDocumentEntity::class,
         AttachmentDocumentEntity::class, VoiceDocumentEntity::class, PriorityPreferenceEntity::class,
         ExternalStageEntity::class, ProjectTagEntity::class, TagLinkEntity::class,
-        TaskStepEntity::class, VirlinNoteEntity::class, TaskPageBlockEntity::class,
+        TaskStepEntity::class, VirlinNoteEntity::class, VirlinNoteChunkEntity::class, TaskPageBlockEntity::class,
         MapNodePreviewEntity::class, ExternalRunEntity::class
     ],
-    version = 23,
+    version = 24,
     exportSchema = true
 )
 @TypeConverters(VirlinConverters::class)
@@ -283,8 +292,15 @@ abstract class VirlinDatabase : RoomDatabase() {
     abstract fun tagLinks(): TagLinkDao
     abstract fun taskSteps(): TaskStepDao
     abstract fun virlinNotes(): VirlinNoteDao
+    abstract fun virlinNoteChunks(): VirlinNoteChunkDao
 
     companion object {
+        val MIGRATION_23_24: Migration = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `virlin_note_chunks` (`ownerKey` TEXT NOT NULL, `chunkIndex` INTEGER NOT NULL, `jsonChunk` TEXT NOT NULL, PRIMARY KEY(`ownerKey`, `chunkIndex`), FOREIGN KEY(`ownerKey`) REFERENCES `virlin_notes`(`ownerKey`) ON UPDATE NO ACTION ON DELETE CASCADE)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_virlin_note_chunks_ownerKey` ON `virlin_note_chunks` (`ownerKey`)")
+            }
+        }
         val MIGRATION_22_23: Migration = object : Migration(22, 23) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE priority_preferences ADD COLUMN remainingReturns INTEGER")
@@ -618,7 +634,7 @@ abstract class VirlinDatabase : RoomDatabase() {
                 db.execSQL("UPDATE tasks SET executionState=CASE WHEN status IN ('DONE','CANCELLED') THEN 'DONE' ELSE 'READY' END WHERE executionState IS NULL AND workStreamId IS NOT NULL")
             }
         }
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24)
 
         /** Production database. One instance per process (held by `VirlinGraph`). */
         fun open(context: Context): VirlinDatabase =

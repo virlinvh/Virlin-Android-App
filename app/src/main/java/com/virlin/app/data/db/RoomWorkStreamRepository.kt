@@ -77,7 +77,14 @@ class RoomWorkStreamRepository private constructor(
     override suspend fun getTaskSteps(taskId: String) = db.taskSteps().byTask(taskId).map { it.toDomain() }
     override suspend fun getTaskPageBlocks(taskId: String) = db.taskPageBlocks().byTask(taskId).map { it.toDomain() }
 
-    override suspend fun getNoteDoc(ownerKey: String) = db.virlinNotes().byOwner(ownerKey)?.toDomain()
+    private suspend fun readNoteDoc(ownerKey: String): com.virlin.app.domain.notedoc.VirlinNoteDoc? {
+        val row = db.virlinNotes().byOwner(ownerKey) ?: return null
+        val chunks = db.virlinNoteChunks().byOwner(ownerKey)
+        return if (chunks.isEmpty()) row.toDomain()
+        else row.copy(documentJson = chunks.joinToString("") { it.jsonChunk }).toDomain()
+    }
+
+    override suspend fun getNoteDoc(ownerKey: String) = db.withTransaction { readNoteDoc(ownerKey) }
 
     override suspend fun getMapNodePreview(ownerId: String) =
         db.mapNodePreviews().byOwner(ownerId)?.let {
@@ -285,10 +292,21 @@ class RoomWorkStreamRepository private constructor(
 
         // Notes-page documents are read on open rather than observed, so no publish flag exists
         // for them; the editor re-reads through the repository when it reopens.
-        override suspend fun noteDocOf(ownerKey: String) = db.virlinNotes().byOwner(ownerKey)?.toDomain()
+        override suspend fun noteDocOf(ownerKey: String) = readNoteDoc(ownerKey)
         override suspend fun saveNoteDoc(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc) {
             check(doc.ownerKey !in deletedNoteOwners && deletedProjects.none { doc.ownerKey in it.noteOwners }) { "Note owner was deleted." }
-            db.virlinNotes().upsert(doc.toEntity())
+            val row = doc.toEntity()
+            val json = row.documentJson
+            // A small inline row remains compatible with every existing note. Larger documents
+            // are split transactionally; no arbitrary app-level block or character cap is imposed.
+            val chunked = json.length > 48_000
+            db.virlinNotes().upsert(if (chunked) row.copy(documentJson = "{\"v\":1,\"blocks\":[]}") else row)
+            db.virlinNoteChunks().deleteByOwner(doc.ownerKey)
+            if (chunked) db.virlinNoteChunks().upsertAll(
+                com.virlin.app.domain.notedoc.rich.RichNoteFormat.chunks(json, 48_000).mapIndexed { index, chunk ->
+                    VirlinNoteChunkEntity(doc.ownerKey, index, chunk)
+                }
+            )
         }
 
         override suspend fun mapNodePreviewOf(ownerId: String) =

@@ -26,8 +26,10 @@ class MasterDocumentItemUiTest {
                 onOpen = { opened = true },
             )
         }
-        compose.onNodeWithText("☐ Review the draft").assertExists()
+        compose.onNodeWithText("☐ Review the draft").assertDoesNotExist()
         compose.onNodeWithTag("map_page_item_todo-1").performClick()
+        compose.onNodeWithText("☐ Review the draft").assertExists()
+        compose.onNodeWithTag("map_page_open_todo-1").performClick()
         compose.runOnIdle { assertTrue(opened) }
     }
 }

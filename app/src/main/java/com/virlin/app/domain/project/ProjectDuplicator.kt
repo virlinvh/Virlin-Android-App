@@ -108,8 +108,13 @@ class ProjectDuplicator(private val repository: WorkStreamRepository) {
                 source.prompts.forEach { savePromptDocument(it.copy(id = id(it.id), captureItemId = id(it.captureItemId),
                     blocks = resetBlocks(it.blocks), createdAt = now, updatedAt = now)) }
                 attachments.forEach { saveAttachmentDocument(it) }; voices.forEach { saveVoiceDocument(it) }
-                source.richNotes.forEach { doc -> saveNoteDoc(doc.copy(ownerKey = ownerMap.getValue(doc.ownerKey),
-                    blocks = doc.blocks.map { it.copy(id = newId(), checked = false) }, createdAt = now, updatedAt = now, revision = 0)) }
+                source.richNotes.forEach { doc ->
+                    val tree = doc.richDocument?.let { com.virlin.app.domain.notedoc.rich.RichNoteAdapter.resetForDuplicate(it) { newId() } }
+                    saveNoteDoc(doc.copy(ownerKey = ownerMap.getValue(doc.ownerKey),
+                        blocks = tree?.let(com.virlin.app.domain.notedoc.rich.RichNoteAdapter::project)
+                            ?: doc.blocks.map { it.copy(id = newId(), checked = false) },
+                        richDocument = tree, createdAt = now, updatedAt = now, revision = 0))
+                }
                 source.steps.forEach { saveStep(it.copy(id = newId(), taskId = id(it.taskId), done = false, createdAt = now, updatedAt = now)) }
                 source.tags.forEach { saveTag(it.copy(id = id(it.id), projectId = projectId, createdAt = now, updatedAt = now)) }
                 source.links.forEach { saveLink(it.copy(tagId = id(it.tagId), targetId = id(it.targetId), createdAt = now)) }
