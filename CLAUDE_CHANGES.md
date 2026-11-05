@@ -1042,3 +1042,37 @@ The full suite therefore has **not** been shown green, and no claim is made that
 **Not done.** No instrumentation run, no Roborazzi verification (its package is inside the stalling
 group), and no push — the destination was ambiguous because the current branch is named for
 attachment work, carries the execution-audit checkpoint and has no upstream.
+
+## 2026-11-05 — Android Notes rebuilt ("notes2") and routed (Cursor agent)
+
+> **Superseded the same day:** at the user's request the earlier Compose editor was restored.
+> The notes2 UI and web bundles were archived (not compiled or packaged), and every note route
+> uses `NotesRoute` again. The data-safety layer described below was kept. See
+> `docs/NOTE_EDITOR_RESTORE_2026-11-05.md`.
+
+**Requested by:** User. **Status:** active route switched after its device suite passed. Real
+source-app paste is pending the user's manual test. Details, results and limitations are in
+`docs/NOTE_FEATURE_ROADMAP.md`. Cleanup candidates are in `docs/NOTE_CLEANUP_INVENTORY.md`
+(nothing removed).
+
+- **Added:**
+  - `notes-editor/` (Tiptap web editor, `npm test` 28/28), built to `app/src/main/assets/notes-v2/`
+  - `ui/notes/rich/RichNotesWebView.kt`, `RichNotesViewModel.kt`, `RichNotesRoute.kt`
+  - `domain/notedoc/rich/*` (v2 format, adapter, `resetForDuplicate`)
+  - androidTest `notes/RichNotesRouteDeviceTest` (8/8 on `emulator-5556`)
+  - JVM `domain/notedoc/rich/*Test`
+- **Routed:** `VirlinApp` `NOTES_ROUTE` and `CaptureNotesRoute` (knowledge, workstream and capture
+  notes) now call `RichNotesRoute`. The old `NotesRoute` / `NotesReaderRoute` are kept, and only
+  `PickerDialog` / `PickerRow` became `internal`.
+- **Consumers:**
+  - `ProjectDuplicator` (tree reset)
+  - `ProjectArchive` (v2 payload plus `damagedRaw`)
+  - `ProjectStorageTools` (backup zip includes note images)
+  - `MasterDocument` (damaged-note label)
+  - `DesktopWorkspaceProtocol` (rejection detail)
+- **Build:** debug `versionNameSuffix = "-notes2-20261105"` → `1.0.9-notes2-20261105`. The APK
+  SHA-256 is `fb444d0f…f503f6`, installed on the test AVD only.
+- **Not touched:**
+  - migrations, `virlin_notes`, `virlin_note_chunks`
+  - managed images, flashcard files, the old editor, dependencies
+  - the user's `emulator-5554`
