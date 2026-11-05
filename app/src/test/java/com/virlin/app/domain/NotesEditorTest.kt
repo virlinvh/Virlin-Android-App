@@ -5,6 +5,7 @@ import com.virlin.app.domain.notedoc.NoteDocAlign
 import com.virlin.app.domain.notedoc.NoteDocBlockType
 import com.virlin.app.domain.notedoc.NoteDocMark
 import com.virlin.app.domain.notedoc.NoteRuns
+import com.virlin.app.domain.notedoc.visibleNoteBlocks
 import com.virlin.app.domain.repository.InMemoryWorkStreamRepository
 import com.virlin.app.ui.notes.NoteSaveState
 import com.virlin.app.ui.notes.NoteTool
@@ -33,6 +34,39 @@ import java.time.Instant
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class NotesEditorTest {
+
+    @Test fun headingToolbarCycleFoldsDeepestFirstThenRestoresAll() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val mainId = vm.focusFirst()
+        vm.setBlockType(NoteDocBlockType.HEADING_1)
+        vm.onTextChanged(mainId, "Main", TextRange(4))
+        vm.insertBlock(NoteDocBlockType.HEADING_2)
+        val sectionId = vm.state.value.focusedBlockId!!
+        vm.onTextChanged(sectionId, "Section", TextRange(7))
+        vm.insertBlock(NoteDocBlockType.HEADING_3)
+        val subsectionId = vm.state.value.focusedBlockId!!
+        vm.onTextChanged(subsectionId, "Subsection", TextRange(10))
+        vm.insertBlock(NoteDocBlockType.PARAGRAPH)
+        val bodyId = vm.state.value.focusedBlockId!!
+        vm.onTextChanged(bodyId, "Body", TextRange(4))
+
+        vm.foldHeadingsAtLevel(3)
+        assertEquals(listOf(mainId, sectionId, subsectionId),
+            visibleNoteBlocks(vm.state.value.blocks).map { it.id })
+        vm.foldHeadingsAtLevel(2)
+        assertEquals(listOf(mainId, sectionId),
+            visibleNoteBlocks(vm.state.value.blocks).map { it.id })
+        vm.foldHeadingsAtLevel(1)
+        assertEquals(listOf(mainId), visibleNoteBlocks(vm.state.value.blocks).map { it.id })
+        vm.undo()
+        assertEquals(listOf(mainId, sectionId),
+            visibleNoteBlocks(vm.state.value.blocks).map { it.id })
+        vm.foldHeadingsAtLevel(1)
+        vm.foldHeadingsAtLevel(null)
+        assertEquals(listOf(mainId, sectionId, subsectionId, bodyId),
+            visibleNoteBlocks(vm.state.value.blocks).map { it.id })
+    }
 
     private val clock = FakeClock(Instant.parse("2026-09-30T09:00:00Z"))
     private val dispatcher = UnconfinedTestDispatcher()
@@ -92,6 +126,43 @@ class NotesEditorTest {
         val block = second.state.value.blocks.single()
         assertEquals("persisted", block.text)
         assertTrue(NoteRuns.rangeHasMark(block.runs, 0, 9, NoteDocMark.BOLD))
+    }
+
+    @Test fun mixedPastedNoteSurvivesSaveAndReopenWithStructure() = runTest {
+        val repo = InMemoryWorkStreamRepository()
+        val first = vm(repo)
+        advanceUntilIdle()
+        val id = first.state.value.blocks.single().id
+        val pasted = "## Deployment plan\n\n" +
+            "Use the **existing** application.\n\n" +
+            "- Verify storage\n- Verify rendering\n\n" +
+            "```json\n{\"status\":\"ready\"}\n```\n\n" +
+            "```prompt\nCheck the saved note.\n```\n\n" +
+            "\$\$x^2+y^2=z^2\$\$"
+        assertTrue(first.pasteStructured(id, pasted, pasted))
+        advanceUntilIdle()
+
+        val reopened = vm(repo)
+        advanceUntilIdle()
+        val blocks = reopened.state.value.blocks
+        assertEquals(listOf(NoteDocBlockType.HEADING_2, NoteDocBlockType.PARAGRAPH,
+            NoteDocBlockType.BULLET, NoteDocBlockType.BULLET, NoteDocBlockType.CODE,
+            NoteDocBlockType.PROMPT, NoteDocBlockType.CODE), blocks.map { it.type })
+        assertTrue(blocks[1].runs.any { NoteDocMark.BOLD in it.marks })
+        assertEquals("{\"status\":\"ready\"}", blocks[4].text)
+        assertTrue(com.virlin.app.domain.notedoc.NoteMath.isEquation(blocks.last()))
+        assertFalse(blocks.any { it.text.contains("**") || it.text.startsWith("## ") })
+    }
+
+    @Test fun editingLegacyMultilineParagraphDoesNotSplitAtOldNewline() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val id = vm.state.value.blocks.single().id
+        vm.onTextChanged(id, "First line\nSecond line\nThird line", TextRange(33))
+        assertEquals(1, vm.state.value.blocks.size)
+        vm.onTextChanged(id, "First line\nSecond line\nThird line!", TextRange(34))
+        assertEquals(1, vm.state.value.blocks.size)
+        assertEquals("First line\nSecond line\nThird line!", vm.state.value.blocks.single().text)
     }
 
     @Test fun identicalSave_doesNotGrowTheRevision() = runTest {

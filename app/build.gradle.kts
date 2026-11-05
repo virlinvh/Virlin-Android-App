@@ -14,13 +14,16 @@ android {
         applicationId = "com.virlin.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 10
+        versionName = "1.0.9"
         vectorDrawables { useSupportLibrary = true }
         // Required for instrumented (androidTest) execution. Test-only; no runtime impact.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
+        debug {
+            versionNameSuffix = "-restored-notes-20261105"
+        }
         release {
             isMinifyEnabled = false
             // Secrets belong to the local/CI environment, never the repository.
@@ -69,6 +72,7 @@ tasks.withType<Test>().configureEach {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
+    implementation("androidx.lifecycle:lifecycle-process:2.8.3")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.compose.ui:ui")
@@ -79,6 +83,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("org.jsoup:jsoup:1.23.2")
 
     // ---- Room: durable local persistence behind WorkStreamRepository (Pass 5) ----
     implementation("androidx.room:room-runtime:2.6.1")

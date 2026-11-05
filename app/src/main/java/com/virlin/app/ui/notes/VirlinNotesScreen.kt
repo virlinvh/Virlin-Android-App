@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.FormatAlignCenter
 import androidx.compose.material.icons.outlined.FormatAlignLeft
 import androidx.compose.material.icons.outlined.FormatAlignRight
@@ -40,7 +41,10 @@ import androidx.compose.material.icons.outlined.FormatStrikethrough
 import androidx.compose.material.icons.outlined.FormatUnderlined
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Notes
+import androidx.compose.material.icons.outlined.Style
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -51,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,7 +83,7 @@ enum class NoteTool {
     UNDO, REDO, PARAGRAPH, FONT, SIZE, BOLD, ITALIC, UNDERLINE,
     STRIKE, TEXT_COLOR, HIGHLIGHT, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT,
     BULLETS, NUMBERING, INDENT, OUTDENT, LINE_SPACING, LINK,
-    QUOTE, PROMPT, CODE, CHECKLIST, TABLE, DIVIDER, IMAGE, TOGGLE
+    QUOTE, PROMPT, CODE, FLASHCARD, SELECT_DOCUMENT, HEADING_FOLD, CHECKLIST, TABLE, DIVIDER, IMAGE, TOGGLE
 }
 
 data class NoteToolState(
@@ -104,11 +109,29 @@ fun VirlinNotesScreen(
     onAddBlock: () -> Unit,
     onPreview: () -> Unit,
     onExport: () -> Unit,
-    editor: @Composable () -> Unit,
+    headingLevels: List<Int>,
+    onHeadingFoldLevel: (Int?) -> Unit,
+    headingFoldRequest: Int = 0,
+    documentSelectionMode: Boolean,
+    editor: @Composable (Boolean, Boolean) -> Unit,
     footer: @Composable () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    // -1: ordinary editing, 0: controls visible, 1+: levels folded deepest-first.
+    var headingFoldStep by rememberSaveable { mutableStateOf(-1) }
+    androidx.compose.runtime.LaunchedEffect(headingFoldRequest) {
+        if (headingFoldRequest > 0) {
+            when {
+                headingFoldStep < 0 -> headingFoldStep = 0
+                headingFoldStep < headingLevels.size -> {
+                    onHeadingFoldLevel(headingLevels[headingFoldStep]); headingFoldStep++
+                }
+                else -> { onHeadingFoldLevel(null); headingFoldStep = -1 }
+            }
+        }
+    }
+    val headingFoldMode = headingFoldStep >= 0
     BackHandler { onClose() }
     Column(modifier.fillMaxSize().background(NotesPaper)) {
         Row(
@@ -125,6 +148,9 @@ fun VirlinNotesScreen(
                 fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
+            IconButton(onClick = onPreview, modifier = Modifier.size(40.dp).testTag("notes_preview_button")) {
+                Icon(Icons.Outlined.Visibility, contentDescription = "Read note preview", tint = Green)
+            }
             Icon(Icons.Outlined.CheckCircle, null, tint = Green, modifier = Modifier.size(16.dp))
             Text(" $saveLabel", color = Green, fontSize = 12.sp, maxLines = 1)
             Box {
@@ -142,13 +168,36 @@ fun VirlinNotesScreen(
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
-        NoteFormattingRail(tools, onTool)
+        NoteFormattingRail(
+            tools.copy(active = if (headingFoldMode) tools.active + NoteTool.HEADING_FOLD else tools.active),
+            { tool ->
+                if (tool == NoteTool.HEADING_FOLD) {
+                    when {
+                        headingFoldStep < 0 -> headingFoldStep = 0
+                        headingFoldStep < headingLevels.size -> {
+                            onHeadingFoldLevel(headingLevels[headingFoldStep])
+                            headingFoldStep++
+                        }
+                        else -> {
+                            onHeadingFoldLevel(null)
+                            headingFoldStep = -1
+                        }
+                    }
+                } else onTool(tool)
+            },
+            headingFoldLabel = when {
+                headingFoldStep < 0 -> "Show heading controls"
+                headingFoldStep < headingLevels.size ->
+                    "Fold level ${headingLevels[headingFoldStep]} headings"
+                else -> "Expand all headings"
+            },
+        )
         Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
         // Let the editor use the entire area above the footer. The add control floats over its
         // bottom corner; the editor supplies end-of-document scroll clearance for the last line.
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            Box(Modifier.fillMaxSize().padding(start = 20.dp, end = 20.dp, top = 22.dp)) {
-                editor()
+            Box(Modifier.fillMaxSize().padding(start = 24.dp, end = 24.dp, top = 28.dp)) {
+                editor(headingFoldMode, documentSelectionMode)
             }
             Surface(
                 onClick = onAddBlock,
@@ -190,6 +239,9 @@ private val toolSpecs = listOf(
     ToolSpec(NoteTool.QUOTE, Icons.Outlined.FormatQuote),
     ToolSpec(NoteTool.PROMPT, text = "✦"),
     ToolSpec(NoteTool.CODE, Icons.Outlined.Code),
+    ToolSpec(NoteTool.FLASHCARD, Icons.Outlined.Style),
+    ToolSpec(NoteTool.SELECT_DOCUMENT, Icons.Outlined.SelectAll),
+    ToolSpec(NoteTool.HEADING_FOLD, Icons.Outlined.AccountTree),
     ToolSpec(NoteTool.CHECKLIST, text = "☑"),
     ToolSpec(NoteTool.TABLE, text = "▦"), ToolSpec(NoteTool.DIVIDER, text = "—"),
     ToolSpec(NoteTool.IMAGE, Icons.Outlined.Image),
@@ -202,6 +254,7 @@ fun NoteFormattingRail(
     state: NoteToolState,
     onTool: (NoteTool) -> Unit,
     modifier: Modifier = Modifier,
+    headingFoldLabel: String = "Heading folding",
 ) {
     val scroll = rememberScrollState()
     Box(modifier.fillMaxWidth().height(62.dp).background(Color.White)) {
@@ -215,6 +268,8 @@ fun NoteFormattingRail(
                     NoteTool.PARAGRAPH -> state.paragraphLabel
                     NoteTool.FONT -> state.fontLabel
                     NoteTool.SIZE -> state.sizeLabel
+                    NoteTool.HEADING_FOLD -> headingFoldLabel
+                    NoteTool.SELECT_DOCUMENT -> "Select across blocks"
                     else -> spec.tool.name.lowercase().replace('_', ' ')
                 }
                 val enabled = spec.tool in state.enabled

@@ -13,6 +13,9 @@ import com.virlin.app.domain.notedoc.NoteDocMark
 import com.virlin.app.domain.notedoc.NoteDocRun
 import com.virlin.app.domain.notedoc.NoteDocTable
 import com.virlin.app.domain.notedoc.NoteRuns
+import com.virlin.app.domain.notedoc.NotePasteParser
+import com.virlin.app.domain.notedoc.VirlinNoteCodec
+import com.virlin.app.domain.notedoc.visibleNoteBlocks
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,7 +41,6 @@ sealed interface NoteDialog {
     data object AddBlock : NoteDialog
     data object Table : NoteDialog
     data class Link(val initialUrl: String, val hasSelection: Boolean) : NoteDialog
-    data object Preview : NoteDialog
     data class Message(val text: String) : NoteDialog
 }
 
@@ -109,6 +111,18 @@ class NotesViewModel(
     private fun newBlock(type: NoteDocBlockType = NoteDocBlockType.PARAGRAPH, text: String = "") =
         NoteDocBlock(id = ids.newId("nb"), type = type, text = text)
 
+    /** Receives a complete, schema-validated transaction from the isolated rich editor. */
+    fun replaceFromRichEditor(blocks: List<NoteDocBlock>) {
+        if (blocks.isEmpty() || blocks == _state.value.blocks) return
+        val state = _state.value
+        // Tiptap owns fine-grained undo while active. Persist only a document that survives
+        // the same codec the repository uses; a malformed bridge payload cannot erase a note.
+        val roundTrip = runCatching { VirlinNoteCodec.decode(VirlinNoteCodec.encode(blocks)) }.getOrNull()
+            ?.takeIf { it.size == blocks.size } ?: return
+        ui = state.copy(blocks = roundTrip, save = NoteSaveState.EDITED)
+        scheduleSave()
+    }
+
     // ---------------------------------------------------------------- editing
 
     fun onFocusChanged(blockId: String, focused: Boolean) {
@@ -151,12 +165,15 @@ class NotesViewModel(
         }
         pushUndo(coalesceWith = blockId)
 
-        if ('\n' in newText && block.type != NoteDocBlockType.CODE) {
+        val (from, removed, inserted) = NoteRuns.diff(block.text, newText)
+        // Only a newly typed Enter splits a block. Existing newlines in a legacy
+        // unformatted paste must not cause unrelated edits to split it again.
+        if (block.type != NoteDocBlockType.CODE && '\n' !in block.text &&
+            newText.count { it == '\n' } == 1) {
             splitOnNewline(block, newText, newSelection)
             return
         }
 
-        val (from, removed, inserted) = NoteRuns.diff(block.text, newText)
         var runs = NoteRuns.shiftForEdit(block.runs, from, removed, inserted, newText.length)
         // A pending caret style applies to exactly the characters just typed.
         if (inserted > 0 && s.caretMarks.isNotEmpty()) {
@@ -171,6 +188,105 @@ class NotesViewModel(
             save = NoteSaveState.EDITED,
         )
         scheduleSave()
+    }
+
+    /** One undoable, structure-preserving clipboard insertion. Never stores raw HTML. */
+    fun pasteStructured(blockId: String, newText: String, plainText: String,
+        htmlText: String? = null, imageResolver: ((String) -> String?)? = null): Boolean {
+        val s = _state.value
+        val original = s.blocks.firstOrNull { it.id == blockId } ?: return false
+        val (from, removed, inserted) = NoteRuns.diff(original.text, newText)
+        val insertedText = newText.substring(from, from + inserted)
+        fun normalized(value: String) = value.replace("\r\n", "\n").replace('\r', '\n').trim()
+        if (insertedText.isEmpty()) return false
+        val clipboardMatches = normalized(insertedText) == normalized(plainText)
+        // Android may supply a different plain-text representation alongside semantic HTML.
+        // Only trust that HTML when its visible text is the text the IME actually inserted.
+        val htmlMatches = htmlText?.let { html ->
+            runCatching { normalized(org.jsoup.Jsoup.parse(html).text()) == normalized(insertedText) }
+                .getOrDefault(false)
+        } == true
+        val structuredInsertion = insertedText.length > 3 &&
+            (insertedText.length > 20 && '\n' in insertedText ||
+            insertedText.lines().any { line ->
+                val value = line.trimStart()
+                value.matches(Regex("#{1,6}\\s+.*")) || value.startsWith("```") ||
+                    value.startsWith("~~~") || value.startsWith("$$") ||
+                    value.contains(Regex("\\*\\*[^*\\n]+\\*\\*|__[^_\\n]+__")) ||
+                    value.matches(Regex("\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?"))
+            })
+        if (!clipboardMatches && !htmlMatches && !structuredInsertion) return false
+        val usableHtml = htmlText.takeIf { clipboardMatches || htmlMatches }
+        val richAttempt = runCatching { NotePasteParser.parse(insertedText,
+            usableHtml, imageResolver) }
+        val richImport = richAttempt.getOrNull()?.takeIf { it.isNotEmpty() }
+        // Clipboard HTML can be much larger than the visible text (especially from
+        // generated responses). A rejected rich payload must not discard its valid
+        // Markdown/plain representation and fall through to a single text block.
+        val plainAttempt = if (richImport == null) runCatching {
+            NotePasteParser.parse(insertedText, null, imageResolver)
+        } else null
+        val imported = richImport ?: plainAttempt?.getOrNull()?.takeIf { it.isNotEmpty() } ?: run {
+            android.util.Log.w("VirlinNotePaste", "Structured import failed: inserted=${insertedText.length} " +
+                "clipboardMatches=$clipboardMatches html=${usableHtml?.length ?: 0} " +
+                "rich=${richAttempt.exceptionOrNull()?.javaClass?.simpleName}:${richAttempt.exceptionOrNull()?.message} " +
+                "plain=${plainAttempt?.exceptionOrNull()?.javaClass?.simpleName}:${plainAttempt?.exceptionOrNull()?.message}")
+            if (structuredInsertion) ui = _state.value.copy(dialog = NoteDialog.Message(
+                "The note could not import this paste's formatting. Its text was kept unchanged."))
+            return false
+        }
+        if (imported.size == 1 && imported[0].type == NoteDocBlockType.PARAGRAPH &&
+            imported[0].runs.isEmpty() && !insertedText.contains('\n')
+        ) return false
+        val end = from + removed
+        val before = original.text.take(from)
+        val after = original.text.drop(end)
+        fun sliceRuns(start: Int, finish: Int, offset: Int = 0): List<NoteDocRun> =
+            original.runs.mapNotNull { run ->
+                val a = maxOf(run.start, start)
+                val b = minOf(run.end, finish)
+                if (b > a) run.copy(start = a - start + offset, end = b - start + offset)
+                else null
+            }
+        pushUndo()
+        val replacement: List<NoteDocBlock>
+        val focus: NoteDocBlock
+        val caret: Int
+        if (imported.size == 1 && imported[0].type == NoteDocBlockType.PARAGRAPH &&
+            original.type == NoteDocBlockType.PARAGRAPH) {
+            val middle = imported.single()
+            val mergedText = before + middle.text + after
+            val mergedRuns = sliceRuns(0, from) +
+                middle.runs.map { it.copy(start = it.start + from, end = it.end + from) } +
+                sliceRuns(end, original.text.length, from + middle.text.length)
+            focus = original.copy(id = ids.newId("nb"), text = mergedText,
+                runs = NoteRuns.normalize(mergedRuns, mergedText.length))
+            replacement = listOf(focus)
+            caret = from + middle.text.length
+        } else {
+            val parts = mutableListOf<NoteDocBlock>()
+            if (before.isNotEmpty()) parts += original.copy(id = ids.newId("nb"), text = before,
+                runs = NoteRuns.normalize(sliceRuns(0, from), before.length))
+            // Replace the edited field's identity too: Android may deliver a second callback
+            // from the old IME connection after Compose publishes the structured blocks.
+            val pasted = imported.map { it.copy(id = ids.newId("nb")) }
+            parts += pasted
+            if (after.isNotEmpty()) parts += original.copy(id = ids.newId("nb"), text = after,
+                runs = NoteRuns.normalize(sliceRuns(end, original.text.length), after.length))
+            replacement = parts
+            focus = pasted.last()
+            caret = focus.text.length
+        }
+        val at = s.blocks.indexOfFirst { it.id == blockId }
+        ui = s.copy(
+            blocks = s.blocks.take(at) + replacement + s.blocks.drop(at + 1),
+            focusedBlockId = focus.id,
+            selection = TextRange(caret),
+            caretMarks = emptySet(),
+            save = NoteSaveState.EDITED,
+        )
+        scheduleSave()
+        return true
     }
 
     private fun splitOnNewline(block: NoteDocBlock, newText: String, newSelection: TextRange) {
@@ -321,6 +437,9 @@ class NotesViewModel(
             NoteTool.UNDERLINE -> toggleMark(NoteDocMark.UNDERLINE)
             NoteTool.STRIKE -> toggleMark(NoteDocMark.STRIKE)
             NoteTool.CODE -> toggleMark(NoteDocMark.CODE)
+            NoteTool.FLASHCARD -> Unit // The route performs the durable save.
+            NoteTool.SELECT_DOCUMENT -> Unit // Read-only cross-block selection belongs to the route.
+            NoteTool.HEADING_FOLD -> Unit // Local presentation mode belongs to the screen.
             NoteTool.TEXT_COLOR -> openDialog(NoteDialog.TextColor)
             NoteTool.HIGHLIGHT -> openDialog(NoteDialog.Highlight)
             NoteTool.ALIGN_LEFT -> setAlign(NoteDocAlign.LEFT)
@@ -483,7 +602,8 @@ class NotesViewModel(
     fun openAddBlock() = openDialog(NoteDialog.AddBlock)
 
     /** Inserts after the focused block, or appends when nothing has focus. */
-    fun insertBlock(type: NoteDocBlockType, table: NoteDocTable? = null) {
+    fun insertBlock(type: NoteDocBlockType, table: NoteDocTable? = null,
+        initialText: String = "") {
         pushUndo()
         val s = _state.value
         val focused = s.focusedBlock
@@ -492,6 +612,8 @@ class NotesViewModel(
         val created = NoteDocBlock(
             id = ids.newId("nb"),
             type = type,
+            text = initialText,
+            mathMode = if (type == NoteDocBlockType.CODE) initialText == "\\( \\)" else null,
             indent = indent,
             table = if (type == NoteDocBlockType.TABLE) table ?: NoteDocTable.blank(2, 2) else null,
             promptTitle = if (type == NoteDocBlockType.PROMPT) "" else null,
@@ -514,6 +636,8 @@ class NotesViewModel(
         )
         scheduleSave()
     }
+
+    fun insertEquation() = insertBlock(NoteDocBlockType.CODE, initialText = "\\( \\)")
 
     fun deleteBlock(blockId: String) {
         pushUndo()
@@ -601,8 +725,6 @@ class NotesViewModel(
         ui = _state.value.copy(dialog = null)
     }
 
-    fun openPreview() = openDialog(NoteDialog.Preview)
-
     fun onExport() = openDialog(
         NoteDialog.Message("Export is not built yet. Nothing was written to a file."),
     )
@@ -639,11 +761,22 @@ class NotesViewModel(
     fun toggleCollapsed(blockId: String) {
         val s = _state.value
         val index = s.blocks.indexOfFirst { it.id == blockId }
-        if (index < 0 || s.blocks[index].type != NoteDocBlockType.TOGGLE) return
+        if (index < 0 || s.blocks[index].type !in setOf(NoteDocBlockType.TOGGLE,
+                NoteDocBlockType.HEADING_1, NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3)) return
         pushUndo()
         val toggle = s.blocks[index]
         val nextCollapsed = !toggle.isCollapsed
-        val descendantIds = s.blocks.drop(index + 1).takeWhile { it.indent > toggle.indent }
+        val headingLevel = { type: NoteDocBlockType -> when (type) {
+            NoteDocBlockType.HEADING_1 -> 1
+            NoteDocBlockType.HEADING_2 -> 2
+            NoteDocBlockType.HEADING_3 -> 3
+            else -> 0
+        } }
+        val level = headingLevel(toggle.type)
+        val descendantIds = s.blocks.drop(index + 1).takeWhile {
+            if (level == 0) it.indent > toggle.indent
+            else headingLevel(it.type) == 0 || headingLevel(it.type) > level
+        }
             .mapTo(hashSetOf()) { it.id }
         ui = s.copy(
             blocks = s.blocks.map { if (it.id == blockId) it.copy(isCollapsed = nextCollapsed) else it },
@@ -652,6 +785,38 @@ class NotesViewModel(
                 else s.selection,
             save = NoteSaveState.EDITED,
         )
+        scheduleSave()
+    }
+
+    /** One toolbar tap folds every heading at a single depth; null restores all headings. */
+    fun foldHeadingsAtLevel(level: Int?) {
+        require(level == null || level in 1..3)
+        val s = _state.value
+        fun depth(type: NoteDocBlockType) = when (type) {
+            NoteDocBlockType.HEADING_1 -> 1
+            NoteDocBlockType.HEADING_2 -> 2
+            NoteDocBlockType.HEADING_3 -> 3
+            else -> 0
+        }
+        val blocks = s.blocks.map { block ->
+            val headingDepth = depth(block.type)
+            when {
+                headingDepth == 0 -> block // independent toggle blocks are untouched
+                level == null -> block.copy(isCollapsed = false)
+                headingDepth == level -> block.copy(isCollapsed = true)
+                else -> block
+            }
+        }
+        if (blocks == s.blocks) return
+        pushUndo()
+        val visible = visibleNoteBlocks(blocks)
+        val focusedVisible = visible.any { it.id == s.focusedBlockId }
+        val nextFocus = if (focusedVisible) s.focusedBlockId
+            else visible.firstOrNull { depth(it.type) > 0 }?.id ?: visible.firstOrNull()?.id
+        val selection = if (focusedVisible) s.selection else TextRange(
+            blocks.firstOrNull { it.id == nextFocus }?.text?.length ?: 0)
+        ui = s.copy(blocks = blocks, focusedBlockId = nextFocus,
+            selection = selection, save = NoteSaveState.EDITED)
         scheduleSave()
     }
 
@@ -747,6 +912,7 @@ class NotesViewModel(
             add(NoteTool.TABLE)
             add(NoteTool.DIVIDER)
             add(NoteTool.TOGGLE)
+            add(NoteTool.HEADING_FOLD)
             add(NoteTool.IMAGE)
             if (block != null) {
                 addAll(
@@ -769,6 +935,9 @@ class NotesViewModel(
                 if (block!!.text.isNotEmpty()) {
                     addAll(listOf(NoteTool.TEXT_COLOR, NoteTool.HIGHLIGHT, NoteTool.LINK))
                 }
+                if (!s.selection.collapsed &&
+                    com.virlin.app.domain.notedoc.flashcardSelection(block, s.selection.start,
+                        s.selection.end) != null) add(NoteTool.FLASHCARD)
             }
         }
         return NoteToolState(
@@ -787,6 +956,13 @@ class NotesViewModel(
             active = active,
             enabled = enabled,
         )
+    }
+
+    fun selectedFlashcardContent(): NoteDocBlock? {
+        val s = _state.value
+        val block = s.focusedBlock ?: return null
+        return com.virlin.app.domain.notedoc.flashcardSelection(block, s.selection.start,
+            s.selection.end)
     }
 
     /** Honest header text. SAVED only ever follows a completed write. */

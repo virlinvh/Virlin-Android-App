@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import java.io.File
 import java.util.UUID
+import android.util.Base64
 
 /** Durable, private copies of images embedded in notes. Picker URI grants are not retained. */
 object NoteImageStore {
@@ -33,6 +34,31 @@ object NoteImageStore {
                     }
                 }
             }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Unsupported image" }
+            return name
+        } catch (error: Exception) {
+            file.delete()
+            throw error
+        }
+    }
+
+    /** Saves a clipboard-embedded bitmap to the same private store as picker images. */
+    fun importDataUri(context: Context, source: String): String {
+        val comma = source.indexOf(',')
+        require(comma in 1..100 && source.substring(0, comma).matches(
+            Regex("data:image/(png|jpeg|webp|gif);base64", RegexOption.IGNORE_CASE))) {
+            "Unsupported embedded image"
+        }
+        require(source.length - comma - 1 <= (MAX_BYTES * 4 / 3 + 8)) { "Image is too large" }
+        val bytes = Base64.decode(source.substring(comma + 1), Base64.DEFAULT)
+        require(bytes.size <= MAX_BYTES) { "Image is too large" }
+        val root = File(context.filesDir, "note_images").also { it.mkdirs() }
+        val name = UUID.randomUUID().toString()
+        val file = File(root, name)
+        try {
+            file.outputStream().use { it.write(bytes) }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, bounds)
             require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Unsupported image" }

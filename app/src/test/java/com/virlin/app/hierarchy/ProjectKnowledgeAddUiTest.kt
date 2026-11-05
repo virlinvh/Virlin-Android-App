@@ -84,14 +84,27 @@ class ProjectKnowledgeAddUiTest {
         val actions = com.virlin.app.domain.action.DefaultVirlinActions(repo, com.virlin.app.domain.FakeClock(now), ids)
         val owner = com.virlin.app.domain.notedoc.CaptureNoteBridge.draftOwner("p", "ui-note")
         compose.setContent {
+            val navController = rememberNavController()
             val vm = androidx.compose.runtime.remember { com.virlin.app.ui.notes.NotesViewModel(owner, "New note", actions, ids) }
-            com.virlin.app.ui.notes.NotesRoute(rememberNavController(), owner, "New note", vm)
+            NavHost(navController, startDestination = "test_note") {
+                composable("test_note") {
+                    com.virlin.app.ui.notes.NotesRoute(navController, owner, "New note", vm)
+                }
+                composable(com.virlin.app.ui.notes.NOTES_READER_ROUTE) {
+                    com.virlin.app.ui.notes.NotesReaderRoute(navController, owner, "New note")
+                }
+            }
         }
         compose.onNodeWithTag("notes_tool_paragraph").assertIsDisplayed()
         compose.onNodeWithTag("notes_tool_font").assertIsDisplayed()
         compose.onNodeWithTag("notes_tool_image").assertExists()
         compose.onNodeWithTag("notes_tool_toggle").assertExists()
         compose.onNodeWithTag("notes_add_block").assertIsDisplayed()
+        compose.onNodeWithTag("notes_preview_button").performClick()
+        compose.onNodeWithTag("notes_preview").assertIsDisplayed()
+        compose.onNodeWithText("Reading view").assertIsDisplayed()
+        compose.onNodeWithTag("notes_preview_close").performClick()
+        compose.onNodeWithTag("notes_tool_paragraph").assertIsDisplayed()
         compose.onNode(hasSetTextAction()).performTextReplacement("Knowledge note body")
         compose.onNodeWithContentDescription("Close note").performClick()
         compose.waitUntil(5000) { repo.captures.value.any { it.id == "ui-note" } }

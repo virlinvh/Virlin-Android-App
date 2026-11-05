@@ -167,12 +167,19 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
     // A project's Pulse drilldown is still Pulse.
     val pulseSubRoute = currentRoute.startsWith("pulse_project/")
     // Keep navigation available independently of the floating assistant.
-    val barOnThisRoute = currentRoute in RootDestination.routes || streamsSubRoute ||
-        pulseSubRoute || appsSubRoute
+    val noteEditorRoute = listOf("notes/", "knowledge_note/", "capture_note/", "text_note/")
+        .any { currentRoute.startsWith(it) }
+    val keyboardVisible = androidx.compose.foundation.layout.WindowInsets.ime
+        .getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
+    // The shared Projects footer belongs to the note route, but must not compete with the
+    // document and keyboard while the user is typing. Other routes keep their existing layout.
+    val barOnThisRoute = (currentRoute in RootDestination.routes || streamsSubRoute ||
+        pulseSubRoute || appsSubRoute) && !(noteEditorRoute && keyboardVisible) &&
+        currentRoute != com.virlin.app.ui.notes.FLASHCARDS_ROUTE
     val orbOnThisRoute = isOrbEntryRoute(currentRoute)
     val popupHidesOrb = com.virlin.app.ui.hierarchy.KnowledgeOrbVisibility.hidden ||
         !androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused ||
-        androidx.compose.foundation.layout.WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
+        keyboardVisible
     val barRoute = when {
         streamsSubRoute -> RootDestination.STREAMS.route
         pulseSubRoute -> RootDestination.PULSE.route
@@ -247,9 +254,15 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
             // Keep the real footer above the IME; descendants consume this inset rather
             // than covering system back/home controls or subtracting the keyboard twice.
             modifier = Modifier.imePadding(),
+            // The reader owns the whole display. Do not reserve the editor's status/navigation
+            // insets here; its white surface extends behind the cutout and system bars.
+            contentWindowInsets = if (currentRoute == com.virlin.app.ui.notes.NOTES_READER_ROUTE)
+                androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0)
+            else ScaffoldDefaults.contentWindowInsets,
             // The Inbox is a pure-white surface by design; every other route keeps the app's
             // warm off-white, so the container follows the route rather than being tinted for all.
-            containerColor = if (currentRoute == "inbox") Color.White else Color(0xFFF8F7F4),
+            containerColor = if (currentRoute == "inbox" || currentRoute == com.virlin.app.ui.notes.NOTES_READER_ROUTE)
+                Color.White else Color(0xFFF8F7F4),
             // Bottom-attached root navigation (Now · Streams · Pulse · Inbox). The bar owns the
             // navigation-bar inset itself; nothing else pads the bottom, so there is no gap.
             bottomBar = { if (barOnThisRoute && !(currentRoute == com.virlin.app.ui.map.ProjectMapRoute && mapFocusMode)) VirlinBottomNav(barRoute, inboxCount, navController,
@@ -501,6 +514,30 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                         ownerKey = entry.arguments?.getString("ownerKey").orEmpty(),
                         title = entry.arguments?.getString("title").orEmpty(),
                     )
+                }
+                composable(
+                    route = com.virlin.app.ui.notes.NOTES_READER_ROUTE,
+                    arguments = listOf(
+                        navArgument("ownerKey") { type = NavType.StringType },
+                        navArgument("title") { type = NavType.StringType; defaultValue = "" },
+                    ),
+                ) { entry ->
+                    com.virlin.app.ui.notes.NotesReaderRoute(
+                        navController = navController,
+                        ownerKey = entry.arguments?.getString("ownerKey").orEmpty(),
+                        title = entry.arguments?.getString("title").orEmpty(),
+                    )
+                }
+                composable(
+                    route = com.virlin.app.ui.notes.FLASHCARDS_ROUTE,
+                    arguments = listOf(
+                        navArgument("kind") { type = NavType.StringType },
+                        navArgument("id") { type = NavType.StringType },
+                    ),
+                ) { entry ->
+                    com.virlin.app.ui.notes.FlashcardsRoute(navController,
+                        entry.arguments?.getString("kind").orEmpty(),
+                        entry.arguments?.getString("id").orEmpty())
                 }
                 composable("link_editor") {
                     LinkEditorScreen(navController, captureId = null)
@@ -913,6 +950,7 @@ private fun rememberReducedMotion(): Boolean {
 internal fun isOrbEntryRoute(route: String): Boolean = false
 
 private val STREAMS_SUB_ROUTES = listOf(
+    "flashcards/",
     "project_detail/",
     "project_settings/",
     "project_map/",

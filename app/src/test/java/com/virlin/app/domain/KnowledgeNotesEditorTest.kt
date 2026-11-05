@@ -24,9 +24,9 @@ class KnowledgeNotesEditorTest {
             val release = CompletableDeferred<Unit>()
             var calls = 0
             val delayed = object : VirlinActions by real {
-                override suspend fun saveNoteDoc(ownerKey: String, title: String?, blocks: List<NoteDocBlock>): ActionResult<VirlinNoteDoc> {
+                override suspend fun saveNoteDoc(ownerKey: String, title: String?, blocks: List<NoteDocBlock>, expectedRevision: Int?): ActionResult<VirlinNoteDoc> {
                     if (++calls == 1) { started.complete(Unit); release.await() }
-                    return real.saveNoteDoc(ownerKey, title, blocks)
+                    return real.saveNoteDoc(ownerKey, title, blocks, expectedRevision)
                 }
             }
             val vm = NotesViewModel(CaptureNoteBridge.draftOwner("p", "race"), "Note", delayed, ids)

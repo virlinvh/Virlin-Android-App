@@ -1,30 +1,54 @@
 package com.virlin.app.ui.notes
 
+import android.content.ClipboardManager
+import android.content.ClipData
+import android.net.Uri
+import android.text.Html
+import android.text.Spanned
+import com.virlin.app.data.noteimage.NoteImageStore
+import com.virlin.app.domain.notedoc.NoteMath
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Remove
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -36,6 +60,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -80,23 +105,76 @@ private val CodeBg: Color @Composable get() = NotesWash.copy(alpha = .55f)
 fun NoteBlockEditor(
     state: NotesUiState,
     vm: NotesViewModel,
+    headingFoldMode: Boolean = false,
+    documentSelectionMode: Boolean = false,
+    documentSelection: TextRange = TextRange.Zero,
+    onDocumentSelectionChange: (TextRange) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val scroll = rememberScrollState()
-    Column(modifier.fillMaxWidth().verticalScroll(scroll)) {
-        visibleNoteBlocks(state.blocks).forEach { block ->
-            val index = state.blocks.indexOf(block)
-            val numberIndex = if (block.type == NoteDocBlockType.NUMBERED) {
-                // Numbering restarts after any block that is not a numbered item at this indent.
-                state.blocks.take(index).reversed()
-                    .takeWhile { it.type == NoteDocBlockType.NUMBERED && it.indent == block.indent }
-                    .size + 1
+    val scroll = rememberLazyListState()
+    var focusRequestFor by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.focusedBlockId) { focusRequestFor = state.focusedBlockId }
+    val visible = remember(state.blocks, headingFoldMode) {
+        visibleNoteBlocks(state.blocks, foldHeadings = headingFoldMode)
+    }
+    val numbers = remember(state.blocks) {
+        val result = HashMap<String, Int>()
+        var previousType: NoteDocBlockType? = null
+        var previousIndent = 0
+        var number = 0
+        state.blocks.forEach { block ->
+            number = if (block.type == NoteDocBlockType.NUMBERED) {
+                if (previousType == NoteDocBlockType.NUMBERED && previousIndent == block.indent)
+                    number + 1 else 1
             } else 0
-            NoteBlockRow(block, numberIndex, state, vm)
-            Spacer(Modifier.height(if (block.type == NoteDocBlockType.DIVIDER) 6.dp else 2.dp))
+            if (block.type == NoteDocBlockType.NUMBERED) result[block.id] = number
+            previousType = block.type
+            previousIndent = block.indent
         }
-        // The add button floats in the bottom corner; keep the final line scrollable above it.
-        Spacer(Modifier.height(76.dp))
+        result
+    }
+    LaunchedEffect(state.focusedBlockId, documentSelectionMode) {
+        if (!documentSelectionMode) {
+            val target = visible.indexOfFirst { it.id == state.focusedBlockId }
+            if (target >= 0 && scroll.layoutInfo.visibleItemsInfo.none { it.index == target })
+                scroll.scrollToItem(target)
+        }
+    }
+    LazyColumn(modifier.fillMaxWidth().fillMaxHeight().testTag("notes_editor_scroll"),
+        state = scroll) {
+        if (documentSelectionMode) {
+            item {
+                val context = LocalContext.current
+                val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
+                val projection = remember(state.blocks) { selectableNoteText(state.blocks) }
+                Row(Modifier.fillMaxWidth().padding(bottom = 18.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("Long-press and drag across the note", color = Muted, fontSize = 12.sp,
+                        modifier = Modifier.weight(1f))
+                    Text("Copy all", color = Green, fontSize = 13.sp,
+                        modifier = Modifier.clickable {
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("Virlin note", projection.text))
+                        }.testTag("notes_copy_all"))
+                }
+                BasicTextField(
+                    value = TextFieldValue(projection,
+                        TextRange(documentSelection.start.coerceIn(0, projection.length),
+                            documentSelection.end.coerceIn(0, projection.length))),
+                    onValueChange = { next -> onDocumentSelectionChange(next.selection) },
+                    readOnly = true,
+                    textStyle = TextStyle(color = Ink, fontSize = 16.sp, lineHeight = 25.sp),
+                    modifier = Modifier.fillMaxWidth().testTag("notes_document_selection_text"),
+                )
+            }
+        } else {
+            itemsIndexed(visible, key = { _, block -> block.id }) { visibleIndex, block ->
+                Spacer(Modifier.height(NoteDocumentLayout.beforeDp(block, visibleIndex).dp))
+                NoteBlockRow(block, numbers[block.id] ?: 0, state, vm, headingFoldMode,
+                    focusRequestFor, { focusRequestFor = null })
+                Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(visibleIndex + 1)).dp))
+            }
+        }
+        item { Spacer(Modifier.height(76.dp)) }
     }
 }
 
@@ -106,10 +184,36 @@ private fun NoteBlockRow(
     numberIndex: Int,
     state: NotesUiState,
     vm: NotesViewModel,
+    headingFoldMode: Boolean,
+    focusRequestFor: String?,
+    onFocusHandled: () -> Unit,
 ) {
     val indent = (block.indent * 18).dp
+    val quoteAccent = Green
     when (block.type) {
         NoteDocBlockType.IMAGE -> NoteImageBlock(block.imagePath, Modifier.padding(start = indent))
+        NoteDocBlockType.HEADING_1, NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3 -> Row(
+            Modifier.fillMaxWidth().padding(start = indent),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (headingFoldMode) {
+                Box(
+                    Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
+                        .background(Mint)
+                        .clickable(role = Role.Button) { vm.toggleCollapsed(block.id) }
+                        .semantics {
+                            contentDescription = if (block.isCollapsed) "Expand heading ${block.text}" else "Collapse heading ${block.text}"
+                        }
+                        .testTag("notes_heading_toggle_${block.id}"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(if (block.isCollapsed) Icons.Outlined.Add else Icons.Outlined.Remove,
+                        contentDescription = null, tint = Green, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(8.dp))
+            }
+            BlockTextField(block, state, vm, Modifier.weight(1f), focusRequestFor, onFocusHandled)
+        }
         NoteDocBlockType.TOGGLE -> Row(
             Modifier.fillMaxWidth().padding(start = indent, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -126,7 +230,7 @@ private fun NoteBlockRow(
                 Text(if (block.isCollapsed) "▸" else "▾", color = Green, fontSize = 20.sp)
             }
             Spacer(Modifier.width(4.dp))
-            BlockTextField(block, state, vm, Modifier.weight(1f))
+            BlockTextField(block, state, vm, Modifier.weight(1f), focusRequestFor, onFocusHandled)
         }
         NoteDocBlockType.DIVIDER -> Box(
             Modifier.fillMaxWidth().padding(vertical = 10.dp).height(1.dp).background(Border)
@@ -154,22 +258,44 @@ private fun NoteBlockRow(
                 modifier = Modifier.fillMaxWidth().testTag("notes_prompt_title_${block.id}"),
             )
             Spacer(Modifier.height(6.dp))
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth())
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
         }
 
-        NoteDocBlockType.QUOTE -> Row(
+        NoteDocBlockType.QUOTE -> Box(
             Modifier.fillMaxWidth().padding(start = indent, top = 2.dp, bottom = 2.dp),
         ) {
-            Box(Modifier.width(3.dp).height(24.dp).background(Green.copy(alpha = .45f)))
-            Spacer(Modifier.width(10.dp))
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth())
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp))
+                .background(quoteAccent.copy(alpha = .045f))
+                .drawBehind { drawRect(quoteAccent.copy(alpha = .65f), size = Size(3.dp.toPx(), size.height)) }
+                .padding(horizontal = 17.dp, vertical = 15.dp)) {
+                BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+            }
         }
 
-        NoteDocBlockType.CODE -> Box(
+        NoteDocBlockType.CODE -> Column(
             Modifier.fillMaxWidth().padding(start = indent, top = 4.dp, bottom = 4.dp)
                 .clip(RoundedCornerShape(10.dp)).background(CodeBg).padding(12.dp),
         ) {
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth())
+            if (NoteMath.isEquation(block)) {
+                var editingEquation by remember(block.id) {
+                    mutableStateOf(block.text == "\\( \\)")
+                }
+                NoteEquationView(block.text)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (editingEquation) "Hide LaTeX source" else "Edit LaTeX source",
+                    color = Green,
+                    fontSize = 12.sp,
+                    modifier = Modifier.clickable { editingEquation = !editingEquation }
+                        .testTag("notes_equation_source_${block.id}"),
+                )
+                if (editingEquation) {
+                    Spacer(Modifier.height(6.dp))
+                    BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+                }
+            } else {
+                BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+            }
         }
 
         NoteDocBlockType.CHECKLIST -> Row(
@@ -182,7 +308,7 @@ private fun NoteBlockRow(
                 modifier = Modifier.padding(top = 3.dp).testTag("notes_check_${block.id}"),
             )
             Spacer(Modifier.width(10.dp))
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth())
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
         }
 
         NoteDocBlockType.BULLET -> Row(
@@ -191,7 +317,7 @@ private fun NoteBlockRow(
         ) {
             Text("•", color = Ink, fontSize = 16.sp, modifier = Modifier.padding(top = 1.dp))
             Spacer(Modifier.width(10.dp))
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth())
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
         }
 
         NoteDocBlockType.NUMBERED -> Row(
@@ -200,11 +326,11 @@ private fun NoteBlockRow(
         ) {
             Text("$numberIndex.", color = Ink, fontSize = 15.sp, modifier = Modifier.padding(top = 1.dp))
             Spacer(Modifier.width(8.dp))
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth())
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
         }
 
         else -> Box(Modifier.fillMaxWidth().padding(start = indent, top = 2.dp, bottom = 2.dp)) {
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth())
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
         }
     }
 }
@@ -248,22 +374,29 @@ private fun BlockTextField(
     state: NotesUiState,
     vm: NotesViewModel,
     modifier: Modifier = Modifier,
+    focusRequestFor: String?,
+    onFocusHandled: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
     val focused = state.focusedBlockId == block.id
     val requester = remember(block.id) { FocusRequester() }
-    LaunchedEffect(focused, block.id) {
-        if (focused) runCatching { requester.requestFocus() }
+    val hasInputFocus = remember(block.id) { mutableStateOf(false) }
+    LaunchedEffect(focusRequestFor, block.id) {
+        if (focused && focusRequestFor == block.id) {
+            // Only a newly selected block needs programmatic focus. A style or block-type edit
+            // may recreate this field, but must not scroll the whole document to its caret.
+            if (!hasInputFocus.value) runCatching { requester.requestFocus() }
+            onFocusHandled()
+        }
     }
-    val size = (
-        block.runs.firstOrNull()?.fontSizeSp
-            ?: NotesViewModel.defaultSizeFor(block.type)
-    ).sp
+    val size = NotesViewModel.defaultSizeFor(block.type).sp
     val accent = Green
     val style = TextStyle(
-        color = Ink,
+        color = if (block.type == NoteDocBlockType.QUOTE) Muted else Ink,
         fontSize = size,
-        lineHeight = size * block.lineSpacing.coerceAtLeast(1f) * 1.35f,
-        fontWeight = if (block.type.isHeading) FontWeight.Bold else FontWeight.Normal,
+        lineHeight = NoteDocumentLayout.lineHeightSp(block).sp,
+        fontWeight = if (block.type.isHeading) FontWeight.SemiBold else FontWeight.Normal,
         fontFamily = if (block.type == NoteDocBlockType.CODE) FontFamily.Monospace else null,
         textAlign = when (block.align) {
             NoteDocAlign.CENTER -> TextAlign.Center
@@ -286,7 +419,21 @@ private fun BlockTextField(
         value = value,
         onValueChange = { next ->
             if (next.text != block.text) {
-                vm.onTextChanged(block.id, next.text, next.selection)
+                val item = clipboard?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)
+                val pasted = item?.text?.toString() ?: item?.coerceToText(context)?.toString()
+                val richHtml = item?.htmlText ?: (item?.text as? Spanned)?.let {
+                    Html.toHtml(it, Html.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE)
+                }
+                if (!vm.pasteStructured(block.id, next.text,
+                        pasted.orEmpty(), richHtml, imageResolver = { source ->
+                            runCatching {
+                                val uri = Uri.parse(source)
+                                if (uri.scheme == "content") NoteImageStore.import(context, uri)
+                                else null
+                            }.getOrNull()
+                        })) {
+                    vm.onTextChanged(block.id, next.text, next.selection)
+                }
             } else {
                 vm.onSelectionChanged(block.id, next.selection)
             }
@@ -308,7 +455,11 @@ private fun BlockTextField(
         },
         modifier = modifier
             .focusRequester(requester)
-            .onFocusChanged { vm.onFocusChanged(block.id, it.isFocused) }
+            .onFocusChanged {
+                hasInputFocus.value = it.isFocused
+                vm.onFocusChanged(block.id, it.isFocused)
+                if (it.isFocused && focusRequestFor == block.id) onFocusHandled()
+            }
             .onPreviewKeyEvent { event ->
                 // Backspace at offset zero joins blocks, which a text field alone cannot see.
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Backspace &&
@@ -359,7 +510,7 @@ private class NoteRunTransformation(private val runs: List<NoteDocRun>, private 
     }
 }
 
-private fun NoteDocRun.toSpanStyle(accent: Color): SpanStyle {
+internal fun NoteDocRun.toSpanStyle(accent: Color): SpanStyle {
     val decorations = buildList {
         if (NoteDocMark.UNDERLINE in marks || linkUrl != null) add(TextDecoration.Underline)
         if (NoteDocMark.STRIKE in marks) add(TextDecoration.LineThrough)
@@ -389,28 +540,27 @@ private fun NoteDocRun.toSpanStyle(accent: Color): SpanStyle {
 @Composable
 private fun NoteTableBlock(block: NoteDocBlock, vm: NotesViewModel) {
     val table = block.table ?: return
-    Column(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp)
-            .clip(RoundedCornerShape(10.dp)).background(Color.White),
-    ) {
-        repeat(table.rows) { r ->
-            Row(Modifier.fillMaxWidth()) {
-                repeat(table.cols) { c ->
-                    Box(
-                        Modifier.weight(1f)
-                            .background(Border)
-                            .padding(1.dp)
-                            .background(Color.White)
-                            .padding(horizontal = 8.dp, vertical = 8.dp),
-                    ) {
-                        BasicTextField(
-                            value = table.cell(r, c),
-                            onValueChange = { vm.onTableCellChanged(block.id, r, c, it) },
-                            textStyle = LocalTextStyle.current.copy(color = Ink, fontSize = 14.sp),
-                            cursorBrush = SolidColor(Green),
-                            modifier = Modifier.fillMaxWidth()
-                                .testTag("notes_cell_${block.id}_${r}_$c"),
-                        )
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        val cellWidth = (maxWidth / table.cols).coerceAtLeast(112.dp)
+        Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            .clip(RoundedCornerShape(10.dp)).background(Color.White)) {
+            repeat(table.rows) { r ->
+                // A shared intrinsic row height keeps every cell border aligned even when one
+                // cell wraps to several lines on a narrow phone.
+                Row(Modifier.height(IntrinsicSize.Min)) {
+                    repeat(table.cols) { c ->
+                        Box(Modifier.width(cellWidth).fillMaxHeight()
+                            .background(Border).padding(1.dp)
+                            .background(Color.White).padding(horizontal = 8.dp, vertical = 8.dp)) {
+                            BasicTextField(
+                                value = table.cell(r, c),
+                                onValueChange = { vm.onTableCellChanged(block.id, r, c, it) },
+                                textStyle = LocalTextStyle.current.copy(color = Ink, fontSize = 14.sp),
+                                cursorBrush = SolidColor(Green),
+                                modifier = Modifier.fillMaxWidth()
+                                    .testTag("notes_cell_${block.id}_${r}_$c"),
+                            )
+                        }
                     }
                 }
             }
