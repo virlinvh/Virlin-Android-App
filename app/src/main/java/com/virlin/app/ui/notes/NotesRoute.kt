@@ -204,17 +204,18 @@ fun NotesRoute(
             else -> vm.onTool(tool)
         }
     }
+    val toolState = vm.toolState().let { tools -> tools.copy(
+        enabled = if (state.damaged) emptySet() else tools.enabled + NoteTool.SELECT_DOCUMENT +
+            if (documentSelectionMode && !documentSelection.collapsed)
+                setOf(NoteTool.FLASHCARD) else emptySet(),
+    ) }
     VirlinNotesScreen(
         taskTitle = state.title.ifBlank { title },
         saveLabel = vm.saveLabel(),
-        tools = vm.toolState().let { tools -> tools.copy(
-            enabled = tools.enabled + NoteTool.SELECT_DOCUMENT +
-                if (documentSelectionMode && !documentSelection.collapsed)
-                    setOf(NoteTool.FLASHCARD) else emptySet(),
-        ) },
+        tools = toolState,
         onClose = { vm.saveAndClose { navController.popBackStack() } },
-        onTool = handleTool,
-        onAddBlock = { documentSelectionMode = false; vm.openAddBlock() },
+        onTool = { tool -> if (!state.damaged) handleTool(tool) },
+        onAddBlock = { if (!state.damaged) { documentSelectionMode = false; vm.openAddBlock() } },
         onPreview = {
             vm.saveAndClose {
                 focusManager.clearFocus(); keyboard?.hide()
@@ -234,20 +235,32 @@ fun NotesRoute(
         headingFoldRequest = headingFoldRequest,
         documentSelectionMode = documentSelectionMode,
         editor = { headingFoldMode, _ ->
-            if (!state.loading) NoteBlockEditor(
-                state = state, vm = vm,
-                headingFoldMode = headingFoldMode,
-                documentSelectionMode = documentSelectionMode,
-                documentSelection = documentSelection,
-                onDocumentSelectionChange = { documentSelection = it },
+            if (!state.loading && state.damaged) NoteDamagedPanel(
+                onRecover = vm::recoverDamaged,
+                rawPayload = vm::damagedPayload,
                 modifier = Modifier.fillMaxSize(),
             )
+            else if (!state.loading) androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+                NoteBlockEditor(
+                    state = state, vm = vm,
+                    headingFoldMode = headingFoldMode,
+                    documentSelectionMode = documentSelectionMode,
+                    documentSelection = documentSelection,
+                    onDocumentSelectionChange = { documentSelection = it },
+                    modifier = Modifier.fillMaxSize(),
+                )
+                NotePasteIndicator(state.pasting,
+                    Modifier.align(androidx.compose.ui.Alignment.TopCenter))
+            }
         },
         footer = {},
     )
 
     state.dialog?.let { dialog ->
-        NoteDialogHost(dialog, state, vm, pickImage)
+        NoteDialogHost(dialog, state, vm, pickImage, projectId,
+            // The selection the flashcard reads is still in the editor, so offer it here too.
+            tools = toolState.copy(enabled = if (state.damaged) emptySet() else toolState.enabled + NoteTool.FLASHCARD),
+            onTool = { tool -> if (!state.damaged) handleTool(tool) }) { navController.popBackStack() }
     }
     pendingFlashcard?.let { content ->
         FlashcardCreateDialog(content, flashcardSaving, flashcardError,
@@ -272,7 +285,9 @@ fun NotesRoute(
 
 @Composable
 private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesViewModel,
-                           pickImage: () -> Unit) {
+                           pickImage: () -> Unit, projectId: String? = null,
+                           tools: NoteToolState = NoteToolState(), onTool: (NoteTool) -> Unit = {},
+                           onClose: () -> Unit = {}) {
     when (dialog) {
         is NoteDialog.Paragraph -> PickerDialog("Paragraph style", vm::closeDialog) {
             listOf(
@@ -331,34 +346,14 @@ private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesVie
             }
         }
 
-        is NoteDialog.AddBlock -> PickerDialog("Add a block", vm::closeDialog) {
-            PickerRow("Image", false) { vm.closeDialog(); pickImage() }
-            listOf(
-                NoteDocBlockType.PARAGRAPH to "Paragraph",
-                NoteDocBlockType.HEADING_1 to "Heading 1",
-                NoteDocBlockType.HEADING_2 to "Heading 2",
-                NoteDocBlockType.HEADING_3 to "Heading 3",
-                NoteDocBlockType.BULLET to "Bulleted list",
-                NoteDocBlockType.NUMBERED to "Numbered list",
-                NoteDocBlockType.CHECKLIST to "Checklist",
-                NoteDocBlockType.QUOTE to "Quote",
-                NoteDocBlockType.PROMPT to "Prompt callout",
-                NoteDocBlockType.CODE to "Code",
-                NoteDocBlockType.TOGGLE to "Toggle",
-                NoteDocBlockType.DIVIDER to "Divider",
-                NoteDocBlockType.TABLE to "Table",
-            ).forEach { (type, label) ->
-                PickerRow(label, false) {
-                    vm.insertBlock(type)
-                    vm.closeDialog()
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Attachment blocks are not built yet.",
-                color = Muted, fontSize = 11.sp,
-            )
-        }
+        is NoteDialog.AddBlock -> NoteAddSheet(
+            tools = tools,
+            onDismiss = vm::closeDialog,
+            onInsert = { type -> vm.insertBlock(type); vm.closeDialog() },
+            onInsertEquation = { vm.insertEquation(); vm.closeDialog() },
+            onPickImage = { vm.closeDialog(); pickImage() },
+            onTool = { tool -> vm.closeDialog(); onTool(tool) },
+        )
 
         is NoteDialog.Table -> PickerDialog("Insert table", vm::closeDialog) {
             listOf(2 to 2, 3 to 2, 3 to 3, 4 to 3).forEach { (rows, cols) ->
@@ -376,6 +371,24 @@ private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesVie
             Text(dialog.text, color = Ink, fontSize = 14.sp)
             Spacer(Modifier.height(14.dp))
             PickerRow("OK", false) { vm.closeDialog() }
+        }
+        is NoteDialog.SaveRefused -> PickerDialog(
+            if (dialog.stale) "A newer version exists" else "Note not saved", vm::closeDialog,
+        ) {
+            Text(dialog.reason, color = Ink, fontSize = 14.sp)
+            Spacer(Modifier.height(14.dp))
+            if (projectId != null) {
+                PickerRow(if (dialog.stale) "Keep both: save mine as a new note" else "Save my edits as a new note",
+                    false) { vm.saveEditsAsNewNote(projectId, onClose) }
+                Spacer(Modifier.height(8.dp))
+            }
+            PickerRow("Keep editing", false) { vm.closeDialog() }
+            Spacer(Modifier.height(8.dp))
+            PickerRow(when {
+                dialog.closeAfter -> "Discard my edits and close"
+                dialog.stale -> "Discard mine, open the newer version"
+                else -> "Discard my edits"
+            }, false) { vm.discardEdits(onClose) }
         }
     }
 }

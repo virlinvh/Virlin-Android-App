@@ -22,7 +22,7 @@ android {
     }
     buildTypes {
         debug {
-            versionNameSuffix = "-restored-notes-20261105"
+            versionNameSuffix = "-notes-addsheet-20261105-2225"
         }
         release {
             isMinifyEnabled = false

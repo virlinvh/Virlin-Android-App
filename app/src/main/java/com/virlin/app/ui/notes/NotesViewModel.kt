@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.virlin.app.domain.action.ActionResult
 import com.virlin.app.domain.action.VirlinActions
 import com.virlin.app.domain.id.IdProvider
+import com.virlin.app.domain.notedoc.CaptureNoteBridge
 import com.virlin.app.domain.notedoc.NoteDocAlign
 import com.virlin.app.domain.notedoc.NoteDocBlock
 import com.virlin.app.domain.notedoc.NoteDocBlockType
@@ -14,8 +15,11 @@ import com.virlin.app.domain.notedoc.NoteDocRun
 import com.virlin.app.domain.notedoc.NoteDocTable
 import com.virlin.app.domain.notedoc.NoteRuns
 import com.virlin.app.domain.notedoc.NotePasteParser
+import com.virlin.app.domain.notedoc.NotePasteSafety
 import com.virlin.app.domain.notedoc.VirlinNoteCodec
 import com.virlin.app.domain.notedoc.visibleNoteBlocks
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,6 +46,11 @@ sealed interface NoteDialog {
     data object Table : NoteDialog
     data class Link(val initialUrl: String, val hasSelection: Boolean) : NoteDialog
     data class Message(val text: String) : NoteDialog
+    /**
+     * A save was refused, so the edits on screen are not stored yet. [stale] means a newer
+     * version was saved elsewhere; [closeAfter] means the user was trying to leave the page.
+     */
+    data class SaveRefused(val reason: String, val stale: Boolean, val closeAfter: Boolean) : NoteDialog
 }
 
 data class NotesUiState(
@@ -56,6 +65,10 @@ data class NotesUiState(
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
     val dialog: NoteDialog? = null,
+    /** A large paste is being formatted off the main thread; text fields are read-only meanwhile. */
+    val pasting: Boolean = false,
+    /** The stored note could not be read. The editor shows recovery instead of a blank page. */
+    val damaged: Boolean = false,
 ) {
     val focusedBlock: NoteDocBlock? get() = blocks.firstOrNull { it.id == focusedBlockId }
 }
@@ -77,6 +90,7 @@ class NotesViewModel(
     private val initialTitle: String,
     private val actions: VirlinActions,
     private val ids: IdProvider,
+    private val pasteDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(NotesUiState(title = initialTitle))
@@ -85,6 +99,7 @@ class NotesViewModel(
     private val undoStack = ArrayDeque<Snapshot>()
     private val redoStack = ArrayDeque<Snapshot>()
     private var saveJob: Job? = null
+    private var pasteJob: Job? = null
     private val saveMutex = Mutex()
     private var lastTypedBlock: String? = null
 
@@ -94,18 +109,41 @@ class NotesViewModel(
         val selection: TextRange,
     )
 
+    /** The stored version this editor is based on; saves are refused if storage moved past it. */
+    private var baseRevision = 0
+    private var baseBlocks: List<NoteDocBlock> = emptyList()
+    private var baseTitle: String? = null
+    private var damagedRaw: String? = null
+    private var refusalShown = false
+
     init {
-        viewModelScope.launch {
-            val stored = actions.loadNoteDoc(ownerKey)
-            val blocks = stored?.blocks?.takeIf { it.isNotEmpty() } ?: listOf(newBlock())
-            ui = _state.value.copy(
-                loading = false,
-                title = stored?.title ?: initialTitle,
-                blocks = blocks,
-                focusedBlockId = null,
-                save = NoteSaveState.NO_CHANGES,
-            )
-        }
+        viewModelScope.launch { load() }
+    }
+
+    private suspend fun load() {
+        val stored = actions.loadNoteDoc(ownerKey)
+        val damaged = stored?.loadError != null
+        damagedRaw = if (damaged) stored?.damagedRaw else null
+        rememberBase(stored)
+        val blocks = stored?.blocks?.takeIf { it.isNotEmpty() && !damaged } ?: listOf(newBlock())
+        undoStack.clear()
+        redoStack.clear()
+        lastTypedBlock = null
+        ui = _state.value.copy(
+            loading = false,
+            title = stored?.title ?: initialTitle,
+            blocks = blocks,
+            focusedBlockId = null,
+            selection = TextRange.Zero,
+            save = NoteSaveState.NO_CHANGES,
+            damaged = damaged,
+        )
+    }
+
+    private fun rememberBase(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc?) {
+        baseRevision = doc?.revision ?: 0
+        baseBlocks = doc?.blocks.orEmpty()
+        baseTitle = doc?.title
     }
 
     private fun newBlock(type: NoteDocBlockType = NoteDocBlockType.PARAGRAPH, text: String = "") =
@@ -190,22 +228,36 @@ class NotesViewModel(
         scheduleSave()
     }
 
-    /** One undoable, structure-preserving clipboard insertion. Never stores raw HTML. */
+    /**
+     * One undoable, structure-preserving clipboard insertion. Never stores raw HTML.
+     *
+     * Returns true when the paste was taken over — applied now, or being formatted off the main
+     * thread — and false when the field should apply the edit as ordinary typing.
+     */
     fun pasteStructured(blockId: String, newText: String, plainText: String,
         htmlText: String? = null, imageResolver: ((String) -> String?)? = null): Boolean {
         val s = _state.value
+        // While a large paste is formatting the fields are read-only; a late callback from the
+        // old input connection must not edit the document underneath it.
+        if (s.pasting) return true
         val original = s.blocks.firstOrNull { it.id == blockId } ?: return false
+        // Code and equations are literal: Markdown inside them (a Python `# comment`) is data.
+        if (original.type == NoteDocBlockType.CODE) return false
         val (from, removed, inserted) = NoteRuns.diff(original.text, newText)
         val insertedText = newText.substring(from, from + inserted)
-        fun normalized(value: String) = value.replace("\r\n", "\n").replace('\r', '\n').trim()
         if (insertedText.isEmpty()) return false
-        val clipboardMatches = normalized(insertedText) == normalized(plainText)
+        val clipboardMatches = sameText(insertedText, plainText)
+        val largeHtml = (htmlText?.length ?: 0) > NotePasteSafety.BACKGROUND_HTML_CHARS
+        if (insertedText.length > NotePasteSafety.BACKGROUND_CHARS || largeHtml && clipboardMatches) {
+            pasteInBackground(original, from, removed, insertedText, plainText, htmlText, imageResolver)
+            return true
+        }
         // Android may supply a different plain-text representation alongside semantic HTML.
         // Only trust that HTML when its visible text is the text the IME actually inserted.
-        val htmlMatches = htmlText?.let { html ->
-            runCatching { normalized(org.jsoup.Jsoup.parse(html).text()) == normalized(insertedText) }
-                .getOrDefault(false)
-        } == true
+        // HTML far larger than the insertion cannot be its source (a typed word while a long
+        // answer sits on the clipboard), so it is not parsed for that edit.
+        val htmlMatches = !clipboardMatches && htmlText != null && !largeHtml &&
+            htmlText.length <= insertedText.length * 50 + 8_192 && htmlTextMatches(htmlText, insertedText)
         val structuredInsertion = insertedText.length > 3 &&
             (insertedText.length > 20 && '\n' in insertedText ||
             insertedText.lines().any { line ->
@@ -238,6 +290,47 @@ class NotesViewModel(
         if (imported.size == 1 && imported[0].type == NoteDocBlockType.PARAGRAPH &&
             imported[0].runs.isEmpty() && !insertedText.contains('\n')
         ) return false
+        applyPastedBlocks(original.id, original.text, from, removed, imported)
+        return true
+    }
+
+    private fun pasteInBackground(original: NoteDocBlock, from: Int, removed: Int, insertedText: String,
+        plainText: String, htmlText: String?, imageResolver: ((String) -> String?)?) {
+        ui = _state.value.copy(pasting = true)
+        pasteJob = viewModelScope.launch {
+            val formatted = withContext(pasteDispatcher) {
+                runCatching { formatLargePaste(insertedText, plainText, htmlText, imageResolver) }.getOrNull()
+            }
+            val blocks = formatted ?: NotePasteSafety.plainParagraphs(insertedText)
+            ui = _state.value.copy(pasting = false)
+            if (blocks.isNotEmpty()) applyPastedBlocks(original.id, original.text, from, removed, blocks)
+            if (formatted == null) ui = _state.value.copy(dialog = NoteDialog.Message(PLAIN_PASTE_FALLBACK))
+        }
+    }
+
+    /**
+     * Replaces the pasted range of [blockId] with [imported] as one undo step. If that block
+     * changed or vanished since the paste began, the pasted blocks are placed after it instead
+     * of being merged into text they no longer describe.
+     */
+    private fun applyPastedBlocks(blockId: String, expectedText: String, from: Int, removed: Int,
+        imported: List<NoteDocBlock>) {
+        val s = _state.value
+        val original = s.blocks.firstOrNull { it.id == blockId }
+        if (original == null || original.text != expectedText) {
+            pushUndo()
+            val pasted = imported.map { it.copy(id = ids.newId("nb")) }
+            val at = s.blocks.indexOfFirst { it.id == blockId }.let { if (it < 0) s.blocks.size else it + 1 }
+            ui = s.copy(
+                blocks = s.blocks.take(at) + pasted + s.blocks.drop(at),
+                focusedBlockId = pasted.last().id,
+                selection = TextRange(pasted.last().text.length),
+                caretMarks = emptySet(),
+                save = NoteSaveState.EDITED,
+            )
+            scheduleSave()
+            return
+        }
         val end = from + removed
         val before = original.text.take(from)
         val after = original.text.drop(end)
@@ -286,7 +379,6 @@ class NotesViewModel(
             save = NoteSaveState.EDITED,
         )
         scheduleSave()
-        return true
     }
 
     private fun splitOnNewline(block: NoteDocBlock, newText: String, newSelection: TextRange) {
@@ -742,18 +834,28 @@ class NotesViewModel(
     /** Called when the page closes, so the last keystrokes are never lost to the debounce. */
     fun flush() {
         saveJob?.cancel()
-        if (_state.value.save == NoteSaveState.NO_CHANGES || _state.value.save == NoteSaveState.SAVED) return
-        viewModelScope.launch { persist() }
+        val pending = pasteJob?.takeIf { it.isActive }
+        if (pending == null && (_state.value.save == NoteSaveState.NO_CHANGES || _state.value.save == NoteSaveState.SAVED)) return
+        viewModelScope.launch {
+            pending?.join()
+            saveJob?.cancel()
+            if (_state.value.save != NoteSaveState.NO_CHANGES && _state.value.save != NoteSaveState.SAVED) persist()
+        }
     }
 
     fun saveAndClose(onSaved: () -> Unit) {
         saveJob?.cancel()
-        if (_state.value.save == NoteSaveState.NO_CHANGES || _state.value.save == NoteSaveState.SAVED) {
+        val pending = pasteJob?.takeIf { it.isActive }
+        if (pending == null && (_state.value.save == NoteSaveState.NO_CHANGES || _state.value.save == NoteSaveState.SAVED)) {
             onSaved()
             return
         }
         viewModelScope.launch {
-            do { if (!persist()) return@launch } while (_state.value.save == NoteSaveState.EDITED)
+            pending?.join()
+            saveJob?.cancel()
+            while (_state.value.save != NoteSaveState.NO_CHANGES && _state.value.save != NoteSaveState.SAVED) {
+                if (!persist(closing = true)) return@launch
+            }
             onSaved()
         }
     }
@@ -839,11 +941,28 @@ class NotesViewModel(
         scheduleSave()
     }
 
-    private suspend fun persist(): Boolean = withContext(NonCancellable) { saveMutex.withLock {
+    private suspend fun persist(closing: Boolean = false): Boolean = withContext(NonCancellable) { saveMutex.withLock {
         val s = _state.value
-        if (s.loading) return@withLock false
+        if (s.loading || s.damaged) return@withLock false
         ui = _state.value.copy(save = NoteSaveState.SAVING)
-        val result = actions.saveNoteDoc(ownerKey, s.title.takeIf { it.isNotBlank() }, s.blocks)
+        val title = s.title.takeIf { it.isNotBlank() }
+        var result = actions.saveNoteDoc(ownerKey, title, s.blocks, expectedRevision = baseRevision)
+        if (result.isStale()) {
+            // Another writer moved the revision. Nothing is lost if it stored exactly what this
+            // editor holds, or if it changed nothing this editor was based on.
+            val latest = runCatching { actions.loadNoteDoc(ownerKey) }.getOrNull()
+            if (latest != null && latest.loadError == null) {
+                if (latest.blocks == s.blocks && latest.title == title) {
+                    result = ActionResult.Success(latest)
+                } else if (latest.blocks == baseBlocks && latest.title == baseTitle) {
+                    result = actions.saveNoteDoc(ownerKey, title, s.blocks, expectedRevision = latest.revision)
+                }
+            }
+        }
+        if (result is ActionResult.Success) {
+            rememberBase(result.value)
+            refusalShown = false
+        }
         ui = _state.value.copy(
             save = when (result) {
                 is ActionResult.Success -> if (_state.value.blocks == s.blocks && _state.value.title == s.title)
@@ -851,8 +970,74 @@ class NotesViewModel(
                 else -> NoteSaveState.FAILED
             },
         )
+        if (result !is ActionResult.Success && (closing || !refusalShown)) {
+            refusalShown = true
+            ui = _state.value.copy(dialog = NoteDialog.SaveRefused(result.refusalText(), result.isStale(), closing))
+        }
         result is ActionResult.Success
     } }
+
+    /**
+     * Keeps the on-screen edits as a new note in [projectId]'s Knowledge library, then reopens
+     * the stored version of this note. The stored note itself is never overwritten here.
+     */
+    fun saveEditsAsNewNote(projectId: String?, onClose: () -> Unit) {
+        val refused = _state.value.dialog as? NoteDialog.SaveRefused
+        if (projectId == null) return
+        ui = _state.value.copy(dialog = null)
+        viewModelScope.launch {
+            val s = _state.value
+            val copyTitle = "${s.title.ifBlank { initialTitle }.ifBlank { "Note" }} (my edits)"
+            val copy = runCatching {
+                actions.saveNoteDoc(CaptureNoteBridge.draftOwner(projectId, ids.newId("cap")), copyTitle, s.blocks)
+            }.getOrElse { ActionResult.Failure(it) }
+            if (copy !is ActionResult.Success) {
+                ui = _state.value.copy(dialog = NoteDialog.Message(
+                    "Your edits could not be saved as a new note (${copy.refusalText()}). They are still on screen."))
+                return@launch
+            }
+            saveJob?.cancel()
+            if (refused?.closeAfter == true) {
+                ui = _state.value.copy(dialog = null, save = NoteSaveState.NO_CHANGES)
+                onClose()
+                return@launch
+            }
+            saveMutex.withLock { load() }
+            ui = _state.value.copy(dialog = NoteDialog.Message(
+                "Your edits were saved as the new note “$copyTitle” in this project. " +
+                    "The stored version of this note is open again."))
+        }
+    }
+
+    /** Drops the unsaved edits after the user chose to, then reopens or leaves the stored note. */
+    fun discardEdits(onClose: () -> Unit) {
+        val refused = _state.value.dialog as? NoteDialog.SaveRefused
+        saveJob?.cancel()
+        ui = _state.value.copy(dialog = null, save = NoteSaveState.NO_CHANGES)
+        if (refused?.closeAfter == true) { onClose(); return }
+        viewModelScope.launch { saveMutex.withLock { load() } }
+    }
+
+    /** The unreadable stored payload, exactly as stored, for the recovery panel's copy action. */
+    fun damagedPayload(): String? = damagedRaw
+
+    /**
+     * Repairs a damaged note through the domain: the raw payload is first kept as a recovery
+     * copy, then the note is replaced by the text that could be salvaged.
+     */
+    fun recoverDamaged() {
+        viewModelScope.launch {
+            when (val result = runCatching { actions.recoverDamagedNote(ownerKey) }.getOrElse { ActionResult.Failure(it) }) {
+                is ActionResult.Success -> {
+                    saveMutex.withLock { load() }
+                    ui = _state.value.copy(dialog = NoteDialog.Message(
+                        "The readable text was recovered. The original data was kept as a recovery copy."))
+                }
+                else -> ui = _state.value.copy(dialog = NoteDialog.Message(
+                    "This note could not be recovered (${result.refusalText()}). Nothing was changed."))
+            }
+        }
+    }
 
     override fun onCleared() {
         saveJob?.cancel()
@@ -1013,6 +1198,7 @@ class NotesViewModel(
             NoteDocBlockType.HEADING_1 -> 26
             NoteDocBlockType.HEADING_2 -> 22
             NoteDocBlockType.HEADING_3 -> 18
+            NoteDocBlockType.CODE -> 14
             else -> 16
         }
 
@@ -1037,4 +1223,50 @@ class NotesViewModel(
             return withScheme
         }
     }
+}
+
+internal const val STALE_SAVE_TEXT = "This note was changed somewhere else (for example on the desktop) " +
+    "after you opened it. Your edits here are not saved yet."
+
+private fun ActionResult<*>.isStale(): Boolean = this is ActionResult.Rejected &&
+    (reason as? com.virlin.app.domain.action.DomainError.PlacementRejected)?.reason ==
+    com.virlin.app.domain.action.NoteDocMessages.STALE
+
+/** Why a save was refused, in words the user can act on. */
+private fun ActionResult<*>.refusalText(): String = when (this) {
+    is ActionResult.Success -> ""
+    is ActionResult.Rejected -> when (val r = reason) {
+        is com.virlin.app.domain.action.DomainError.PlacementRejected ->
+            if (r.reason == com.virlin.app.domain.action.NoteDocMessages.STALE) STALE_SAVE_TEXT else r.reason
+        else -> "The note was refused: $r"
+    }
+    is ActionResult.NotFound -> "The note's owner was not found."
+    is ActionResult.Failure -> "Saving failed: ${cause.message ?: cause.javaClass.simpleName}"
+}
+
+internal const val PLAIN_PASTE_FALLBACK =
+    "This paste's formatting could not be imported. All of its text was kept as plain paragraphs."
+
+private fun normalizedPaste(value: String) = value.replace("\r\n", "\n").replace('\r', '\n').trim()
+
+/** Whether [inserted] is the clipboard's plain text. Runs on every edit, so it rejects cheaply. */
+private fun sameText(inserted: String, clip: String): Boolean {
+    if (clip.length > inserted.length * 2 + 16 || inserted.length > clip.length * 2 + 16) return false
+    return normalizedPaste(inserted) == normalizedPaste(clip)
+}
+
+private fun htmlTextMatches(html: String, inserted: String): Boolean =
+    runCatching { normalizedPaste(org.jsoup.Jsoup.parse(html).text()) == normalizedPaste(inserted) }
+        .getOrDefault(false)
+
+/** Off the main thread. Null means the paste's formatting could not be imported. */
+private fun formatLargePaste(insertedText: String, plainText: String, htmlText: String?,
+    imageResolver: ((String) -> String?)?): List<NoteDocBlock>? {
+    val usableHtml = htmlText?.takeIf { sameText(insertedText, plainText) || htmlTextMatches(it, insertedText) }
+    val rich = usableHtml?.let { html ->
+        runCatching { NotePasteParser.parse(insertedText, html, imageResolver) }.getOrNull()?.takeIf { it.isNotEmpty() }
+    }
+    val parsed = rich ?: NotePasteParser.parse(insertedText, null, imageResolver).takeIf { it.isNotEmpty() }
+        ?: return null
+    return NotePasteSafety.splitLongParagraphs(parsed)
 }
