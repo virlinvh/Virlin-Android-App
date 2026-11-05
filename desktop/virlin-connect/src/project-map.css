@@ -1,0 +1,65 @@
+.virlin-map{position:relative;color:#172c22}
+.virlin-map-tabs{margin:12px 0 22px}
+.virlin-map-stage{position:relative;height:calc(100dvh - 280px);min-height:550px;overflow:hidden;border:1px solid #d7e6dc;border-radius:20px;background:#f6faf7 radial-gradient(#cde2d4 .9px,transparent .9px);background-size:25px 25px;cursor:grab;touch-action:none}
+.virlin-map-stage:active{cursor:grabbing}
+.virlin-map-world{position:absolute;left:0;top:0;transform-origin:0 0}
+.virlin-map-lines{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
+.virlin-map-lines path{fill:none;stroke:#83bea5;stroke-width:1.7}
+.virlin-map-node{position:absolute;display:flex;flex-direction:column;justify-content:center;gap:7px;min-height:72px;height:auto;padding:13px 16px;border:1px solid #dfebe3;border-left:5px solid #09815b;border-radius:13px;background:#fff;color:#163026;text-align:left;font:inherit;box-shadow:0 8px 24px #17372512;cursor:grab;user-select:none;touch-action:none}
+.virlin-map-node strong{white-space:normal;overflow-wrap:anywhere;font-size:13px;line-height:1.4;font-weight:600}
+.virlin-map-node small{white-space:normal;overflow-wrap:anywhere;font-size:10px;line-height:1.4;color:#71877a}
+.virlin-map-node[data-color=blue]{border-left-color:#598bb9}
+.virlin-map-node[data-color=gold]{border-left-color:#ce9d55}
+.virlin-map-project{background:#e8f5ed}
+.virlin-map-node.selected{outline:2px solid #087f5b;outline-offset:4px}
+.virlin-map-node:hover{box-shadow:0 10px 28px #17372520}
+.virlin-map-resize{display:none;position:absolute;right:-5px;top:8px;bottom:8px;width:13px;cursor:ew-resize;touch-action:none}
+.virlin-map-stage.resize-armed .virlin-map-node.selected .virlin-map-resize{display:block}
+.virlin-map-node:has(.virlin-map-resize:hover){border-right-color:#087f5b}
+.virlin-map-fold{position:absolute;display:grid;place-items:center;width:27px;height:27px;padding:0;border:1px solid #dcebe1;border-radius:50%;background:#fff;color:#087f5b;font:16px/1 system-ui;box-shadow:0 4px 10px #17372518;cursor:pointer}
+.virlin-map-launcher,.virlin-map-expand,.virlin-map-stack,.virlin-map-node-actions button,.virlin-map-tools button{display:grid;place-items:center;width:48px;height:48px;padding:0;border:1px solid #d7e6dc;border-radius:14px;background:#fff;color:#087f5b;box-shadow:0 7px 22px #17372520;cursor:pointer}
+.virlin-map button svg{width:20px;height:20px;pointer-events:none}
+.virlin-map-launcher,.virlin-map-stack{width:54px;height:54px;border-radius:17px}
+.virlin-map-launcher svg,.virlin-map-stack svg{width:25px;height:25px}
+.virlin-map-launcher,.virlin-map-expand{position:absolute;z-index:4;top:22px}
+.virlin-map-launcher{left:22px}
+.virlin-map-expand{right:22px}
+.virlin-map-node-actions{position:absolute;left:84px;right:84px;top:22px;z-index:4;display:flex;flex-direction:row;gap:7px;overflow-x:auto;padding:2px}
+.virlin-map-node-actions button{flex:none}
+.virlin-map-color-strip{position:absolute;z-index:6;right:80px;top:82px;max-width:min(560px,calc(100% - 100px));display:flex;gap:5px;overflow-x:auto;padding:9px;border:1px solid #d7e6dc;border-radius:16px;background:#fff;box-shadow:0 9px 30px #17372520}
+.virlin-map-color-strip[hidden]{display:none}
+.virlin-map-color-strip .virlin-map-swatch{flex:none;width:38px;height:38px;padding:0;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 1px #adbfaf;cursor:pointer}
+.virlin-map-color-strip .virlin-map-swatch[aria-pressed=true]{box-shadow:0 0 0 2px #087f5b,0 0 0 5px #e3f3e9}
+.virlin-map-node-actions .has-box-color{background:#e8f5ed}
+.virlin-map-controls{position:absolute;right:22px;bottom:22px;z-index:4;display:flex;flex-direction:column;align-items:center;gap:12px}
+.virlin-map-tools{display:flex;flex-direction:column;gap:8px;background:transparent;padding:0;border:0;box-shadow:none}
+.virlin-map-node-actions[hidden],.virlin-map-tools[hidden]{display:none}
+.virlin-map-node-actions button:hover,.virlin-map-tools button:hover,.virlin-map-launcher:hover,.virlin-map-expand:hover,.virlin-map-stack:hover,.virlin-map button[aria-pressed=true]{background:#e8f5ed}
+.virlin-map button:disabled{opacity:.4;cursor:not-allowed}
+.virlin-map-feedback{min-height:18px;font-size:11px;color:#6d8175;padding:8px 2px}
+.virlin-map-stage.is-manipulating .virlin-map-node{cursor:grabbing;will-change:left,top}
+.virlin-map.tasks-only .virlin-map-stream{opacity:.45}
+.virlin-map-edit-overlay{position:absolute;inset:0;z-index:8;display:grid;place-items:center;background:#18342640;cursor:default}
+.virlin-map-edit{width:min(380px,calc(100% - 32px));padding:25px;border:1px solid #dce9df;border-radius:19px;background:white;box-shadow:0 24px 70px #17372530}
+.virlin-map-edit h3{margin:0 0 18px}
+.virlin-map-edit label{display:block;font-size:13px}
+.virlin-map-edit input{display:block;width:100%;margin-top:7px;padding:10px;border:1px solid #c4d8cb;border-radius:9px;font:inherit}
+.virlin-map-edit p{font-size:12px;color:#925340}
+.virlin-map-edit button{padding:9px 13px;margin-right:7px;border:1px solid #d7e6dc;border-radius:9px;background:#edf5f0;color:#087f5b;cursor:pointer}
+.virlin-map-edit button[type=submit]{background:#087f5b;color:white}
+.virlin-map-destinations{max-height:min(72dvh,620px);overflow-y:auto}
+.virlin-map-destinations button{display:block;width:100%;margin:3px 0;text-align:left;white-space:pre-wrap}
+.workspace-app:has(.virlin-map.is-expanded){display:block}
+.workspace-app:has(.virlin-map.is-expanded) .workspace-sidebar,.workspace-main:has(.virlin-map.is-expanded)>.workspace-mobile-brand,.workspace-main:has(.virlin-map.is-expanded)>.project-breadcrumb,.workspace-main:has(.virlin-map.is-expanded)>.directory-header,.workspace-main:has(.virlin-map.is-expanded)>#workspace-status,.workspace-main:has(.virlin-map.is-expanded)>.directory-controls,.workspace-main:has(.virlin-map.is-expanded)>#offline-home{display:none!important}
+.workspace-main:has(.virlin-map.is-expanded){padding:0!important;max-width:none!important;margin:0!important;width:100%}
+.workspace-main:has(.virlin-map.is-expanded) #project-list{padding:0!important;margin:0}
+.virlin-map.is-expanded .virlin-map-tabs,.virlin-map.is-expanded .virlin-map-feedback,.virlin-map.is-expanded .virlin-map-launcher,.virlin-map.is-expanded .virlin-map-node-actions,.virlin-map.is-expanded .virlin-map-controls{display:none}
+.virlin-map.is-expanded .virlin-map-stage{height:100dvh;min-height:550px;border:0;border-radius:0}
+.workspace-main:has(.virlin-map.is-expanded)>#offline-home-card{display:none!important}
+.workspace-main:has(.virlin-map)>.directory-header .refresh-button{display:none}
+.workspace-main:has(.virlin-map)>#workspace-status{display:none}
+.workspace-main:has(.virlin-map) .project-subtitle{font-size:14px;color:#76887e}
+#map-connection-status{font-size:12px;color:#087f5b;white-space:nowrap}
+@media(max-width:760px){.virlin-map-stage{min-height:550px;height:70dvh}.virlin-map-launcher{left:12px;top:12px}.virlin-map-expand{right:12px;top:12px}.virlin-map-controls{right:12px;bottom:12px}.virlin-map-node-actions{left:70px;right:70px;top:12px}.virlin-map-color-strip{right:10px;top:70px;max-width:calc(100% - 20px)}.virlin-map-tools{gap:6px}.virlin-map-tools button{width:44px;height:44px}}
+@media(prefers-reduced-motion:reduce){.virlin-map *{scroll-behavior:auto;transition:none}}
+

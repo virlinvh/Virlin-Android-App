@@ -20,9 +20,10 @@ class SchedulingWorkStreamRepository(
 ) : WorkStreamRepository by inner {
 
     override suspend fun <T> transaction(block: suspend WorkStreamWriter.() -> T): T {
-        val before = inner.streams.value.associateBy { it.id }
+        val before = executionItems().associateBy { it.id }
         val result = inner.transaction(block)                     // throws → nothing below runs
-        val after = inner.streams.value
+        val after = executionItems()
+        (before.keys - after.map { it.id }.toSet()).forEach { id -> runCatching { scheduler.cancel(id) }.onFailure(onSchedulerError) }
         after.filter { s -> before[s.id]?.let { timingKey(it) != timingKey(s) } ?: (AttentionSchedule.of(s) != null) }
             .forEach { s -> runCatching { scheduler.sync(s) }.onFailure(onSchedulerError) }
         return result
@@ -30,4 +31,6 @@ class SchedulingWorkStreamRepository(
 
     /** The part of a stream that decides whether/when it wakes the user. */
     private fun timingKey(s: WorkStream) = listOf(s.state, s.checkAt, s.snoozedUntil, s.snoozeReason)
+    private fun executionItems() = if (inner.taskExecutionEnabled)
+        com.virlin.app.domain.model.executionItems(inner.streams.value, inner.tasks.value) else inner.streams.value
 }

@@ -5,18 +5,17 @@ import java.time.Instant
 /**
  * The Notes page's OWN document model.
  *
- * Deliberately independent of [com.virlin.app.domain.model.NoteDocument], of the capture Text
- * Note editor and of the legacy plain `tasks.notes` string. The Notes page is being built as a
- * self-contained feature; the relationship to those other surfaces is a later decision, so this
- * model shares no types with them and nothing here reads or writes their storage.
+ * The rich editor model, independent of the legacy plain `tasks.notes` string.
+ * CaptureNoteBridge adapts older capture documents and creates compatibility projections;
+ * this rich document remains the authoritative formatting source.
  */
 enum class NoteDocBlockType {
     PARAGRAPH, HEADING_1, HEADING_2, HEADING_3,
     BULLET, NUMBERED, CHECKLIST,
-    QUOTE, CODE, PROMPT, DIVIDER, TABLE;
+    QUOTE, CODE, PROMPT, DIVIDER, TABLE, IMAGE, TOGGLE;
 
-    /** Divider and table hold no editable inline text of their own. */
-    val isTextual: Boolean get() = this != DIVIDER && this != TABLE
+    /** Non-text blocks hold no editable inline text of their own. */
+    val isTextual: Boolean get() = this != DIVIDER && this != TABLE && this != IMAGE
 }
 
 enum class NoteDocAlign { LEFT, CENTER, RIGHT }
@@ -79,7 +78,34 @@ data class NoteDocBlock(
     /** PROMPT only: the callout's user-authored heading. Never AI generated. */
     val promptTitle: String? = null,
     val table: NoteDocTable? = null,
+    /** IMAGE only: app-managed file name, never a temporary picker URI. */
+    val imagePath: String? = null,
+    /** Collapsed toggle or heading section; descendants remain stored intact. */
+    val isCollapsed: Boolean = false,
+    /** CODE only: true for imported/inserted math, false for explicit code, null for legacy notes. */
+    val mathMode: Boolean? = null,
 )
+
+/** Visible document order, shared by the editor and preview. Descendants remain stored intact. */
+fun visibleNoteBlocks(blocks: List<NoteDocBlock>, foldHeadings: Boolean = true): List<NoteDocBlock> {
+    val visible = ArrayList<NoteDocBlock>(blocks.size)
+    val hiddenAt = ArrayDeque<Int>()
+    val headings = ArrayDeque<Pair<Int, Boolean>>()
+    blocks.forEach { block ->
+        val level = when (block.type) {
+            NoteDocBlockType.HEADING_1 -> 1
+            NoteDocBlockType.HEADING_2 -> 2
+            NoteDocBlockType.HEADING_3 -> 3
+            else -> 0
+        }
+        if (level != 0) while (headings.isNotEmpty() && headings.last().first >= level) headings.removeLast()
+        while (hiddenAt.isNotEmpty() && block.indent <= hiddenAt.last()) hiddenAt.removeLast()
+        if (hiddenAt.isEmpty() && headings.none { it.second }) visible += block
+        if (block.type == NoteDocBlockType.TOGGLE && block.isCollapsed) hiddenAt.addLast(block.indent)
+        if (level != 0) headings.addLast(level to (foldHeadings && block.isCollapsed))
+    }
+    return visible
+}
 
 /**
  * One note. [ownerKey] is an opaque key the feature is filed under; the Notes page does not
@@ -92,6 +118,15 @@ data class VirlinNoteDoc(
     val createdAt: Instant = Instant.EPOCH,
     val updatedAt: Instant = Instant.EPOCH,
     val revision: Int = 0,
+    /**
+     * Format v2 rich tree (ProseMirror JSON) when the note was written by the rich editor. When
+     * set it is authoritative and [blocks] is its derived projection.
+     */
+    val richDocument: String? = null,
+    /** Set when the stored document could not be decoded; [blocks] is then empty, not the content. */
+    val loadError: String? = null,
+    /** The undecodable stored payload, kept verbatim so it is never replaced by an empty note. */
+    val damagedRaw: String? = null,
 )
 
 /**

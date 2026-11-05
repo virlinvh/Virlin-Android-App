@@ -20,6 +20,9 @@ data class AttentionSchedule(val streamId: String, val kind: ScheduleKind, val d
          * without a check time, SNOOZED without a time, or a CHECK that is already due/surfaced.
          */
         fun of(stream: WorkStream): AttentionSchedule? = when (stream.state) {
+            WorkStreamState.PAUSED -> if (stream.externalTrackingPaused) stream.checkAt?.let {
+                AttentionSchedule(stream.id, ScheduleKind.HUMAN_RETURN, it)
+            } else null
             WorkStreamState.PROCESSING -> stream.checkAt?.let { AttentionSchedule(stream.id, ScheduleKind.EXTERNAL_CHECK, it) }
             WorkStreamState.SNOOZED -> {
                 val at = stream.snoozedUntil ?: stream.checkAt

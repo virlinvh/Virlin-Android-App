@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Virlin Connect main window",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

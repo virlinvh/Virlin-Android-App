@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Virlin Connect</title></head>
+<body><main class="shell">
+  <header class="top"><span class="mark">V</span><span>Virlin <strong>Connect</strong></span><span class="local">LOCAL ONLY</span></header>
+  <section class="hero"><div class="eyebrow">CONNECT</div><h1>Your phone, on your desktop</h1><p>Choose a connection. Scan once to open your phone’s workspace.</p></section>
+  <div class="connection-tabs" role="tablist" aria-label="Connection method"><button id="wifi-tab" class="connection-tab active" type="button" role="tab" aria-selected="true" aria-controls="wifi-panel">Wi-Fi / hotspot</button><button id="usb-network-tab" class="connection-tab" type="button" role="tab" aria-selected="false" aria-controls="usb-network-panel">USB cable</button></div>
+  <section id="wifi-panel" class="panel" role="tabpanel" aria-labelledby="wifi-tab"><div class="pairing-heading"><div><h2 id="pairing-title">Pairing code</h2><p id="pairing-intro">Virlin → Apps → Virlin Link</p></div><span class="pairing-ready"><span aria-hidden="true">●</span> <span id="pairing-ready-label">Checking…</span></span></div>
+    <section id="usb-network-panel" role="tabpanel" aria-labelledby="usb-network-tab" hidden><strong id="usb-network-summary">Checking USB network…</strong><p id="usb-network-detail">No Developer options or USB debugging needed.</p></section>
+    <div class="qr-stage"><div id="qr-wrap" hidden><canvas id="qr" role="img" aria-label="One-time pairing QR code"></canvas></div><p id="qr-placeholder">Your private pairing QR appears here</p></div>
+    <div class="controls"><select id="addresses" aria-label="Computer network address"></select><button id="start" class="primary">Show pairing QR</button><button id="cancel" class="secondary" hidden>Disconnect</button></div>
+    <p id="expiry" hidden></p><p id="status" role="status">Checking local network…</p><p id="reconnect-message" class="reconnect-message" role="status" hidden></p>
+  </section>
+  <section id="workspace" class="workspace-app" hidden aria-label="Virlin workspace">
+    <aside class="workspace-sidebar" aria-label="Virlin navigation">
+      <div class="workspace-logo"><span class="workspace-logo-mark">V</span><span>Virlin</span></div>
+      <nav class="desktop-navigation" aria-label="Main sections">
+        <div class="sidebar-nav-group">
+          <div class="sidebar-caption">AVAILABLE NOW</div>
+          <button id="sidebar-projects" class="nav-current" type="button" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 9 5-9 5-9-5 9-5Zm-9 10 9 5 9-5M3 17l9 5 9-5"/></svg><span>Projects</span></button>
+        </div>
+        <div class="sidebar-nav-group sidebar-nav-future">
+          <div class="sidebar-caption">COMING LATER</div>
+          <button class="nav-unavailable" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1V10Z"/></svg><span>Now</span></button>
+          <button class="nav-unavailable" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18v3m5-8v8m5-11v11m5-15v15M2 14l6-5 5 3 8-9"/></svg><span>Momentum</span></button>
+          <button class="nav-unavailable" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Apps</span></button>
+        </div>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="connection-card"><span class="connection-dot"></span><div><strong>Phone connected</strong><small>Work saves on your phone</small></div></div>
+      <button id="workspace-disconnect" class="disconnect-link" type="button">Disconnect phone</button>
+    </aside>
+    <div class="workspace-main">
+      <div class="workspace-mobile-brand">Virlin <button id="workspace-mobile-disconnect" type="button" aria-label="Disconnect phone">● Phone connected · Disconnect</button></div>
+      <div id="project-breadcrumb" class="project-breadcrumb" hidden><button id="project-back" type="button">Projects</button><span aria-hidden="true">›</span><span id="project-breadcrumb-name"></span></div>
+      <header class="directory-header">
+        <div><div class="directory-title-line"><h2 id="workspace-heading">Project</h2><span id="project-total" class="project-total"></span></div><p id="project-subtitle" class="project-subtitle" hidden></p></div>
+        <div class="directory-header-actions"><button id="refresh-projects" class="refresh-button" type="button" aria-label="Refresh projects" title="Refresh from phone">↻</button><button id="context-add" class="project-add-button" type="button" aria-haspopup="dialog">＋ Project</button></div>
+      </header>
+      <div id="directory-controls" class="directory-controls">
+        <label class="project-search"><span aria-hidden="true">⌕</span><input id="project-search" type="search" placeholder="Search..." aria-label="Search projects"></label>
+        <div class="filter-rail" role="group" aria-label="Filter projects by work status">
+          <button class="filter-chip active" type="button" data-filter="ALL" aria-pressed="true">All</button><span class="filter-divider"></span>
+          <button class="filter-chip" type="button" data-filter="NEED_YOU" aria-pressed="false">Needs You</button>
+          <button class="filter-chip" type="button" data-filter="PROCESSING" aria-pressed="false">Running</button>
+          <button class="filter-chip" type="button" data-filter="READY" aria-pressed="false">Ready</button>
+          <button class="filter-chip" type="button" data-filter="FOCUS" aria-pressed="false">Focused</button>
+          <button class="filter-chip" type="button" data-filter="PAUSED" aria-pressed="false">Paused</button>
+          <button class="filter-chip" type="button" data-filter="SNOOZED" aria-pressed="false">Scheduled</button>
+          <button class="filter-chip" type="button" data-filter="BLOCKED" aria-pressed="false">Blocked</button>
+        </div>
+      </div>
+      <p id="workspace-status" role="status" aria-live="polite"></p>
+      <section id="offline-home-card" class="offline-home-card" hidden aria-label="Offline copy">
+        <div class="offline-home-icon" aria-hidden="true">▣</div><div class="offline-home-copy"><strong id="offline-home-title">Offline copy</strong><p id="offline-home-description"></p><span id="offline-home-stamp"></span></div>
+        <div class="offline-home-actions"><button id="offline-open" type="button" class="secondary" hidden>Open read-only</button><button id="offline-reconnect" type="button" class="secondary" hidden>Show pairing QR</button></div>
+      </section>
+      <div id="project-list"></div>
+        <dialog id="knowledge-type-picker" class="knowledge-type-picker" aria-labelledby="knowledge-type-heading" aria-describedby="knowledge-type-description">
+          <div class="knowledge-type-story"><span class="knowledge-type-overline">VIRLIN / PROJECT KNOWLEDGE</span><h2 id="knowledge-type-heading">Give this<br>idea a place.</h2><p id="knowledge-type-description">Every useful thought starts somewhere. Pick a shape and begin.</p><span id="knowledge-type-project" class="knowledge-type-project"></span></div>
+          <div class="knowledge-type-stage"><div class="knowledge-type-top"><span>NEW KNOWLEDGE</span><button id="knowledge-type-close" type="button" aria-label="Close Add Knowledge">×</button></div><h3>Choose a starting format</h3>
+            <div class="knowledge-type-formats" role="group" aria-label="Knowledge formats"><button type="button" data-kind="note" aria-pressed="true"><span aria-hidden="true">✎</span>Note</button><button type="button" data-kind="checklist" aria-pressed="false"><span aria-hidden="true">☑</span>To-do</button><button type="button" data-kind="prompt" aria-pressed="false"><span aria-hidden="true">⌘</span>Prompt</button><button type="button" data-kind="link" aria-pressed="false"><span aria-hidden="true">↗</span>Link</button></div>
+            <div class="knowledge-type-preview-head"><strong id="knowledge-type-preview-title">A page to think on</strong><span>Preview</span></div><div id="knowledge-type-preview" class="knowledge-type-preview" aria-live="polite"></div>
+            <div class="knowledge-type-foot"><span id="knowledge-type-hint">Rich text, images, headings and code—ready when you are.</span><button id="knowledge-type-create" type="button">Create note ↗</button></div>
+          </div>
+        </dialog>
+      <section id="knowledge-composer" class="knowledge-page" hidden aria-labelledby="knowledge-form-heading">
+        <div class="knowledge-page-top"><button id="knowledge-close" class="knowledge-page-back" type="button">← Project knowledge</button><span class="knowledge-page-context">SAVED ON YOUR PHONE</span></div>
+        <div class="knowledge-page-layout"><div class="knowledge-page-intro"><span class="composer-context">PROJECT KNOWLEDGE</span><h2 id="knowledge-form-heading">Add knowledge</h2><p>Write on your computer. Save to your phone when ready.</p></div>
+          <form id="knowledge-form" class="knowledge-page-form">
+            <label class="knowledge-field">Type<select id="knowledge-kind"><option value="note">Note</option><option value="checklist">To-do list</option><option value="prompt">Prompt</option><option value="link">Link</option></select></label>
+            <label class="knowledge-field">Title<input id="knowledge-title" maxlength="200" placeholder="Untitled prompt"></label>
+            <label id="knowledge-url-field" class="knowledge-field" hidden>Link URL<input id="knowledge-url" type="url" maxlength="2048" placeholder="https://example.com"></label>
+            <div id="knowledge-prompt-fields" hidden>
+              <label class="knowledge-field">Description (optional)<textarea id="knowledge-description" maxlength="4096" rows="3" placeholder="What is this prompt for?"></textarea></label>
+              <label class="knowledge-field">Tags (comma separated)<input id="knowledge-tags" maxlength="1000" placeholder="research, draft"></label>
+              <div class="knowledge-prompt-options"><label class="knowledge-field">Content mode<select id="knowledge-mode"><option value="PROMPT">Prompt</option><option value="CODE">Code</option></select></label></div>
+            </div>
+            <div id="knowledge-prompt-toolbar" class="knowledge-prompt-toolbar" hidden><div id="knowledge-prompt-tabs" class="knowledge-prompt-tabs" role="tablist" aria-label="Prompt sections"><button type="button" role="tab" data-prompt-tab="prompt" aria-selected="true">Prompt</button><button type="button" role="tab" data-prompt-tab="code" aria-selected="false">Code</button><button type="button" role="tab" data-prompt-tab="response" aria-selected="false">Response</button></div><div class="knowledge-prompt-tools"><button id="knowledge-prompt-copy" type="button" class="secondary">Copy section</button><button id="knowledge-prompt-edit" type="button" class="secondary">Done editing</button></div></div>
+            <label class="knowledge-field"><span id="knowledge-content-label">Content</span><textarea id="knowledge-content" maxlength="32768" rows="15" placeholder="Paste or write your content"></textarea></label>
+            <label id="knowledge-language-field" class="knowledge-field" hidden>Code language (optional)<input id="knowledge-language" maxlength="40" placeholder="e.g. Kotlin, Python, Shell"></label>
+            <label id="knowledge-code-field" class="knowledge-field" hidden>Code<textarea id="knowledge-code" maxlength="32768" rows="15" spellcheck="false" placeholder="Paste or write code"></textarea></label>
+            <label id="knowledge-response-field" class="knowledge-field" hidden>Response you received (optional)<textarea id="knowledge-response" maxlength="32768" rows="4" placeholder="Paste a response; Virlin does not generate one"></textarea></label>
+            <p id="knowledge-hint" class="knowledge-hint">Saved directly to this project on your phone.</p>
+            <p id="knowledge-feedback" role="status" aria-live="polite"></p>
+            <div class="workspace-actions"><button id="knowledge-cancel" class="secondary" type="button">Cancel</button><button id="knowledge-submit" class="primary" type="submit">Save on phone</button></div>
+          </form>
+        </div>
+      </section>
+      <section id="knowledge-viewer" class="knowledge-page" hidden aria-labelledby="knowledge-viewer-title">
+        <div class="knowledge-page-top"><button id="knowledge-viewer-back" class="knowledge-page-back" type="button">← Project knowledge</button><span class="knowledge-page-context">FROM YOUR PHONE</span></div>
+        <div class="knowledge-page-layout"><div class="knowledge-page-intro"><span id="knowledge-viewer-kind" class="composer-context"></span><h2 id="knowledge-viewer-title">Knowledge</h2><p id="knowledge-viewer-summary"></p></div>
+          <div class="knowledge-page-form"><h2 id="knowledge-viewer-document-title"></h2><div class="knowledge-viewer-actions"><button id="knowledge-copy" class="secondary" type="button" hidden>Copy text</button><button id="knowledge-copy-formatted" class="secondary" type="button" hidden>Copy formatted</button><button id="knowledge-edit" class="primary" type="button" hidden>Edit note</button></div><div id="knowledge-viewer-content" class="knowledge-viewer-content"></div><div id="knowledge-viewer-extra"></div><p id="knowledge-viewer-feedback" role="status" aria-live="polite"></p></div>
+        </div>
+      </section>
+      <section id="knowledge-editor" class="knowledge-page knowledge-document-editor" hidden aria-labelledby="knowledge-editor-heading">
+        <div class="knowledge-document-header"><button id="knowledge-editor-back" class="knowledge-page-back" type="button">← Project knowledge</button><div class="knowledge-document-location"><span id="knowledge-editor-heading">Note</span><span id="knowledge-editor-project"></span></div><div class="knowledge-document-actions"><span id="knowledge-editor-save-state" role="status" aria-live="polite">Not saved yet</span><button id="knowledge-editor-mode" class="secondary" type="button" aria-pressed="false">Edit</button><button id="knowledge-editor-cancel" class="secondary" type="button">Close</button><button id="knowledge-editor-save" class="primary" type="button">Save to phone</button></div></div>
+        <div class="knowledge-document-toolbar" role="toolbar" aria-label="Note formatting"><button type="button" id="knowledge-toolbar-topic">＋ Topic</button><select id="knowledge-toolbar-style" aria-label="Block style"><option value="PARAGRAPH">Normal text</option><option value="HEADING_1">Heading 1</option><option value="HEADING_2">Heading 2</option><option value="HEADING_3">Heading 3</option><option value="BULLET">Bulleted list</option><option value="NUMBERED">Numbered list</option><option value="CHECKLIST">Checklist</option><option value="QUOTE">Quote</option><option value="CODE">Code</option><option value="PROMPT">Prompt callout</option><option value="TOGGLE">Toggle</option></select><select id="knowledge-toolbar-font" aria-label="Font for selected text"><option value="">Font</option><option value="Inter">Sans</option><option value="Serif">Serif</option><option value="Mono">Mono</option></select><select id="knowledge-toolbar-size" aria-label="Size for selected text"><option value="">Size</option><option value="12">12</option><option value="14">14</option><option value="16">16</option><option value="18">18</option><option value="24">24</option><option value="32">32</option></select><span class="knowledge-toolbar-divider"></span><button type="button" data-note-mark="BOLD" aria-label="Bold selected text"><strong>B</strong></button><button type="button" data-note-mark="ITALIC" aria-label="Italic selected text"><em>I</em></button><button type="button" data-note-mark="UNDERLINE" aria-label="Underline selected text"><u>U</u></button><button type="button" data-note-mark="STRIKE" aria-label="Strike selected text"><s>S</s></button><span class="knowledge-toolbar-divider"></span><button type="button" data-note-align="LEFT" aria-label="Align left">≡</button><button type="button" data-note-align="CENTER" aria-label="Align center">☰</button><button type="button" data-note-align="RIGHT" aria-label="Align right">≡</button><button type="button" id="knowledge-toolbar-check" aria-label="Toggle checklist item">☑</button><span class="knowledge-toolbar-divider"></span><button type="button" id="knowledge-toolbar-link" aria-label="Link selected text">🔗</button><button type="button" id="knowledge-toolbar-image" aria-label="Add image">▣ Image</button><button type="button" id="knowledge-toolbar-code" aria-label="Add code block">&lt;/&gt; Code</button></div>
+        <div class="knowledge-document-workspace"><aside class="knowledge-document-outline" aria-label="Document outline"><div class="knowledge-document-outline-label">DOCUMENT OUTLINE</div><div id="knowledge-editor-outline"></div></aside><main class="knowledge-document-canvas"><div class="knowledge-document-paper"><span class="composer-context">PROJECT NOTE</span><label class="knowledge-document-title-label" for="knowledge-editor-title">Title</label><textarea id="knowledge-editor-title" rows="1" maxlength="200" placeholder="Untitled note" aria-label="Note title"></textarea><div id="knowledge-editor-blocks" class="knowledge-editor-blocks"></div><p id="knowledge-editor-feedback" role="status" aria-live="polite"></p></div></main></div>
+        <div class="knowledge-document-status"><span>Phone connected · Changes save only after phone confirmation</span><span id="knowledge-editor-count">0 words</span></div>
+      </section>
+      <dialog id="knowledge-image-editor" class="knowledge-image-editor" aria-labelledby="knowledge-image-heading">
+        <div class="knowledge-image-head"><h2 id="knowledge-image-heading">Edit image</h2><button id="knowledge-image-close" type="button" aria-label="Close image editor">×</button></div>
+        <div class="knowledge-image-tools" role="toolbar" aria-label="Image editing tools"><button type="button" data-image-tool="crop" title="Crop image" aria-label="Crop image">▣</button><button type="button" data-image-tool="draw" title="Draw on image" aria-label="Draw on image">✎</button><button type="button" data-image-tool="text" title="Add text annotation" aria-label="Add text annotation">T</button><label>Color <input id="knowledge-image-color" type="color" value="#0b7d5a"></label><label>Size <input id="knowledge-image-size" type="range" min="2" max="32" value="5"></label><input id="knowledge-image-text" type="text" maxlength="120" placeholder="Annotation text" aria-label="Annotation text" hidden><button id="knowledge-image-undo" type="button" title="Undo" aria-label="Undo last change">↶</button><button id="knowledge-image-reset" type="button" title="Reset" aria-label="Reset to original">↺</button></div>
+        <div class="knowledge-image-stage"><div class="knowledge-image-canvas-wrap"><canvas id="knowledge-image-canvas" aria-label="Image editing canvas"></canvas><canvas id="knowledge-image-overlay" aria-label="Draw or select a crop area"></canvas></div></div>
+        <div class="knowledge-image-foot"><span id="knowledge-image-feedback" role="status" aria-live="polite">Choose a tool to begin.</span><button id="knowledge-image-cancel" type="button" class="secondary">Cancel</button><button id="knowledge-image-apply" type="button" class="primary">Apply to note</button></div>
+      </dialog>
+      <div class="directory-utility"><button id="bulk-projects" type="button">Bulk import projects</button></div>
+    </div>
+    <div id="workspace-composer" class="workspace-composer" hidden>
+      <div id="composer-backdrop" class="composer-backdrop"></div>
+      <div class="composer-sheet" role="dialog" aria-modal="true" aria-labelledby="composer-heading" aria-describedby="composer-context">
+        <div class="composer-handle" aria-hidden="true"></div>
+        <div class="composer-head"><div><span id="composer-context" class="composer-context"></span><h2 id="composer-heading">Add item</h2></div><button id="composer-close" class="composer-close" type="button" aria-label="Close">×</button></div>
+        <div id="composer-kinds" class="composer-kinds" role="group" aria-label="Item type" hidden><button id="composer-workstream" type="button">Workstream</button><button id="composer-standalone" type="button">Standalone task</button></div>
+        <div class="composer-modes" role="tablist" aria-label="Add method"><button id="composer-create-tab" type="button" role="tab" aria-controls="create-form" aria-selected="true">Create</button><button id="composer-bulk-tab" type="button" role="tab" aria-controls="bulk-form" aria-selected="false">Bulk import</button></div>
+        <form id="create-form" role="tabpanel" aria-labelledby="composer-create-tab" hidden><h3 id="create-heading">Create</h3><label>Title<input id="create-title" maxlength="200" required></label><label>Description (optional)<textarea id="create-description" maxlength="4096" rows="3"></textarea></label><div class="workspace-actions"><button id="create-cancel" class="secondary" type="button">Cancel</button><button class="primary" type="submit">Create on phone</button></div></form>
+        <form id="bulk-form" role="tabpanel" aria-labelledby="composer-bulk-tab" hidden><h3 id="bulk-heading">Bulk import</h3><p>Paste Virlin's version-2 outline JSON. Preview before anything is added.</p><textarea id="bulk-source" rows="10" spellcheck="false" aria-label="Outline JSON" required placeholder='{"version":2,"items":[{"name":"Phase 1","children":[{"name":"Task"}]}]}'></textarea><div id="bulk-preview" hidden></div><div class="workspace-actions"><button id="bulk-cancel" class="secondary" type="button">Cancel</button><button id="bulk-submit" class="primary" type="submit">Preview import</button></div></form>
+        <p id="composer-feedback" class="composer-feedback" role="status" aria-live="polite"></p>
+      </div>
+    </div>
+  </section>
+  <section id="wifi-help" class="panel help"><h2>Get connected</h2><p>Both devices should be on the same Wi‑Fi or hotspot.</p><ol><li><strong>Connect</strong><span>Join the same local network on both devices.</span></li><li><strong>Open Virlin Link</strong><span>On your phone, go to Apps → Virlin Link.</span></li><li><strong>Scan and approve</strong><span>Scan the QR and approve this computer.</span></li></ol><div class="pairing-note">Your projects stay on your phone. Keep Virlin open while you work; you can leave the Virlin Link page.</div></section>
+  <section id="usb-network-help" class="panel help" hidden><h2>Get connected</h2><p>No Developer options needed for USB cable.</p><ol><li><strong>Plug in</strong><span>Connect and unlock the phone.</span></li><li><strong>Enable tethering</strong><span>Turn on USB tethering in your phone’s network settings.</span></li><li><strong>Scan and approve</strong><span>Use Virlin Link on your phone.</span></li></ol><div class="pairing-note">Your projects stay on your phone. USB tethering creates a private local link and may use mobile data.</div></section>
+  <footer>No account · No cloud sync · Your phone remains the source of truth</footer>
+</main>
+<dialog id="knowledge-discard-dialog" class="knowledge-discard-dialog" aria-labelledby="knowledge-discard-title" aria-describedby="knowledge-discard-description">
+  <div class="knowledge-discard-symbol" aria-hidden="true">↶</div>
+  <p class="knowledge-discard-eyebrow">UNSAVED NOTE</p>
+  <h2 id="knowledge-discard-title">Leave this note?</h2>
+  <p id="knowledge-discard-description">Changes you haven’t saved to your phone will be lost. You can stay and save them first.</p>
+  <div class="knowledge-discard-actions"><button id="knowledge-discard-stay" type="button">Keep editing</button><button id="knowledge-discard-confirm" type="button">Discard changes</button></div>
+</dialog>
+<script type="module" src="/src/main.js"></script></body></html>

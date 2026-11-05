@@ -8,6 +8,7 @@ import com.virlin.app.domain.notedoc.NoteDocRun
 import com.virlin.app.domain.notedoc.NoteDocTable
 import com.virlin.app.domain.notedoc.NoteRuns
 import com.virlin.app.domain.notedoc.VirlinNoteCodec
+import com.virlin.app.domain.notedoc.visibleNoteBlocks
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -18,6 +19,72 @@ import org.junit.Test
  * edits and round-tripping. No Compose, no database, no clock.
  */
 class VirlinNoteDocTest {
+
+    @Test fun explicitCodeAndMathIdentitySurvivesSaveAndReload() {
+        val blocks = listOf(
+            NoteDocBlock("code", NoteDocBlockType.CODE, "E=mc^2", mathMode = false),
+            NoteDocBlock("math", NoteDocBlockType.CODE, "E=mc^2", mathMode = true),
+        )
+        assertEquals(blocks, VirlinNoteCodec.decode(VirlinNoteCodec.encode(blocks)))
+    }
+
+    @Test fun collapsedHeading_hidesNestedSectionButNotNextPeer() {
+        val blocks = listOf(
+            NoteDocBlock("intro", text = "Visible"),
+            NoteDocBlock("first", NoteDocBlockType.HEADING_1, "First", isCollapsed = true),
+            NoteDocBlock("body", text = "Hidden"),
+            NoteDocBlock("nested", NoteDocBlockType.HEADING_2, "Nested"),
+            NoteDocBlock("nestedBody", text = "Hidden too"),
+            NoteDocBlock("second", NoteDocBlockType.HEADING_1, "Second"),
+            NoteDocBlock("last", text = "Visible again"),
+        )
+        assertEquals(listOf("intro", "first", "second", "last"), visibleNoteBlocks(blocks).map { it.id })
+        assertEquals(blocks, VirlinNoteCodec.decode(VirlinNoteCodec.encode(blocks)))
+    }
+
+    @Test fun headingFoldMode_respectsThreeLevelsAndRestoresFullDocument() {
+        val blocks = listOf(
+            NoteDocBlock("h1a", NoteDocBlockType.HEADING_1, "Main A"),
+            NoteDocBlock("lead", text = "Lead"),
+            NoteDocBlock("h2a", NoteDocBlockType.HEADING_2, "Section A", isCollapsed = true),
+            NoteDocBlock("h3a", NoteDocBlockType.HEADING_3, "Subsection"),
+            NoteDocBlock("deep", text = "Deep body"),
+            NoteDocBlock("h2b", NoteDocBlockType.HEADING_2, "Section B"),
+            NoteDocBlock("body", text = "Visible body"),
+            NoteDocBlock("h1b", NoteDocBlockType.HEADING_1, "Main B"),
+            NoteDocBlock("end", text = "Last body"),
+        )
+        assertEquals(listOf("h1a", "lead", "h2a", "h2b", "body", "h1b", "end"),
+            visibleNoteBlocks(blocks).map { it.id })
+        assertEquals(blocks.map { it.id }, visibleNoteBlocks(blocks, foldHeadings = false).map { it.id })
+        val mainCollapsed = blocks.map { if (it.id == "h1a") it.copy(isCollapsed = true) else it }
+        assertEquals(listOf("h1a", "h1b", "end"), visibleNoteBlocks(mainCollapsed).map { it.id })
+        val allExpanded = blocks.map { if (it.id == "h2a") it.copy(isCollapsed = false) else it }
+        assertEquals(blocks.map { it.id }, visibleNoteBlocks(allExpanded).map { it.id })
+        assertEquals(blocks, VirlinNoteCodec.decode(VirlinNoteCodec.encode(blocks)))
+    }
+
+    @Test fun imageBlock_roundTripsWithDurablePath() {
+        val image = NoteDocBlock("image-1", NoteDocBlockType.IMAGE,
+            imagePath = "123e4567-e89b-12d3-a456-426614174000")
+        assertEquals(image, VirlinNoteCodec.decode(VirlinNoteCodec.encode(listOf(image))).single())
+        assertFalse(image.type.isTextual)
+    }
+
+    @Test fun collapsedToggle_hidesOnlyItsDescendantsAndRoundTrips() {
+        val blocks = listOf(
+            NoteDocBlock("toggle", NoteDocBlockType.TOGGLE, "Details", indent = 0, isCollapsed = true),
+            NoteDocBlock("child", text = "Hidden", indent = 1),
+            NoteDocBlock("nested", NoteDocBlockType.TOGGLE, "Nested", indent = 1),
+            NoteDocBlock("deep", text = "Also hidden", indent = 2),
+            NoteDocBlock("sibling", text = "Visible", indent = 0),
+        )
+        assertEquals(listOf("toggle", "sibling"), visibleNoteBlocks(blocks).map { it.id })
+        assertEquals(blocks, VirlinNoteCodec.decode(VirlinNoteCodec.encode(blocks)))
+        assertEquals(blocks.map { it.id }, visibleNoteBlocks(blocks.mapIndexed { i, block ->
+            if (i == 0) block.copy(isCollapsed = false) else block
+        }).map { it.id })
+    }
 
     // ---- selection formatting -------------------------------------------------------------
 

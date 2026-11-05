@@ -8,21 +8,38 @@ plugins {
 
 android {
     namespace = "com.virlin.app"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.virlin.app"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 36
+        versionCode = 10
+        versionName = "1.0.9"
         vectorDrawables { useSupportLibrary = true }
         // Required for instrumented (androidTest) execution. Test-only; no runtime impact.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
+        debug {
+            versionNameSuffix = "-restored-notes-20261105"
+        }
         release {
             isMinifyEnabled = false
+            // Secrets belong to the local/CI environment, never the repository.
+            val signingValues = listOf("VIRLIN_KEYSTORE", "VIRLIN_STORE_PASSWORD", "VIRLIN_KEY_ALIAS", "VIRLIN_KEY_PASSWORD")
+                .map { providers.environmentVariable(it).orNull }
+            require(signingValues.all { it == null } || signingValues.all { !it.isNullOrBlank() }) {
+                "Provide all four VIRLIN signing environment variables, or none for an unsigned development build."
+            }
+            if (signingValues.all { !it.isNullOrBlank() }) {
+                signingConfig = signingConfigs.create("production") {
+                    storeFile = file(signingValues[0]!!)
+                    storePassword = signingValues[1]
+                    keyAlias = signingValues[2]
+                    keyPassword = signingValues[3]
+                }
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -45,9 +62,17 @@ android {
     }
 }
 
+// Native Robolectric resources must not accumulate across the whole multi-SDK suite.
+tasks.withType<Test>().configureEach {
+    maxHeapSize = "2g"
+    maxParallelForks = 1
+    forkEvery = 40
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
+    implementation("androidx.lifecycle:lifecycle-process:2.8.3")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.compose.ui:ui")
@@ -57,6 +82,8 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("org.jsoup:jsoup:1.23.2")
 
     // ---- Room: durable local persistence behind WorkStreamRepository (Pass 5) ----
     implementation("androidx.room:room-runtime:2.6.1")

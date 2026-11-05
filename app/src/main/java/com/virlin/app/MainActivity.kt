@@ -9,7 +9,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.lifecycleScope
 import com.virlin.app.debug.VirlinStartup
 import com.virlin.app.domain.VirlinGraph
-import com.virlin.app.mock.MockTimerEngine
 import com.virlin.app.platform.NotificationNavigation
 import com.virlin.app.ui.navigation.VirlinApp
 import com.virlin.app.ui.theme.VirlinTheme
@@ -52,8 +51,8 @@ class MainActivity : ComponentActivity() {
         }
         VirlinStartup.mark("setContent_END")
 
-        MockTimerEngine.start()
-        VirlinStartup.mark("MockTimerEngine.start_DONE")
+        // DomainDisplayBridge derives live counters from persisted timestamps.
+        VirlinStartup.mark("DomainDisplayTicker.ready")
 
         // Hydrate on IO; DomainDisplayBridge starts inside ensureReady after bind.
         lifecycleScope.launch {

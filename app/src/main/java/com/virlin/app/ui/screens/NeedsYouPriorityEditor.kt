@@ -67,6 +67,7 @@ fun priorityScopeTag(scope: PriorityScope) = "priority_scope_" + when (scope) {
     PriorityScope.Always -> "always"
     PriorityScope.CurrentTerm -> "current_term"
     is PriorityScope.Until -> "custom"
+    is PriorityScope.NextReturns -> "next_returns"
 }
 fun priorityCustomTag(hours: Long) = "priority_custom_${hours}h"
 

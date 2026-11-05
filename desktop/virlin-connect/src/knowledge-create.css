@@ -1,0 +1,21 @@
+#knowledge-composer.is-dedicated-create .knowledge-page-layout{display:block;max-width:1080px;margin:auto}
+#knowledge-composer.is-dedicated-create .knowledge-page-intro{background:transparent;border:0;padding:0 0 18px}
+#knowledge-composer.is-dedicated-create .knowledge-page-intro p{display:none}
+#knowledge-composer.is-dedicated-create .knowledge-page-form{padding:clamp(20px,4vw,48px);min-height:65vh}
+#knowledge-composer.is-dedicated-create label:has(#knowledge-kind){display:none}
+#knowledge-composer.is-dedicated-create #knowledge-title{font-size:30px;border:0;border-bottom:1px solid #dce9df;border-radius:0;padding:12px 0 18px;background:transparent}
+#knowledge-composer.is-checklist-create label:has(#knowledge-content),#knowledge-composer.is-checklist-create #knowledge-hint{display:none}
+#knowledge-composer.is-link-create #knowledge-form>.knowledge-field,#knowledge-composer.is-link-create #knowledge-hint,#knowledge-composer.is-link-create #knowledge-form>.workspace-actions{display:none}
+.knowledge-create-surface[hidden]{display:none}
+.checklist-create-page{margin-top:24px;color:#183126}
+.checklist-create-page .checklist-progress{padding:22px;border:1px solid #dce9df;border-radius:16px;background:#f9fcfa}
+.checklist-create-count{display:block;margin-bottom:7px;font-size:22px}
+.checklist-create-page .checklist-progress>span{font-size:13px;color:#718378}
+.checklist-create-page .checklist-actions{display:flex;justify-content:space-between;align-items:center;margin:22px 0}
+.checklist-create-items{display:grid;gap:9px}
+.checklist-create-item{display:flex;align-items:center;gap:13px;background:#fff;border:1px solid #dce9df;border-radius:12px;padding:16px}
+.checklist-create-item>span:nth-child(2){flex:1;overflow-wrap:anywhere}
+.checklist-create-item>button{border:0;background:transparent;color:#718378;font-size:22px;cursor:pointer}
+.checklist-create-page dialog textarea{min-height:200px}
+.checklist-create-page dialog ol{padding-left:22px;line-height:1.8;overflow-wrap:anywhere}
+.checklist-create-page .checklist-batch-grid{align-items:stretch}

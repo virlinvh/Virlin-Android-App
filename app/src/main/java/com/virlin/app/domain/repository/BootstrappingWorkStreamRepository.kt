@@ -27,6 +27,7 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
 
     private val bindLock = Mutex()
     @Volatile private var inner: WorkStreamRepository? = null
+    override val taskExecutionEnabled: Boolean get() = inner?.taskExecutionEnabled == true
     private var forwardJobs: List<Job> = emptyList()
 
     private val _streams = MutableStateFlow<List<WorkStream>>(emptyList())
@@ -48,6 +49,8 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     override suspend fun getTaskSteps(taskId: String) = inner?.getTaskSteps(taskId) ?: emptyList()
     override suspend fun getTaskPageBlocks(taskId: String) = inner?.getTaskPageBlocks(taskId) ?: emptyList()
     override suspend fun getNoteDoc(ownerKey: String) = inner?.getNoteDoc(ownerKey)
+    override suspend fun getMapNodePreview(ownerId: String) = inner?.getMapNodePreview(ownerId)
+    override suspend fun allMapNodePreviews() = inner?.allMapNodePreviews().orEmpty()
     override suspend fun getStages(workStreamId: String) = inner?.getStages(workStreamId) ?: emptyList()
 
     override val streams: StateFlow<List<WorkStream>> = _streams.asStateFlow()
@@ -129,6 +132,7 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     override suspend fun getOpenFocusSession(streamId: String) = inner?.getOpenFocusSession(streamId)
     override suspend fun getCurrentCycle(streamId: String) = inner?.getCurrentCycle(streamId)
     override suspend fun getLatestSnapshot(streamId: String) = inner?.getLatestSnapshot(streamId)
+    override suspend fun getSnapshots(streamId: String) = inner?.getSnapshots(streamId).orEmpty()
     override suspend fun getEvents(streamId: String) = inner?.getEvents(streamId) ?: emptyList()
     override suspend fun getEventsForStreams(streamIds: List<String>, limit: Int, offset: Int) =
         inner?.getEventsForStreams(streamIds, limit, offset) ?: emptyList()
@@ -138,6 +142,7 @@ class BootstrappingWorkStreamRepository : WorkStreamRepository {
     override suspend fun getCycles(streamId: String) = inner?.getCycles(streamId) ?: emptyList()
 
     override suspend fun getProject(id: String) = inner?.getProject(id)
+    override suspend fun pendingProjectDeletions() = inner?.pendingProjectDeletions() ?: emptyList()
     override suspend fun getTask(id: String) = inner?.getTask(id)
     override suspend fun getStreamsByProject(projectId: String) = inner?.getStreamsByProject(projectId) ?: emptyList()
     override suspend fun getTasksByProject(projectId: String) = inner?.getTasksByProject(projectId) ?: emptyList()

@@ -5,8 +5,10 @@ import androidx.lifecycle.viewModelScope
 import com.virlin.app.domain.VirlinGraph
 import com.virlin.app.domain.model.Cycle
 import com.virlin.app.domain.model.FocusSession
+import com.virlin.app.domain.model.ExternalRunInterval
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.WorkStream
+import com.virlin.app.domain.model.WorkStreamState
 import com.virlin.app.domain.repository.WorkStreamRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +18,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 
 /**
@@ -42,15 +46,19 @@ class PulseViewModel(
     init {
         // Re-read whenever the records the report is built from change.
         viewModelScope.launch {
-            combine(repository.streams, repository.projects, repository.tasks) { s, p, t -> Triple(s, p, t) }
+            val refresh = flow { while (true) { emit(Unit); delay(15_000L) } }
+            combine(repository.streams, repository.projects, repository.tasks, repository.captures, refresh) { s, p, t, c, _ ->
+                PulseSources(s, p, t, c)
+            }
                 .stateIn(viewModelScope, SharingStarted.Eagerly,
-                    Triple(repository.streams.value, repository.projects.value, repository.tasks.value))
-                .collect { (streams, projects, tasks) ->
-                    _loading.value = true
+                    PulseSources(repository.streams.value, repository.projects.value,
+                        repository.tasks.value, repository.captures.value))
+                .collect { (streams, projects, tasks, captures) ->
                     // Sessions and cycles are read and folded off the main thread: a long
                     // history is a lot of rows, and this runs on every change.
                     _input.value = withContext(Dispatchers.IO) {
-                        build(repository.allFocusSessions(), repository.allCycles(), streams, projects, tasks)
+                        build(repository.allFocusSessions(), repository.allCycles(),
+                            repository.externalRunIntervals(), streams, projects, tasks, captures)
                     }
                     _loading.value = false
                 }
@@ -60,12 +68,15 @@ class PulseViewModel(
     private fun build(
         sessions: List<FocusSession>,
         cycles: List<Cycle>,
+        runs: List<ExternalRunInterval>,
         streams: List<WorkStream>,
         projects: List<com.virlin.app.domain.model.Project>,
-        tasks: List<Task>
+        tasks: List<Task>,
+        captures: List<com.virlin.app.domain.model.CaptureItem>
     ): PulseInput {
         val streamById = streams.associateBy { it.id }
-        val intervals = ArrayList<PulseInterval>(sessions.size + cycles.size)
+        val taskById = tasks.associateBy { it.id }
+        val intervals = ArrayList<PulseInterval>(sessions.size + cycles.size + runs.size)
 
         sessions.forEach { session ->
             val stream = streamById[session.workStreamId]
@@ -99,6 +110,35 @@ class PulseViewModel(
             )
         }
 
+        // New execution timers use persisted external-run history as well as live processing
+        // state. Union arithmetic in calculatePulse prevents a legacy Cycle covering the same
+        // hand-off from being counted twice.
+        fun addRun(run: ExternalRunInterval, id: String) {
+            if (run.end <= run.start) return
+            val task = taskById[run.taskId ?: run.ownerId]
+            val stream = streamById[run.ownerId] ?: task?.workStreamId?.let(streamById::get)
+            intervals += PulseInterval(id, run.start, run.end, PulseKind.EXTERNAL,
+                projectId = stream?.projectId ?: task?.projectId,
+                workstreamId = stream?.id, taskId = run.taskId ?: task?.id)
+        }
+        runs.forEach { run -> addRun(run, "run:${run.ownerId}:${run.start.toEpochMilli()}") }
+        val now = java.time.Instant.now()
+        streams.forEach { stream ->
+            val start = stream.processingStartedAt
+            if (stream.state == WorkStreamState.PROCESSING && !stream.externalTrackingPaused && start != null) {
+                addRun(ExternalRunInterval(stream.id, stream.activeTaskId, start,
+                    minOf(now, stream.checkAt ?: now)), "live-stream:${stream.id}")
+            }
+        }
+        tasks.forEach { task ->
+            val execution = task.execution
+            val start = execution?.processingStartedAt
+            if (execution?.state == WorkStreamState.PROCESSING && !execution.externalTrackingPaused && start != null) {
+                addRun(ExternalRunInterval(task.id, task.id, start,
+                    minOf(now, execution.checkAt ?: now)), "live-task:${task.id}")
+            }
+        }
+
         return PulseInput(
             intervals = intervals,
             projects = projects.map { PulseProject(it.id, it.title) },
@@ -113,7 +153,15 @@ class PulseViewModel(
                     completedAt = task.completedAt,
                     projectId = task.projectId
                 )
-            }
+            },
+            captures = captures.map { PulseCapture(it.id, it.createdAt, it.projectId) }
         )
     }
 }
+
+private data class PulseSources(
+    val streams: List<WorkStream>,
+    val projects: List<com.virlin.app.domain.model.Project>,
+    val tasks: List<Task>,
+    val captures: List<com.virlin.app.domain.model.CaptureItem>
+)

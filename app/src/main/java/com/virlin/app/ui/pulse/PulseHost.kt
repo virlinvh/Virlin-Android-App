@@ -36,7 +36,11 @@ fun PulseScreen(navController: NavController, vm: PulseViewModel = viewModel()) 
     } else {
         VirlinPulseScreen(
             input = input,
-            onProject = { navController.navigate(pulseProject(it)) },
+            onProject = { id, period, date ->
+                navController.currentBackStackEntry?.savedStateHandle?.set("pulse_period", period.name)
+                navController.currentBackStackEntry?.savedStateHandle?.set("pulse_date", date.toString())
+                navController.navigate(pulseProject(id))
+            },
             onInfoSaved = { explaining = true }
         )
     }
@@ -52,16 +56,15 @@ fun PulseScreen(navController: NavController, vm: PulseViewModel = viewModel()) 
 private fun SavedTimeInfoSheet(onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Estimated time saved") },
+        title = { Text("About Momentum") },
         text = {
             Text(
-                "While you focused on one task, an external process was running on a different " +
-                    "one. Virlin measures how long those two genuinely overlapped.\n\n" +
-                    "It excludes paused timers, overlap on the same task, and work whose task is " +
-                    "unknown. It is already part of both the focus and the external totals, and " +
-                    "is never added on top of them.\n\n" +
-                    "It is a measure of parallel work that actually happened — not proof that " +
-                    "the same work would have taken longer any other way."
+                "Focus and external time come from recorded intervals. Active days count days " +
+                    "with focus or a completed task; they are a record, not a streak target. " +
+                    "Tasks, workstreams and captures come from saved activity in the selected period.\n\n" +
+                    "Parallel work is an estimate: focus on one task while an external process " +
+                    "ran on another. It excludes paused timers and same-task overlap, is already " +
+                    "included in both totals, and is not added on top of them."
             )
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Got it") } }
@@ -79,8 +82,13 @@ fun PulseProjectScreen(
     val input by vm.input.collectAsState()
     if (projectId == null) return
     // The drilldown shows the same period the report was built for.
-    val report = remember(input, zone) {
-        calculatePulse(input, PulsePeriod.WEEK, LocalDate.now(zone), zone)
+    val source = navController.previousBackStackEntry?.savedStateHandle
+    val period = runCatching { PulsePeriod.valueOf(source?.get<String>("pulse_period") ?: "WEEK") }
+        .getOrDefault(PulsePeriod.WEEK)
+    val date = runCatching { LocalDate.parse(source?.get<String>("pulse_date") ?: LocalDate.now(zone).toString()) }
+        .getOrDefault(LocalDate.now(zone))
+    val report = remember(input, zone, period, date) {
+        calculatePulse(input, period, date, zone)
     }
     VirlinPulseProjectScreen(
         input = input,

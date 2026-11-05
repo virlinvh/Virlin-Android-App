@@ -37,6 +37,7 @@ data class AttachmentImportFailure(val displayName: String, val reason: String)
 data class AttachmentWorkspaceState(
     val taskId: String = "",
     val taskTitle: String = "",
+    val ownerProjectId: String? = null,
     val loading: Boolean = true,
     val importing: Boolean = false,
     val importedCount: Int = 0,
@@ -63,6 +64,7 @@ class AttachmentWorkspaceViewModel(
     private val actions: VirlinActions = VirlinGraph.actions,
     private val repository: WorkStreamRepository = VirlinGraph.repository,
     private val ids: com.virlin.app.domain.id.IdProvider = VirlinGraph.ids,
+    private val projectId: String? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AttachmentWorkspaceState(taskId = taskId))
@@ -74,13 +76,14 @@ class AttachmentWorkspaceViewModel(
         viewModelScope.launch {
             val task = repository.getTask(taskId)
             val captures = repository.captures.value
-                .filter { it.taskId == taskId && it.type == CaptureType.FILE }
+                .filter { it.type == CaptureType.FILE && it.status != com.virlin.app.domain.model.CaptureStatus.ARCHIVED && (if (projectId != null) it.projectId == projectId else it.taskId == taskId) }
                 .sortedBy { it.createdAt }
             val rows = captures.mapNotNull { capture ->
                 actions.getAttachmentByCaptureId(capture.id)?.let { AttachmentRow(capture.id, it) }
             }
             _state.value = _state.value.copy(
-                taskTitle = task?.title.orEmpty(),
+                taskTitle = (task?.title ?: projectId?.let { repository.getProject(it)?.title }).orEmpty(),
+                ownerProjectId = task?.projectId ?: projectId,
                 rows = rows,
                 loading = false,
             )
@@ -122,7 +125,7 @@ class AttachmentWorkspaceViewModel(
                             sizeBytes = imported.sizeBytes,
                             relativePath = imported.relativePath,
                             kind = imported.kind,
-                            context = CaptureContext(taskId = taskId),
+                            context = CaptureContext(projectId = projectId, taskId = taskId.takeIf { projectId == null }),
                             attachmentId = attachmentId,
                         )
                         if (saved !is ActionResult.Success) {
@@ -223,11 +226,11 @@ class AttachmentWorkspaceViewModel(
             .take(120)
 
     companion object {
-        fun factory(taskId: String, context: Context): ViewModelProvider.Factory =
+        fun factory(taskId: String, context: Context, projectId: String? = null): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    AttachmentWorkspaceViewModel(taskId, context.applicationContext) as T
+                    AttachmentWorkspaceViewModel(taskId, context.applicationContext, projectId = projectId) as T
             }
     }
 }

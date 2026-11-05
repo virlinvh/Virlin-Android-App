@@ -24,12 +24,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.virlin.app.ui.components.SafeDialog as Dialog
 import com.virlin.app.ui.screens.NowViewModel.Chooser
 import com.virlin.app.ui.screens.NowViewModel.TimedIntent
 import com.virlin.app.ui.theme.Charcoal
@@ -42,6 +44,8 @@ import com.virlin.app.ui.theme.Pearl
 @Composable
 fun NowChooserDialog(chooser: Chooser, vm: AttentionIntents) {
     val id = chooser.streamId
+    var leaveCustom by remember(chooser) { mutableStateOf(false) }
+    com.virlin.app.ui.hierarchy.HideProjectOrb()
     // Contextual permission: the first time the user schedules a timed return/check, ask to
     // post notifications so the wake-up can reach them. Never nags; denial changes nothing else.
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -53,7 +57,7 @@ fun NowChooserDialog(chooser: Chooser, vm: AttentionIntents) {
             askNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
     }
-    Dialog(onDismissRequest = vm::dismissChooser) {
+    Dialog(onDismissRequest = vm::dismissChooser, scrollContent = true) {
         Column(
             modifier = Modifier.fillMaxWidth().background(Pearl, RoundedCornerShape(24.dp)).padding(20.dp).testTag(NowChooserTag)
         ) {
@@ -61,7 +65,11 @@ fun NowChooserDialog(chooser: Chooser, vm: AttentionIntents) {
                 is Chooser.Leave -> {
                     Title("Return in:")
                     Presets(listOf(3, 5, 10, 15), tagPrefix = "leave") { ensurePermission(); vm.leave(id, it) }
-                    Secondary("CUSTOM", "chooser_custom") { vm.openCustom(id, TimedIntent.LEAVE) }
+                    if (leaveCustom) InlineLeaveMinutes { minutes ->
+                        val accepted = vm.customMinutes(id, TimedIntent.LEAVE, minutes)
+                        if (accepted) ensurePermission()
+                        accepted
+                    } else Secondary("Custom", "chooser_custom") { leaveCustom = true }
                     Secondary("LEAVE WITHOUT REMINDER", "chooser_leave_no_reminder") { vm.leave(id, null) }
                 }
                 is Chooser.HandOff -> {
@@ -122,6 +130,42 @@ fun NowChooserDialog(chooser: Chooser, vm: AttentionIntents) {
 
 const val NowChooserTag = "now_chooser"
 
+/** Leave's custom duration edits in place; the existing intent owns validation and scheduling. */
+@Composable
+private fun InlineLeaveMinutes(onSave: (Long) -> Boolean) {
+    var text by remember { mutableStateOf("") }
+    var rejected by remember { mutableStateOf(false) }
+    val minutes = text.toLongOrNull()?.takeIf { it > 0 }
+    val green = Color(0xFF073F32)
+    Column(Modifier.fillMaxWidth().background(Color(0xFFE8F7ED), RoundedCornerShape(16.dp)).padding(12.dp)) {
+        Text("Custom reminder", color = green, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            BasicTextField(
+                value = text,
+                onValueChange = { text = it.filter(Char::isDigit).take(10); rejected = false },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                textStyle = TextStyle(fontSize = 18.sp, color = green),
+                modifier = Modifier.width(68.dp).background(Color.White, RoundedCornerShape(10.dp))
+                    .padding(12.dp).testTag("chooser_custom_minutes")
+                    .then(Modifier.semantics { contentDescription = "Minutes from now" })
+            )
+            Text("min", fontSize = 13.sp, color = CharcoalMuted)
+            Spacer(Modifier.weight(1f))
+            Text("Save", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.background(if (minutes != null) green else green.copy(alpha = .35f), RoundedCornerShape(12.dp))
+                    .testTag("chooser_custom_confirm")
+                    .clickable(enabled = minutes != null, role = Role.Button) {
+                        minutes?.let { rejected = !onSave(it) }
+                    }.padding(horizontal = 20.dp, vertical = 14.dp))
+        }
+        Text(if (rejected) "Enter a valid future time." else "Minutes from now", color = CharcoalMuted,
+            fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+    }
+    Spacer(Modifier.height(8.dp))
+}
+
 @Composable
 private fun Title(text: String) {
     Text(text, fontSize = 15.sp, fontWeight = FontWeight.Black, color = Charcoal)
@@ -168,7 +212,7 @@ const val DoneForNowTag = "done_for_now"
  */
 @Composable
 fun CompletedFocusDialog(completedTitle: String, nextTitle: String?, onFocusNext: () -> Unit, onDone: () -> Unit) {
-    Dialog(onDismissRequest = onDone) {
+    Dialog(onDismissRequest = onDone, scrollContent = true) {
         Column(
             Modifier.fillMaxWidth().background(Pearl, RoundedCornerShape(24.dp)).padding(20.dp).testTag(CompletedFocusTag)
         ) {

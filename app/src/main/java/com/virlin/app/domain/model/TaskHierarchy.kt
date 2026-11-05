@@ -14,8 +14,18 @@ object TaskHierarchy {
     fun descendants(tasks: Collection<Task>, rootId: String): List<Task> {
         val byParent = tasks.groupBy { it.parentTaskId }
         val out = ArrayList<Task>()
-        fun walk(id: String) { byParent[id].orEmpty().sortedBy { it.order }.forEach { out += it; walk(it.id) } }
-        walk(rootId)
+        val visited = hashSetOf(rootId)
+        val pending = java.util.ArrayDeque<Task>()
+        fun pushChildren(id: String) {
+            byParent[id].orEmpty().sortedBy { it.order }.asReversed().forEach { pending.addLast(it) }
+        }
+        pushChildren(rootId)
+        while (pending.isNotEmpty()) {
+            val child = pending.removeLast()
+            if (!visited.add(child.id)) continue
+            out += child
+            pushChildren(child.id)
+        }
         return out
     }
 

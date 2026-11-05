@@ -9,16 +9,14 @@ import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskHierarchy
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamState
-import com.virlin.app.domain.model.effectiveAttentionState
 import java.time.Instant
 
 /**
  * WORKING FOR YOU (Phase 10) — the projection of "something else is doing this for me".
  *
  * It is a PROJECTION, not a store: an item is in Working For You exactly while its WorkStream is
- * PROCESSING and its check time has not arrived. When `now >= checkAt` the same WorkStream —
- * same id, same task, same actor, same stages — presents as attention (`CHECK`) and belongs to
- * Needs You. Nothing is copied or duplicated to move between the two sections.
+ * PROCESSING externally. Once its check becomes due it belongs only in Needs You.
+ * This hides the card, not the run: scheduling another check resumes the same identity here.
  *
  * The countdown is always `checkAt − now` (`AttentionTiming`), so backgrounding and process death
  * cannot drift it, and nothing is written per second.
@@ -34,10 +32,12 @@ data class ExternalWorkItem(
     val stage: ExternalStage?,
     val stagePosition: Int?,
     val stageCount: Int,
-    val checkAt: Instant?
+    val checkAt: Instant?,
+    val taskPath: List<String> = emptyList()
 ) {
     val id: String get() = stream.id
     val actorName: String get() = actor?.displayName ?: stream.tool ?: "External process"
+    val displayTitle: String get() = workItemTitle?.takeIf { it.isNotBlank() } ?: stream.title
 
     /** "Stage 2 · Implement fix", or null when the run has no stages. */
     fun stageLabel(): String? = stage?.let { s -> stagePosition?.let { "Stage $it · ${s.title}" } ?: s.title }
@@ -56,8 +56,8 @@ data class ExternalWorkItem(
 object ExternalWork {
 
     /**
-     * The Working For You list for [now]: externally executing streams whose check time has NOT
-     * arrived, soonest check first. Ties (and items with no check time) are ordered deterministically
+     * External runs currently PROCESSING, excluding checks awaiting human attention,
+     * soonest check first. Ties (and items with no check time) are ordered deterministically
      * by id; items with no check time come last — they are running with nothing planned.
      *
      * Deliberately NOT ordered by the Needs You priority ranking: Working For You is future-oriented
@@ -70,7 +70,7 @@ object ExternalWork {
         projects: Collection<Project> = emptyList(),
         tasks: Collection<Task> = emptyList()
     ): List<ExternalWorkItem> = streams
-        .filter { it.state == WorkStreamState.PROCESSING && effectiveAttentionState(it, now) == WorkStreamState.PROCESSING }
+        .filter { !it.externalTrackingPaused && it.state == WorkStreamState.PROCESSING }
         .sortedWith(compareBy({ it.checkAt == null }, { it.checkAt ?: Instant.MAX }, { it.id }))
         .map { item(it, stages, projects, tasks) }
 
@@ -91,7 +91,8 @@ object ExternalWork {
             stage = stage,
             stagePosition = ExternalStages.position(stages, stream.id, stage),
             stageCount = ExternalStages.count(stages, stream.id),
-            checkAt = stream.checkAt
+            checkAt = stream.checkAt,
+            taskPath = activeTask?.let { TaskHierarchy.ancestry(tasks, it.id)?.reversed()?.map { node -> node.title } }.orEmpty()
         )
     }
 

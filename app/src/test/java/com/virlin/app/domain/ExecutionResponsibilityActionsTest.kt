@@ -32,6 +32,32 @@ class ExecutionResponsibilityActionsTest {
         actions = DefaultVirlinActions(repo, clock, SequentialIdProvider())
     }
 
+    @Test fun savedProjectDefaultFlowsThroughDeepInheritanceWithoutRewritingOverrides() = runTest {
+        val p = (actions.createProject(CreateProject("P")) as ActionResult.Success).value
+        val ws = (actions.createWorkStream(CreateWorkStream("WS", projectId = p.id,
+            executionPreference = ExecutionPreference.INHERIT)) as ActionResult.Success).value
+        val root = (actions.createTask(CreateTask("Root", workStreamId = ws.id)) as ActionResult.Success).value
+        val child = (actions.createTask(CreateTask("Child", parentTaskId = root.id)) as ActionResult.Success).value
+        val deep = (actions.createTask(CreateTask("Deep", parentTaskId = child.id)) as ActionResult.Success).value
+        val explicit = (actions.createTask(CreateTask("Explicit", parentTaskId = deep.id,
+            executionPreference = ExecutionPreference.EXTERNAL)) as ActionResult.Success).value
+        val inheritedOverride = (actions.createTask(CreateTask("Under override", parentTaskId = explicit.id)) as ActionResult.Success).value
+        for (mode in listOf(EffectiveExecutionMode.EXTERNAL, EffectiveExecutionMode.HUMAN)) {
+            assertTrue(actions.setProjectExecutionDefault(p.id, mode) is ActionResult.Success)
+            assertEquals(mode, ExecutionModeResolver.resolveWorkStream(repo.getStream(ws.id)!!, repo.projects.value))
+            listOf(root, child, deep).forEach { task ->
+                val saved = repo.getTask(task.id)!!
+                assertEquals(ExecutionPreference.INHERIT, saved.executionPreference)
+                assertEquals(mode, ExecutionModeResolver.resolveTask(saved, repo.projects.value, repo.streams.value, repo.tasks.value))
+            }
+            listOf(explicit, inheritedOverride).forEach { task ->
+                assertEquals(EffectiveExecutionMode.EXTERNAL, ExecutionModeResolver.resolveTask(repo.getTask(task.id)!!,
+                    repo.projects.value, repo.streams.value, repo.tasks.value))
+            }
+            assertEquals(ExecutionPreference.EXTERNAL, repo.getTask(explicit.id)!!.executionPreference)
+        }
+    }
+
     @Test fun handOff_rejectedWhenEffectiveHuman() = runTest {
         val ws = (actions.createWorkStream(CreateWorkStream("Human WS", executionPreference = ExecutionPreference.HUMAN)) as ActionResult.Success).value
         actions.focusStream(ws.id)

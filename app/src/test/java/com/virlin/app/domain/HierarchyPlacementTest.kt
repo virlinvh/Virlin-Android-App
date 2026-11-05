@@ -64,6 +64,18 @@ class HierarchyPlacementTest {
     ) as ActionResult.Success).value
 
     private fun tasks() = repo.tasks.value
+    @Test fun workstreamReorderKeepsContentsAndOtherProjectUntouched() = runTest {
+        task("parent")
+        task("child", parent = "parent")
+        val beforeTasks = tasks().toList()
+        val other = repo.streams.value.first { it.id == "elsewhere" }
+        assertTrue(place("beta", "p1", "alpha") is ActionResult.Success)
+        assertEquals(listOf("beta", "alpha"), repo.streams.value.filter { it.projectId == "p1" }.sortedBy { it.sortOrder }.map { it.id })
+        assertEquals(beforeTasks, tasks())
+        assertEquals(other, repo.streams.value.first { it.id == "elsewhere" })
+        assertTrue(place("beta", "p1") is ActionResult.Success)
+        assertEquals(listOf("alpha", "beta"), repo.streams.value.filter { it.projectId == "p1" }.sortedBy { it.sortOrder }.map { it.id })
+    }
     private fun byId(id: String) = tasks().first { it.id == id }
     private fun childrenOf(parent: String?, stream: String?) = tasks()
         .filter { it.parentTaskId == parent && it.workStreamId == stream }

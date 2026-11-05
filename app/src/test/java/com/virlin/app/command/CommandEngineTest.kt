@@ -174,7 +174,7 @@ class CommandEngineTest {
     @Test fun complete_task_executes() = runTest {
         val r = done(Control.CompleteTask(TargetRef.ByName("Question 17")))
         assertEquals("Question 17 completed", r.summary)
-        assertEquals(TaskStatus.DONE, repo.getTask("p_q17")!!.status); assertNull(s("s1").activeTaskId); assertEquals(FOCUS, s("s1").state)
+        assertEquals(TaskStatus.DONE, repo.getTask("p_q17")!!.status); assertNull(s("s1").activeTaskId); assertEquals(READY, s("s1").state)
     }
 
     @Test fun cancel_task_requires_confirmation() = runTest {

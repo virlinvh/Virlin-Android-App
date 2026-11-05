@@ -1,6 +1,7 @@
 package com.virlin.app.domain.model
 
 import java.time.Instant
+import java.security.MessageDigest
 
 enum class PromptContentMode { PROMPT, CODE }
 
@@ -24,13 +25,21 @@ data class PromptDocument(
     /** The answer pasted by the user. Virlin never presents this as generated content. */
     val responseText: String? = null,
     val createdAt: Instant,
-    val updatedAt: Instant
+    val updatedAt: Instant,
+    /** Optional companion code, independent of the reusable prompt source. */
+    val codeText: String? = null
 ) {
     fun hasMeaningfulContent(): Boolean =
         !title.isNullOrBlank() ||
             !description.isNullOrBlank() ||
             tags.any { it.isNotBlank() } ||
             sourceText.isNotBlank() ||
+            !codeText.isNullOrBlank() ||
             !responseText.isNullOrBlank() ||
             blocks.any { it.hasMeaningfulContent() }
 }
+
+/** Opaque optimistic-concurrency token; both generation and comparison happen on the phone. */
+fun PromptDocument.editToken(): String = MessageDigest.getInstance("SHA-256")
+    .digest(toString().toByteArray(Charsets.UTF_8))
+    .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }

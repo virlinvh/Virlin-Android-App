@@ -1,5 +1,7 @@
 package com.virlin.app.platform
 
+import com.virlin.app.domain.model.executionStream
+
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -39,7 +41,7 @@ class AttentionAlarmReceiver : BroadcastReceiver() {
                         val r = VirlinGraph.actions.checkDue(streamId)
                         Log.d(TAG, "due $streamId $kind → ${r::class.simpleName}")
                         if (r is ActionResult.Success || r is ActionResult.Rejected) {
-                            val stream = VirlinGraph.repository.getStream(streamId)
+                            val stream = VirlinGraph.repository.getTask(streamId)?.executionStream() ?: VirlinGraph.repository.getStream(streamId)
                             if (stream != null) {
                                 val task = stream.activeTaskId?.let { VirlinGraph.repository.getTask(it) }
                                 AttentionNotifications.post(context, AttentionNotificationModel.build(stream, task, kind))
@@ -79,7 +81,7 @@ class AttentionAlarmReceiver : BroadcastReceiver() {
          * semantic event (kind + due time) and that time has arrived.
          */
         suspend fun validate(repository: com.virlin.app.domain.repository.WorkStreamRepository, streamId: String, kind: ScheduleKind, dueAt: Instant, now: Instant): Verdict {
-            val stream = repository.getStream(streamId) ?: return Verdict.Stale("stream missing", null)
+            val stream = repository.getTask(streamId)?.executionStream() ?: repository.getStream(streamId) ?: return Verdict.Stale("stream missing", null)
             val current = AttentionSchedule.of(stream) ?: return Verdict.Stale("no pending attention event (${stream.state})", null)
             if (current.kind != kind) return Verdict.Stale("kind changed to ${current.kind}", current)
             if (current.dueAt != dueAt) return Verdict.Stale("due time changed to ${current.dueAt}", current)

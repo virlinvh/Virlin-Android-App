@@ -369,7 +369,7 @@ private fun RemoveControl(onRemove: () -> Unit) {
     Box(
         modifier = Modifier
             .size(40.dp)
-            .clickable(interactionSource = MutableInteractionSource(), indication = null, role = Role.Button, onClick = onRemove)
+            .clickable(interactionSource = androidx.compose.runtime.remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onRemove)
             .semantics { contentDescription = "Remove" },
         contentAlignment = Alignment.Center
     ) { Icon(Icons.Rounded.Close, contentDescription = null, tint = VirlinColors.TextTertiary, modifier = Modifier.size(14.dp)) }

@@ -32,10 +32,15 @@ import kotlinx.coroutines.sync.withLock
 class InMemoryWorkStreamRepository(
     seed: List<WorkStream> = emptyList(),
     seedProjects: List<Project> = emptyList(),
-    seedTasks: List<Task> = emptyList()
+    seedTasks: List<Task> = emptyList(),
+    override val taskExecutionEnabled: Boolean = false
 ) : WorkStreamRepository {
 
     private val lock = Mutex()
+    private val deletedPreviewOwners = mutableSetOf<String>()
+    private val deletedNoteOwners = mutableSetOf<String>()
+    private val deletionQueue = LinkedHashMap<String, com.virlin.app.domain.action.ProjectDeletion>()
+    override suspend fun pendingProjectDeletions() = lock.withLock { deletionQueue.values.toList() }
     private val streamMap = LinkedHashMap<String, WorkStream>().apply { seed.forEach { put(it.id, it) } }
     private val projectMap = LinkedHashMap<String, Project>().apply { seedProjects.forEach { put(it.id, it) } }
     private val taskMap = LinkedHashMap<String, Task>().apply { seedTasks.forEach { put(it.id, it) } }
@@ -81,6 +86,7 @@ class InMemoryWorkStreamRepository(
     private val links = LinkedHashSet<com.virlin.app.domain.model.TagLink>()
     private val stepsById = LinkedHashMap<String, com.virlin.app.domain.model.TaskStep>()
     private val noteDocsByOwner = LinkedHashMap<String, com.virlin.app.domain.notedoc.VirlinNoteDoc>()
+    private val mapPreviewsByOwner = LinkedHashMap<String, com.virlin.app.domain.mappreview.MapNodePreview>()
     private val pageBlocksById = LinkedHashMap<String, com.virlin.app.domain.model.TaskPageBlock>()
     private val _tags = MutableStateFlow<List<com.virlin.app.domain.model.ProjectTag>>(emptyList())
     override val tags: StateFlow<List<com.virlin.app.domain.model.ProjectTag>> = _tags.asStateFlow()
@@ -97,6 +103,8 @@ class InMemoryWorkStreamRepository(
         pageBlocksById.values.filter { it.taskId == taskId }.sortedBy { it.order }
     }
     override suspend fun getNoteDoc(ownerKey: String) = lock.withLock { noteDocsByOwner[ownerKey] }
+    override suspend fun getMapNodePreview(ownerId: String) = lock.withLock { mapPreviewsByOwner[ownerId] }
+    override suspend fun allMapNodePreviews() = lock.withLock { mapPreviewsByOwner.toMap() }
     override suspend fun getNotesByCaptureIds(captureItemIds: List<String>) =
         lock.withLock { captureItemIds.mapNotNull { id -> noteByCapture[id]?.let { id to it } }.toMap() }
     override suspend fun getPromptsByCaptureIds(captureItemIds: List<String>) =
@@ -120,6 +128,7 @@ class InMemoryWorkStreamRepository(
     override suspend fun getOpenFocusSession(streamId: String) = lock.withLock { sessions.lastOrNull { it.workStreamId == streamId && it.isOpen } }
     override suspend fun getCurrentCycle(streamId: String) = lock.withLock { cycles.lastOrNull { it.workStreamId == streamId && it.endedAt == null } }
     override suspend fun getLatestSnapshot(streamId: String) = lock.withLock { snapshots.lastOrNull { it.workStreamId == streamId } }
+    override suspend fun getSnapshots(streamId: String) = lock.withLock { snapshots.filter { it.workStreamId == streamId } }
     override suspend fun getEvents(streamId: String) = lock.withLock { events.filter { it.workStreamId == streamId } }
     override suspend fun getEventsForStreams(streamIds: List<String>, limit: Int, offset: Int) =
         lock.withLock {
@@ -165,6 +174,8 @@ class InMemoryWorkStreamRepository(
         staged.stagedSteps.forEach { (id, st) -> stepsById[id] = st }
         staged.removedSteps.forEach { stepsById.remove(it) }
         staged.stagedNoteDocs.forEach { (key, doc) -> noteDocsByOwner[key] = doc }
+        staged.removedMapPreviews.forEach { mapPreviewsByOwner.remove(it) }
+        staged.stagedMapPreviews.forEach { (key, preview) -> mapPreviewsByOwner[key] = preview }
         staged.removedPageBlocks.forEach { pageBlocksById.remove(it) }
         staged.stagedPageBlocks.forEach { (id, block) -> pageBlocksById[id] = block }
         if (staged.removedPageBlocks.isNotEmpty() || staged.stagedPageBlocks.isNotEmpty()) {
@@ -196,11 +207,70 @@ class InMemoryWorkStreamRepository(
             voiceById[v.id] = v
             voiceByCapture[v.captureItemId] = v
         }
+        staged.deletedProjects.forEach { report ->
+            deletedPreviewOwners += report.ownerIds
+            deletedNoteOwners += report.noteOwners
+            val owners = report.streamIds + report.taskIds
+            if (report.kind == "project") projectMap.remove(report.projectId)
+            report.streamIds.forEach { streamMap.remove(it) }
+            report.taskIds.forEach { taskMap.remove(it) }
+            cycles.removeAll { it.workStreamId in owners }
+            sessions.removeAll { it.workStreamId in owners || it.taskId in report.taskIds }
+            snapshots.removeAll { it.workStreamId in owners || it.taskId in report.taskIds }
+            events.removeAll { it.workStreamId in owners || report.ownsTaskEvent(it.type.name, it.detail) }
+            stageMap.entries.removeAll { it.value.workStreamId in owners }
+            report.captureIds.forEach { id ->
+                captureMap.remove(id)
+                noteByCapture.remove(id)?.let { noteById.remove(it.id) }
+                promptByCapture.remove(id)?.let { promptById.remove(it.id) }
+                attachmentByCapture.remove(id)?.let { attachmentById.remove(it.id) }
+                voiceByCapture.remove(id)?.let { voiceById.remove(it.id) }
+            }
+            captureMap.replaceAll { _, capture -> if (capture.convertedTaskId in report.taskIds) capture.copy(convertedTaskId = null) else capture }
+            streamMap.replaceAll { _, stream -> if (stream.activeTaskId in report.taskIds) stream.copy(activeTaskId = null) else stream }
+            val tagIds = tagsById.values.filter { report.kind == "project" && it.projectId == report.projectId }.map { it.id }.toSet()
+            tagIds.forEach { tagsById.remove(it) }
+            links.removeAll { it.tagId in tagIds || it.targetId in report.ownerIds || it.targetId in report.captureIds }
+            stepsById.entries.removeAll { it.value.taskId in report.taskIds }
+            pageBlocksById.entries.removeAll { it.value.taskId in report.taskIds || it.value.contentId in report.captureIds }
+            report.noteOwners.forEach { noteDocsByOwner.remove(it) }
+            report.ownerIds.forEach { mapPreviewsByOwner.remove(it) }
+            deletionQueue[report.projectId] = report
+        }
+        staged.acknowledgedDeletions.forEach { deletionQueue.remove(it) }
+        if (staged.deletedProjects.isNotEmpty()) {
+            _projects.value = projectMap.values.toList(); _streams.value = streamMap.values.toList()
+            _tasks.value = taskMap.values.toList(); _captures.value = captureMap.values.toList().newestFirst()
+            _stages.value = stageMap.values.toList(); _tags.value = tagsById.values.toList()
+            _tagLinks.value = links.toList(); _taskSteps.value = stepsById.values.toList()
+            _taskPageBlocks.value = pageBlocksById.values.toList()
+        }
         result
     }
 
     /** Working copies for one transaction; reads see staged writes so a block is self-consistent. */
     private inner class Staged : WorkStreamWriter {
+        val deletedProjects = mutableListOf<com.virlin.app.domain.action.ProjectDeletion>()
+        val acknowledgedDeletions = mutableSetOf<String>()
+        override suspend fun acknowledgeProjectDeletion(projectId: String) { acknowledgedDeletions += projectId }
+        override suspend fun deleteProjectTree(projectId: String): com.virlin.app.domain.action.ProjectDeletion {
+            check(getProject(projectId) != null) { "Project not found." }
+            val scope = com.virlin.app.domain.action.ProjectDeletion.scope(projectId, allStreams(), allTasks(), (captureMap + captures).values.toList())
+            return deleteTree(scope)
+        }
+        override suspend fun deleteWorkStreamTree(id: String): com.virlin.app.domain.action.ProjectDeletion {
+            check(getStream(id) != null) { "Workstream not found." }
+            return deleteTree(com.virlin.app.domain.action.ProjectDeletion.branch(id, "workstream", allStreams(), allTasks(), (captureMap + captures).values.toList()))
+        }
+        override suspend fun deleteTaskTree(id: String): com.virlin.app.domain.action.ProjectDeletion {
+            check(getTask(id) != null) { "Task not found." }
+            return deleteTree(com.virlin.app.domain.action.ProjectDeletion.branch(id, "task", allStreams(), allTasks(), (captureMap + captures).values.toList()))
+        }
+        private suspend fun deleteTree(scope: com.virlin.app.domain.action.ProjectDeletion): com.virlin.app.domain.action.ProjectDeletion {
+            val report = scope.copy(attachmentIds = scope.captureIds.mapNotNull { getAttachmentByCaptureId(it)?.id }.toSet())
+            deletedProjects += report
+            return report
+        }
         val streams = LinkedHashMap<String, WorkStream>()
         val projects = LinkedHashMap<String, Project>()
         val tasks = LinkedHashMap<String, Task>()
@@ -224,6 +294,8 @@ class InMemoryWorkStreamRepository(
         val stagedSteps = LinkedHashMap<String, com.virlin.app.domain.model.TaskStep>()
         val removedSteps = LinkedHashSet<String>()
         val stagedNoteDocs = LinkedHashMap<String, com.virlin.app.domain.notedoc.VirlinNoteDoc>()
+        val stagedMapPreviews = LinkedHashMap<String, com.virlin.app.domain.mappreview.MapNodePreview>()
+        val removedMapPreviews = LinkedHashSet<String>()
         val stagedPageBlocks = LinkedHashMap<String, com.virlin.app.domain.model.TaskPageBlock>()
         val removedPageBlocks = LinkedHashSet<String>()
 
@@ -255,7 +327,20 @@ class InMemoryWorkStreamRepository(
 
         override suspend fun noteDocOf(ownerKey: String) =
             stagedNoteDocs[ownerKey] ?: noteDocsByOwner[ownerKey]
-        override suspend fun saveNoteDoc(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc) { stagedNoteDocs[doc.ownerKey] = doc }
+        override suspend fun saveNoteDoc(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc) {
+            check(doc.ownerKey !in deletedNoteOwners && deletedProjects.none { doc.ownerKey in it.noteOwners }) { "Note owner was deleted." }
+            stagedNoteDocs[doc.ownerKey] = doc
+        }
+        override suspend fun mapNodePreviewOf(ownerId: String) =
+            if (ownerId in removedMapPreviews) null
+            else stagedMapPreviews[ownerId] ?: mapPreviewsByOwner[ownerId]
+        override suspend fun saveMapNodePreview(preview: com.virlin.app.domain.mappreview.MapNodePreview) {
+            check(preview.ownerId !in deletedPreviewOwners && deletedProjects.none { preview.ownerId in it.ownerIds }) { "Preview owner was deleted." }
+            stagedMapPreviews[preview.ownerId] = preview; removedMapPreviews.remove(preview.ownerId)
+        }
+        override suspend fun deleteMapNodePreview(ownerId: String) {
+            removedMapPreviews += ownerId; stagedMapPreviews.remove(ownerId)
+        }
         override suspend fun pageBlocksOf(taskId: String) =
             (pageBlocksById + stagedPageBlocks).values.filter { it.taskId == taskId && it.id !in removedPageBlocks }.sortedBy { it.order }
         override suspend fun getPageBlock(id: String) =
@@ -287,7 +372,7 @@ class InMemoryWorkStreamRepository(
         override suspend fun saveVoiceDocument(voice: VoiceDocument) {
             voices[voice.id] = voice
         }
-        override suspend fun getStream(id: String) = streams[id] ?: streamMap[id]
+        override suspend fun getStream(id: String) = if (deletedProjects.any { id in it.streamIds }) null else streams[id] ?: streamMap[id]
         override suspend fun getActiveFocus(): WorkStream? {
             val merged = LinkedHashMap(streamMap).apply { putAll(streams) }
             return merged.values.firstOrNull { it.state == WorkStreamState.FOCUS }
@@ -302,14 +387,16 @@ class InMemoryWorkStreamRepository(
             if (staged != null) return staged.takeIf { it.endedAt == null }
             return this@InMemoryWorkStreamRepository.cycles.lastOrNull { it.workStreamId == streamId && it.endedAt == null }
         }
+        override suspend fun getCycle(id: String): Cycle? =
+            cycleUpdates.lastOrNull { it.id == id } ?: cycles[id] ?: this@InMemoryWorkStreamRepository.cycles.lastOrNull { it.id == id }
         override suspend fun getLatestSnapshot(streamId: String) =
             snapshots.lastOrNull { it.workStreamId == streamId }
                 ?: this@InMemoryWorkStreamRepository.snapshots.lastOrNull { it.workStreamId == streamId }
 
-        override suspend fun getProject(id: String) = projects[id] ?: projectMap[id]
-        override suspend fun getTask(id: String) = tasks[id] ?: taskMap[id]
-        override suspend fun allTasks(): List<Task> = LinkedHashMap(taskMap).apply { putAll(tasks) }.values.toList()
-        override suspend fun allStreams(): List<WorkStream> = LinkedHashMap(streamMap).apply { putAll(streams) }.values.toList()
+        override suspend fun getProject(id: String) = if (deletedProjects.any { it.kind == "project" && it.projectId == id }) null else projects[id] ?: projectMap[id]
+        override suspend fun getTask(id: String) = if (deletedProjects.any { id in it.taskIds }) null else tasks[id] ?: taskMap[id]
+        override suspend fun allTasks(): List<Task> = LinkedHashMap(taskMap).apply { putAll(tasks) }.values.filter { task -> deletedProjects.none { task.id in it.taskIds } }
+        override suspend fun allStreams(): List<WorkStream> = LinkedHashMap(streamMap).apply { putAll(streams) }.values.filter { stream -> deletedProjects.none { stream.id in it.streamIds } }
         override suspend fun saveProject(project: Project) { projects[project.id] = project }
         override suspend fun saveTask(task: Task) { tasks[task.id] = task }
         override suspend fun saveStream(stream: WorkStream) { streams[stream.id] = stream }
@@ -326,5 +413,7 @@ class InMemoryWorkStreamRepository(
             ExternalStages.of(LinkedHashMap(stageMap).apply { putAll(stages) }.values, workStreamId)
         override suspend fun saveStage(stage: ExternalStage) { stages[stage.id] = stage }
         override suspend fun appendEvent(event: WorkStreamEvent) { events += event }
+        override suspend fun executionEvents(streamId: String) =
+            (this@InMemoryWorkStreamRepository.events + events).filter { it.workStreamId == streamId }
     }
 }

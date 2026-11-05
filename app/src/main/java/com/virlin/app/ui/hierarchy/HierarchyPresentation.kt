@@ -93,22 +93,28 @@ object HierarchyPresentation {
         val byParent = tasks.groupBy { it.parentTaskId }.mapValues { (_, v) -> v.sortedBy { it.order } }
         val hasChild = tasks.mapNotNull { it.parentTaskId }.toHashSet()
         val out = ArrayList<TaskRow>()
-        fun walk(parent: String?, depth: Int) {
+        val progress = ProgressCalculator.forTasks(tasks)
+        val pending = java.util.ArrayDeque<Pair<Task, Int>>()
+        val visited = hashSetOf<String>()
+        fun pushChildren(parent: String?, depth: Int) {
             val children = byParent[parent].orEmpty().let { list ->
                 if (parent == null && workStreamId != null) list.filter { it.workStreamId == workStreamId } else list
             }
-            for (t in children) {
+            children.asReversed().forEach { pending.addLast(it to depth) }
+        }
+        pushChildren(rootTaskId, 0)
+        while (pending.isNotEmpty()) {
+                val (t, depth) = pending.removeLast()
+                if (!visited.add(t.id)) continue
                 val kids = t.id in hasChild
                 val expanded = kids && t.id in expandedIds
                 out += TaskRow(
                     id = t.id, task = t, depth = depth, hasChildren = kids, expanded = expanded,
                     isCurrent = t.id == activeTaskId,
-                    progress = if (kids) ProgressCalculator.ofTask(tasks, t.id).toLabel() else null
+                    progress = if (kids) progress.getValue(t.id).toLabel() else null
                 )
-                if (expanded) walk(t.id, depth + 1)
-            }
+                if (expanded) pushChildren(t.id, depth + 1)
         }
-        walk(rootTaskId, 0)
         return out
     }
 

@@ -45,6 +45,7 @@ data class ImageWorkspaceState(
     val items: List<ImageWorkspaceItem> = emptyList(),
     val selected: ImageWorkspaceItem? = null,
     val mode: ImageWorkspaceMode = ImageWorkspaceMode.LIBRARY,
+    val editOpenedFromPreview: Boolean = false,
     val edit: ImageEditSnapshot = ImageEditSnapshot(),
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
@@ -65,6 +66,7 @@ class ImageWorkspaceViewModel(
     private val actions: VirlinActions = VirlinGraph.actions,
     private val repository: WorkStreamRepository = VirlinGraph.repository,
     private val ids: IdProvider = VirlinGraph.ids,
+    private val projectId: String? = null,
 ) : ViewModel() {
     private val _state = MutableStateFlow(ImageWorkspaceState(taskId = taskId))
     val state: StateFlow<ImageWorkspaceState> = _state.asStateFlow()
@@ -76,8 +78,10 @@ class ImageWorkspaceViewModel(
 
     fun refresh() {
         viewModelScope.launch {
+            val ownerProject = projectId ?: initialCaptureId?.let { repository.getCapture(it)?.projectId }
             val captures = repository.captures.value.filter {
-                it.type == CaptureType.FILE && (taskId == null || it.taskId == taskId)
+                it.type == CaptureType.FILE && it.status != com.virlin.app.domain.model.CaptureStatus.ARCHIVED && (taskId == null || it.taskId == taskId) &&
+                    (ownerProject == null || it.projectId == ownerProject)
             }
             val images = captures.mapNotNull { capture ->
                 val document = actions.getAttachmentByCaptureId(capture.id) ?: return@mapNotNull null
@@ -93,11 +97,11 @@ class ImageWorkspaceViewModel(
                 else -> _state.value.selected?.let { old -> images.firstOrNull { it.capture.id == old.capture.id } }
             }
             _state.value = _state.value.copy(
-                taskTitle = taskId?.let { repository.getTask(it)?.title }.orEmpty(),
+                taskTitle = (taskId?.let { repository.getTask(it)?.title } ?: ownerProject?.let { repository.getProject(it)?.title }).orEmpty(),
                 loading = false,
                 items = images,
                 selected = selected,
-                mode = if (initialCaptureId != null && selected != null && _state.value.mode == ImageWorkspaceMode.LIBRARY) ImageWorkspaceMode.EDIT else _state.value.mode,
+                mode = if (initialCaptureId != null && selected != null && _state.value.mode == ImageWorkspaceMode.LIBRARY) ImageWorkspaceMode.PREVIEW else _state.value.mode,
             )
             if (selected != null && history.isEmpty()) resetHistory()
         }
@@ -125,7 +129,10 @@ class ImageWorkspaceViewModel(
                             sizeBytes = file.sizeBytes,
                             relativePath = file.relativePath,
                             kind = AttachmentKind.IMAGE,
-                            context = CaptureContext(taskId = taskId),
+                            context = CaptureContext(
+                                projectId = projectId ?: initialCaptureId?.let { repository.getCapture(it)?.projectId },
+                                workStreamId = initialCaptureId?.let { repository.getCapture(it)?.workStreamId },
+                                taskId = taskId ?: initialCaptureId?.let { repository.getCapture(it)?.taskId }),
                             attachmentId = attachmentId,
                         )
                         if (result is ActionResult.Success) savedCount++ else {
@@ -149,10 +156,16 @@ class ImageWorkspaceViewModel(
         }
     }
 
-    fun edit(item: ImageWorkspaceItem) {
-        _state.value = _state.value.copy(selected = item, mode = ImageWorkspaceMode.EDIT)
+    fun preview(item: ImageWorkspaceItem) {
+        _state.value = _state.value.copy(selected = item, mode = ImageWorkspaceMode.PREVIEW)
+    }
+
+    fun edit(item: ImageWorkspaceItem, fromPreview: Boolean = false) {
+        _state.value = _state.value.copy(selected = item, mode = ImageWorkspaceMode.EDIT, editOpenedFromPreview = fromPreview)
         resetHistory()
     }
+
+    fun editSelectedFromPreview() { _state.value.selected?.let { edit(it, fromPreview = true) } }
 
     fun setMode(mode: ImageWorkspaceMode) {
         if (mode != ImageWorkspaceMode.LIBRARY && _state.value.selected == null) return
@@ -234,11 +247,11 @@ class ImageWorkspaceViewModel(
     }
 
     companion object {
-        fun factory(taskId: String?, captureId: String?, context: Context): ViewModelProvider.Factory =
+        fun factory(taskId: String?, captureId: String?, context: Context, projectId: String? = null): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    ImageWorkspaceViewModel(taskId, captureId, context.applicationContext) as T
+                    ImageWorkspaceViewModel(taskId, captureId, context.applicationContext, projectId = projectId) as T
             }
     }
 }

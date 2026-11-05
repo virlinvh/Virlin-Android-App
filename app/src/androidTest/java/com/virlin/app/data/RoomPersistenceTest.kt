@@ -24,6 +24,8 @@ import com.virlin.app.domain.model.SnoozeReason
 import com.virlin.app.domain.model.Task
 import com.virlin.app.domain.model.TaskHierarchy
 import com.virlin.app.domain.model.TaskStatus
+import com.virlin.app.domain.model.executionStream
+import com.virlin.app.domain.model.executionItems
 import com.virlin.app.domain.model.WorkStream
 import com.virlin.app.domain.model.WorkStreamMode
 import com.virlin.app.domain.model.ExecutionPreference
@@ -105,6 +107,19 @@ class RoomPersistenceTest {
         ).forEach { saveTask(it) }
     }
 
+    private suspend fun seedCanonicalFixtures() {
+        seedFixtures()
+        repo.transaction {
+            listOf("s1", "s4").forEach { id ->
+                saveStream(getStream(id)!!.copy(state = WorkStreamState.READY, activeTaskId = null,
+                    processingStartedAt = null, checkAt = null))
+            }
+        }
+        assertTrue(actions.focusStream("p_q17") is ActionResult.Success)
+        assertTrue(actions.startExternalWork(com.virlin.app.domain.action.StartExternalWork(
+            "s4", workItemId = "t_daypart", checkAt = t0.plusSeconds(1800))) is ActionResult.Success)
+    }
+
     // ================================================================ 1–9, 29–30: structure round trips
 
     @Test fun structure_roundTrip_projectBacked_projectless_deep_cancelled_progress() = runBlocking {
@@ -148,21 +163,21 @@ class RoomPersistenceTest {
     // ================================================================ 10–21: attention state, sessions, history
 
     @Test fun attention_roundTrip_sessions_cycles_snapshots_events_noDuplicateSession() = runBlocking {
-        seedFixtures()
+        seedCanonicalFixtures()
         // Real actions produce the rows: focus s1 (open session on q17), hand off s4 history
-        actions.leaveFocus("s1"); actions.focusStream("s1")
+        actions.leaveFocus("p_q17"); actions.focusStream("p_q17")
         val openBefore = repo.getOpenFocusSession("s1")!!
         assertEquals("p_q17", openBefore.taskId)
-        clock.advance(Duration.ofMinutes(31)); actions.checkDue("s4")
-        actions.resultReadyLater("s4", clock.now().plus(Duration.ofMinutes(10)))
-        actions.addNote("s4", "parser handles dayparts")
+        clock.advance(Duration.ofMinutes(31)); actions.checkDue("t_daypart")
+        actions.resultReadyLater("t_daypart", clock.now().plus(Duration.ofMinutes(10)))
+        actions.addNote("t_daypart", "parser handles dayparts")
         val eventsBefore = repo.getEvents("s4").map { it.type }
         val snapBefore = repo.getLatestSnapshot("s4")!!
         val cyclesBefore = repo.getCycles("s1")
 
         val r = reload()
-        // Focus survives with the SAME open session — nothing was inserted on reload
-        val s1 = r.getStream("s1")!!
+        // Focus survives on the exact leaf with the SAME open session.
+        val s1 = r.getTask("p_q17")!!.executionStream()
         assertEquals(WorkStreamState.FOCUS, s1.state); assertEquals("p_q17", s1.activeTaskId)
         val open = r.getOpenFocusSession("s1")!!
         assertEquals(openBefore, open); assertNull(open.endedAt); assertEquals("p_q17", open.taskId)
@@ -170,7 +185,7 @@ class RoomPersistenceTest {
         assertEquals(Duration.ofMinutes(31), open.duration(clock.now()))                 // derived from timestamp
         assertEquals(cyclesBefore, r.getCycles("s1"))
         // Result-ready snooze survives with its reason; processing fields stay cleared
-        val s4 = r.getStream("s4")!!
+        val s4 = r.getTask("t_daypart")!!.executionStream()
         assertEquals(WorkStreamState.SNOOZED, s4.state); assertEquals(SnoozeReason.EXTERNAL_RESULT_READY, s4.snoozeReason)
         assertNull(s4.processingStartedAt); assertEquals(clock.now().plus(Duration.ofMinutes(10)), s4.snoozedUntil)
         assertEquals("t_daypart", s4.activeTaskId)
@@ -181,12 +196,12 @@ class RoomPersistenceTest {
     }
 
     @Test fun humanReturn_roundTrip() = runBlocking {
-        seedFixtures()
-        actions.leaveFocus("s1"); actions.focusStream("s1")
+        seedCanonicalFixtures()
+        actions.leaveFocus("p_q17"); actions.focusStream("p_q17")
         val at = clock.now().plus(Duration.ofMinutes(5))
-        actions.leaveFocus("s1", at)
+        actions.leaveFocus("p_q17", at)
         val r = reload()
-        val s1 = r.getStream("s1")!!
+        val s1 = r.getTask("p_q17")!!.executionStream()
         assertEquals(WorkStreamState.SNOOZED, s1.state); assertEquals(SnoozeReason.HUMAN_RETURN, s1.snoozeReason)
         assertEquals(at, s1.snoozedUntil); assertEquals(at, s1.checkAt); assertEquals("p_q17", s1.activeTaskId)
         assertEquals("p_q17", r.getLatestSnapshot("s1")!!.taskId)
@@ -239,50 +254,50 @@ class RoomPersistenceTest {
     // ================================================================ 26–28: reconciliation after downtime
 
     @Test fun overdueStates_recognizedAfterReload_withoutTicker() = runBlocking {
-        seedFixtures()
-        actions.leaveFocus("s1", clock.now().plus(Duration.ofMinutes(10)))          // human return at +10
+        seedCanonicalFixtures()
+        assertTrue(actions.leaveFocus("p_q17", clock.now().plus(Duration.ofMinutes(10))) is ActionResult.Success)
         repo.transaction {
             saveStream(ws("s9", "Codex", WorkStreamState.SNOOZED, null, WorkStreamMode.EXTERNAL, "t_x")
                 .copy(snoozeReason = SnoozeReason.EXTERNAL_RESULT_READY, snoozedUntil = t0.plusSeconds(600), checkAt = t0.plusSeconds(600)))
         }
         // s4: PROCESSING with checkAt +30. Before any time passes nothing is due.
         assertTrue(repo.dueBy(clock.now()).isEmpty())
-        assertEquals(WorkStreamState.PROCESSING, effectiveAttentionState(repo.getStream("s4")!!, clock.now()))
+        assertEquals(WorkStreamState.PROCESSING, effectiveAttentionState(repo.getTask("t_daypart")!!.executionStream(), clock.now()))
 
         // "Process dies", the user comes back 45 minutes later.
         clock.advance(Duration.ofMinutes(45))
         val r = reload()
-        val due = r.dueBy(clock.now()).map { it.id }.toSet()
-        assertEquals(setOf("s1", "s4", "s9"), due)
-        assertEquals(WorkStreamState.CHECK, effectiveAttentionState(r.getStream("s4")!!, clock.now()))   // pure projection
+        val due = executionItems(r.streams.value, r.tasks.value).filter { it.checkAt?.let { at -> at <= clock.now() } == true }.map { it.id }.toSet()
+        assertEquals(setOf("p_q17", "t_daypart", "s9"), due)
+        assertEquals(WorkStreamState.CHECK, effectiveAttentionState(r.getTask("t_daypart")!!.executionStream(), clock.now()))
         // Reconcile through the validated action, exactly as VirlinGraph.start() does
         due.forEach { assertTrue(actions.checkDue(it) is ActionResult.Success) }
-        val kinds = NowPresentation.attention(r.streams.value)
-        assertEquals(AttentionKind.RETURN_DUE, kinds["s1"])          // "Ready to continue"
-        assertEquals(AttentionKind.CHECK_DUE, kinds["s4"])           // "Check due"
+        val kinds = NowPresentation.attention(executionItems(r.streams.value, r.tasks.value))
+        assertEquals(AttentionKind.RETURN_DUE, kinds["p_q17"])
+        assertEquals(AttentionKind.CHECK_DUE, kinds["t_daypart"])
         assertEquals(AttentionKind.RESULT_READY, kinds["s9"])        // "Result ready"
         assertNull(r.getActiveFocus())                               // nothing stole Focus
-        assertEquals("p_q17", r.getStream("s1")!!.activeTaskId); assertEquals("t_daypart", r.getStream("s4")!!.activeTaskId)
+        assertNull(r.getStream("s1")!!.activeTaskId); assertNull(r.getStream("s4")!!.activeTaskId)
         // And it stays that way across yet another reload
         val r2 = reload()
-        assertEquals(3, r2.streams.value.count { it.state == WorkStreamState.CHECK })
-        assertEquals(SnoozeReason.HUMAN_RETURN, r2.getStream("s1")!!.snoozeReason)
+        assertEquals(3, executionItems(r2.streams.value, r2.tasks.value).count { it.state == WorkStreamState.CHECK })
+        assertEquals(SnoozeReason.HUMAN_RETURN, r2.getTask("p_q17")!!.execution!!.snoozeReason)
     }
 
     @Test fun beforeDue_nothingChanges_afterReload() = runBlocking {
-        seedFixtures()
-        actions.leaveFocus("s1", clock.now().plus(Duration.ofMinutes(10)))
+        seedCanonicalFixtures()
+        assertTrue(actions.leaveFocus("p_q17", clock.now().plus(Duration.ofMinutes(10))) is ActionResult.Success)
         clock.advance(Duration.ofMinutes(3))
         val r = reload()
         assertTrue(r.dueBy(clock.now()).isEmpty())
-        assertEquals(WorkStreamState.SNOOZED, r.getStream("s1")!!.state)
-        assertEquals(WorkStreamState.PROCESSING, effectiveAttentionState(r.getStream("s4")!!, clock.now()))
+        assertEquals(WorkStreamState.SNOOZED, r.getTask("p_q17")!!.execution!!.state)
+        assertEquals(WorkStreamState.PROCESSING, effectiveAttentionState(r.getTask("t_daypart")!!.executionStream(), clock.now()))
     }
 
     // ================================================================ 49: same contract, both repositories
 
     @Test fun contract_sameObservableBehaviour_inMemory_vs_room() = runBlocking {
-        val inMemory = com.virlin.app.domain.repository.InMemoryWorkStreamRepository()
+        val inMemory = com.virlin.app.domain.repository.InMemoryWorkStreamRepository(taskExecutionEnabled = true)
         val results = listOf<WorkStreamRepository>(inMemory, repo).map { r -> runScenario(r) }
         assertEquals(results[0], results[1])
         // and the Room result is what a fresh process reads back
@@ -300,7 +315,8 @@ class RoomPersistenceTest {
         val root = (a.createTask(CreateTask(title = "Root", workStreamId = "h")) as ActionResult.Success).value
         val sub = (a.addSubtask(root.id, "Sub", Duration.ofMinutes(5)) as ActionResult.Success).value
         a.setActiveTask("h", sub.id)
-        a.focusStream("h"); a.leaveFocus("h", t0.plusSeconds(300))
+        assertTrue(a.focusStream(sub.id) is ActionResult.Success)
+        assertTrue(a.leaveFocus(sub.id, t0.plusSeconds(300)) is ActionResult.Success)
         a.focusStream("e"); a.handOffStream("e", checkAt = t0.plusSeconds(60))
         val other = (a.createTask(CreateTask(title = "Cancel me", workStreamId = "h")) as ActionResult.Success).value
         a.cancelTask(other.id)
@@ -346,7 +362,11 @@ class RoomPersistenceTest {
         assertEquals("t_nl", rc.taskId); assertEquals("s4", rc.workStreamId); assertEquals("p1", rc.projectId)
         assertEquals(t0.plus(Duration.ofMinutes(10)), rc.createdAt)
         // convert after reload → task + ORGANIZED persisted atomically
-        val t = (actions.convertCaptureToTask(c.id, CaptureTaskTarget(workStreamId = "s1")) as ActionResult.Success).value
+        // Structural edits must not add children to a legacy actively executing container.
+        repo.transaction { saveStream(ws("idle", "Capture destination", WorkStreamState.READY, "p1")) }
+        val result = actions.convertCaptureToTask(c.id, CaptureTaskTarget(workStreamId = "idle"))
+        assertTrue("Capture conversion failed: $result", result is ActionResult.Success)
+        val t = (result as ActionResult.Success).value
         reload()
         assertEquals(CaptureStatus.ORGANIZED, repo.getCapture(c.id)!!.status); assertEquals(t.id, repo.getCapture(c.id)!!.convertedTaskId)
         assertNotNull(repo.getTask(t.id))

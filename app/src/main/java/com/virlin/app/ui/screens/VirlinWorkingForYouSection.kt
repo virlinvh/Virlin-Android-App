@@ -50,6 +50,7 @@ data class WorkingTaskUi(
     val detail: String,             // e.g., "Build · Release APK"
     val checkStartedAtEpochMillis: Long? = null,
     val nextCheckAtEpochMillis: Long? = null,
+    val elapsedSeconds: Long? = null,
 )
 
 enum class WorkingStage(val label: String) {
@@ -166,6 +167,8 @@ private fun WorkingTaskCard(
                 Spacer(Modifier.height(4.dp))
                 Text(task.detail, color = Color(0xFF566364), fontSize = 12.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
+                task.elapsedSeconds?.let { Text("External ${com.virlin.app.domain.model.ExecutionTiming.formatClock(it)}",
+                    color = Color(0xFF566364), fontSize = 12.sp) }
             }
             Spacer(Modifier.width(6.dp))
             Column(horizontalAlignment = Alignment.End) {
