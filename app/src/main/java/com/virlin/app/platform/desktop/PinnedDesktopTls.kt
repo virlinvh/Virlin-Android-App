@@ -1,6 +1,7 @@
 package com.virlin.app.platform.desktop
 
 import java.net.InetSocketAddress
+import java.net.SocketTimeoutException
 import java.security.MessageDigest
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
@@ -39,8 +40,16 @@ object PinnedDesktopTls {
                 it == "TLSv1.3" || it == "TLSv1.2"
             }.toTypedArray()
             socket.soTimeout = READ_TIMEOUT_MS
-            socket.connect(InetSocketAddress(invitation.host, invitation.port), CONNECT_TIMEOUT_MS)
-            socket.startHandshake() // No pairing secret or app data is written before pin verification.
+            try {
+                socket.connect(InetSocketAddress(invitation.host, invitation.port), CONNECT_TIMEOUT_MS)
+            } catch (failure: java.io.IOException) {
+                throw DesktopConnectionFailure(DesktopConnectionFailure.Stage.NETWORK, invitation.host, failure)
+            }
+            try {
+                socket.startHandshake() // No pairing secret or app data is written before pin verification.
+            } catch (failure: SocketTimeoutException) {
+                throw DesktopConnectionFailure(DesktopConnectionFailure.Stage.TLS, invitation.host, failure)
+            }
             return socket
         } catch (failure: Exception) {
             socket.close()

@@ -32,8 +32,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,14 +50,9 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.virlin.app.R
 import com.virlin.app.platform.desktop.DesktopPairingInvitation
-import com.virlin.app.platform.desktop.PinnedDesktopTls
-import java.io.IOException
+import com.virlin.app.platform.desktop.DesktopLinkSession
 import java.net.SocketTimeoutException
-import javax.net.ssl.SSLSocket
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private val Ink = Color(0xFF19231D)
 private val Muted = Color(0xFF607267)
@@ -66,40 +60,15 @@ private val Green = Color(0xFF087858)
 private val Cream = Color(0xFFF9F8F5)
 private val SoftGreen = Color(0xFFF0F9F2)
 
-/** Pairing UI only; no task, note, file, or desktop-workspace API is exposed yet. */
+/** An explicitly approved local desktop session; project reads stay on the phone. */
 @Composable
 fun DesktopConnectScreen(onBack: () -> Unit) {
     var invitation by remember { mutableStateOf<DesktopPairingInvitation?>(null) }
-    var connection by remember { mutableStateOf<SSLSocket?>(null) }
+    val linkState by DesktopLinkSession.state.collectAsState()
+    val connected = linkState is DesktopLinkSession.State.Connected
     var status by remember { mutableStateOf<String?>(null) }
     var connecting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    // Capture the socket for this effect. Reading the mutable state in onDispose
-    // closes the *new* socket when pairing changes null -> connected.
-    DisposableEffect(connection) {
-        val ownedSocket = connection
-        onDispose { ownedSocket?.close() }
-    }
-    LaunchedEffect(connection) {
-        val observedSocket = connection ?: return@LaunchedEffect
-        withContext(Dispatchers.IO) {
-            try {
-                while (isActive && !observedSocket.isClosed) {
-                    try {
-                        if (observedSocket.inputStream.read() < 0) break
-                    } catch (_: SocketTimeoutException) {
-                        // The desktop sends no app data yet; keep waiting for a close.
-                    }
-                }
-            } catch (_: IOException) {
-                // A closed or interrupted socket is reported below.
-            }
-        }
-        if (connection === observedSocket) {
-            connection = null
-            status = "Computer disconnected. Scan a fresh code to reconnect."
-        }
-    }
     val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
         val scanned = result.contents
         if (scanned != null) {
@@ -138,19 +107,19 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
                 .border(1.dp, Color(0xFFCBE8D7), RoundedCornerShape(20.dp)).padding(18.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Icon(if (connection == null) Icons.Default.QrCodeScanner else Icons.Default.CheckCircle,
+                Icon(if (!connected) Icons.Default.QrCodeScanner else Icons.Default.CheckCircle,
                     contentDescription = null, tint = Green, modifier = Modifier.size(25.dp))
-                Text(if (connection == null) "Scan a computer" else "Computer connected",
+                Text(if (!connected) "Scan a computer" else "Computer connected",
                     fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             }
             Spacer(Modifier.height(10.dp))
             Text(
-                if (connection == null) "Scan the one-time code shown by Virlin Connect, then approve the connection."
-                else "Secure connection active. Keep this page open while testing the link.",
+                if (!connected) "Scan the one-time code shown by Virlin Connect, then approve the connection."
+                else "Secure connection active. You can use other apps or take a call while the desktop link stays active. Use Disconnect here or in the notification when finished.",
                 fontSize = 14.sp, lineHeight = 20.sp, color = Muted,
             )
             Spacer(Modifier.height(18.dp))
-            if (connection == null) {
+            if (!connected) {
                 Button(
                     onClick = {
                         invitation = null
@@ -169,8 +138,7 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
                 }
             } else {
                 OutlinedButton(onClick = {
-                    connection?.close()
-                    connection = null
+                    DesktopLinkSession.disconnect()
                     status = "Disconnected. Scan a fresh code to reconnect."
                 }, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp)) {
                     Text("Disconnect")
@@ -185,10 +153,12 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
         ) {
             Icon(Icons.Default.DesktopWindows, contentDescription = null, tint = Muted, modifier = Modifier.size(24.dp))
             Column(Modifier.weight(1f).padding(start = 13.dp)) {
-                Text("Open desktop workspace", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Muted)
-                Text("Coming in a later update", fontSize = 13.sp, color = Muted)
+                Text("Desktop workspace", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Muted)
+                Text(if (!connected) "Connect first to use it on this computer"
+                    else "Project tree, creation, and hierarchy import", fontSize = 13.sp, color = Muted)
             }
-            Icon(Icons.Default.Lock, contentDescription = "Not available yet", tint = Muted,
+            Icon(if (!connected) Icons.Default.Lock else Icons.Default.CheckCircle,
+                contentDescription = if (!connected) "Connect first" else "Available on computer", tint = Muted,
                 modifier = Modifier.size(20.dp))
         }
         if (status != null) {
@@ -209,20 +179,20 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { invitation = null },
             title = { Text("Approve this computer?") },
-            text = { Text("Connect securely to ${pending.host}? This version shares pairing status only; it does not give the computer access to your projects or files.") },
+            text = { Text("Connect securely to ${pending.host}? This computer may access your workspace while Virlin is in the background. A persistent notification lets you disconnect at any time. Files and other actions follow the permissions available in this version.") },
             confirmButton = {
                 Button(onClick = {
                     invitation = null
                     connecting = true
                     status = "Verifying this computer…"
                     scope.launch {
-                        val result = withContext(Dispatchers.IO) { connectAndApprove(pending) }
+                        val result = DesktopLinkSession.connect(pending)
                         connecting = false
                         result.onSuccess {
-                            connection = it
                             status = null
                         }.onFailure {
                             status = when (it) {
+                                is com.virlin.app.platform.desktop.DesktopConnectionFailure -> it.message
                                 is SocketTimeoutException -> "Connection timed out. Check the selected Wi-Fi or USB-tethered network and Windows firewall permission."
                                 else -> "Could not pair: ${it.message ?: "Connection failed"}. Generate a new code and try again."
                             }
@@ -232,26 +202,5 @@ fun DesktopConnectScreen(onBack: () -> Unit) {
             },
             dismissButton = { OutlinedButton(onClick = { invitation = null }) { Text("Cancel") } },
         )
-    }
-}
-
-private fun connectAndApprove(invitation: DesktopPairingInvitation): Result<SSLSocket> = runCatching {
-    val socket = PinnedDesktopTls.connect(invitation, System.currentTimeMillis() / 1000)
-    try {
-        socket.outputStream.write("PAIR ${invitation.secret}\n".toByteArray(Charsets.US_ASCII))
-        socket.outputStream.flush()
-        val expected = "PAIR-OK\n".toByteArray(Charsets.US_ASCII)
-        val received = ByteArray(expected.size)
-        var offset = 0
-        while (offset < received.size) {
-            val count = socket.inputStream.read(received, offset, received.size - offset)
-            if (count < 0) throw IOException("Computer closed the connection")
-            offset += count
-        }
-        if (!java.security.MessageDigest.isEqual(expected, received)) throw IOException("Computer rejected pairing")
-        socket
-    } catch (failure: Exception) {
-        socket.close()
-        throw failure
     }
 }

@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Link preview thumbnails are loaded only after the user enables Show preview. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
 
     <application
@@ -20,6 +23,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Virlin"
         tools:targetApi="31">
+        <service
+            android:name=".platform.desktop.DesktopLinkService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+        <receiver
+            android:name=".platform.desktop.DesktopLinkDisconnectReceiver"
+            android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:hardwareAccelerated="true"
