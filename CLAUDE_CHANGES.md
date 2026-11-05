@@ -1076,3 +1076,38 @@ source-app paste is pending the user's manual test. Details, results and limitat
   - migrations, `virlin_notes`, `virlin_note_chunks`
   - managed images, flashcard files, the old editor, dependencies
   - the user's `emulator-5554`
+
+## 2026-11-05 — Note editor stability, Copy buttons, code colours (Cursor agent)
+
+**Requested by:** User (decisions: no size cap with background parsing; Copy on code, prompt
+and equation blocks, bottom Copy only when taller than the screen; display-only highlighting;
+fix all audit findings). Details: `docs/NOTE_EDITOR_RESTORE_2026-11-05.md` § Stability pass.
+
+- **Added:** `domain/notedoc/NotePasteSafety.kt`, `ui/notes/CodeHighlighter.kt`; tests
+  `NotePasteSafetyTest`, `CodeHighlighterTest`, `NoteEditorStabilityTest`.
+- **Changed:** `NotesViewModel` (background large paste, revision-checked saves,
+  refused-save/conflict dialog, damaged-note recovery), `NoteBlockEditor` (Copy actions,
+  syntax colours, paste pill, recovery panel, read-only while pasting), `NotesRoute` (dialog,
+  panel), `NotePasteParser` (mid-paragraph links, bounded link matching).
+  `NotePasteParserTest`: two large-paste tests now inject an inline paste dispatcher; their
+  assertions are unchanged.
+- **Not touched:** schema, codecs, stored notes, dependencies, `emulator-5554`.
+- **Follow-ups (same day):** code block text defaults to 14sp (`NotesViewModel.defaultSizeFor`,
+  `NoteDocumentLayoutTest` line height). Pasted chat-assistant prompt cards are recognised:
+  new `domain/notedoc/ChatPromptCards.kt`, called once at the end of `NotePasteParser.parse`.
+  It acts only when a stand-alone "Copy prompt" button label is present; the text blocks
+  directly above become one PROMPT block (a short header line becomes its title) and the label
+  is dropped. Code, equations, headings, tables and images are never absorbed; pastes without
+  the label are returned unchanged. Tests: `ChatPromptCardsTest` (7).
+- **Note "+" sheet redesign (same day):** the plain "Add a block" picker is replaced by the
+  "Add to note" bottom sheet (new `ui/notes/NoteAddSheet.kt`): Rich blocks (quote, prompt
+  callout, code, equation, toggle, divider, table, image) and Text blocks (paragraph, H1–H3,
+  lists, checklist) with icon, subtitle and mini preview, plus a "Format & tools" grid that
+  mirrors every other toolbar action through the route's existing `handleTool`, honouring the
+  toolbar's enabled/active state. Equation is newly reachable here via the existing
+  `insertEquation`. `NotesRoute`: the AddBlock branch now hosts the sheet; the tool state is
+  shared with the toolbar. Toolbar, editor, actions and persistence unchanged.
+  Tests: `NoteAddSheetTest` (3).
+- **Build label:** debug `versionNameSuffix` is now `-notes-addsheet-20261105-2225` so this
+  build is distinguishable from earlier same-day builds that shared the old suffix.
+  APK: `releases/Virlin-Android-1.0.9-notes-addsheet-20261105-2225-debug.apk`.

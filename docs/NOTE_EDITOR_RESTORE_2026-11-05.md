@@ -55,3 +55,41 @@ before querying that item's node; its viewport assertion was not relaxed.
 
 A real ChatGPT clipboard paste and visual equation-scroll test have not been repeated on a
 physical phone. The full unrelated test suite has not been claimed green.
+
+## Stability pass (same day, user-approved)
+
+No app size limit. Nothing about stored notes changed (no schema, codec or migration edit).
+
+- **Large pastes:** insertions over 20,000 characters (or with clipboard HTML over 200,000
+  characters) are parsed off the main thread. A "Formatting paste…" pill shows after 250 ms;
+  text fields are read-only meanwhile. Close/Back wait for it before saving. If formatting
+  fails, all text is kept as plain paragraphs split at blank lines, and a message says so.
+  Paragraphs over 8,000 characters are divided only at their own line breaks. A single line
+  is never cut. Edits made while formatting are never merged into: the paste lands after them.
+- **Typing with a big clipboard:** a one-character edit no longer reads the clipboard, and
+  HTML far larger than the insertion is not parsed.
+- **Code blocks and equations take pastes literally:** `# comment` stays code.
+- **Parser:** Markdown links in the middle of a paragraph were dropped; fixed. Bounded link
+  matching makes a 116k-character line full of `[` 0.2 s instead of 5.5 s.
+- **Copy:** code, equation (copies LaTeX) and prompt blocks have Copy in their header. A
+  second Copy appears at the bottom when the block is taller than the screen. If the system
+  refuses (text beyond the clipboard limit), it says "Too large to copy".
+- **Syntax colours (display only):** `ui/notes/CodeHighlighter.kt` guesses the language
+  (Python, JS/TS, Kotlin, Java, SQL, Bash, JSON, HTML, CSS, C-like) and shows it in the block
+  header. Prose and unknown text stay uncoloured; blocks over 60,000 characters stay
+  uncoloured. Colours the user set on runs win over syntax colours.
+- **Save safety:**
+  - Saves pass the loaded revision. If storage is newer (desktop edit), the newer version is
+    never overwritten; a dialog offers "Keep both: save mine as a new note" (Knowledge note in
+    the same project), Keep editing, or Discard mine.
+  - A newer write identical to the editor's content, or one that changed nothing the editor
+    was based on, is not treated as a conflict.
+  - Any refused save (rich structure, damaged, failure) shows its reason once, and again on
+    Close/Back, instead of the page silently refusing to close.
+  - A damaged note shows a recovery panel (recover readable text via `recoverDamagedNote`,
+    copy original data) instead of a blank page; the toolbar is disabled meanwhile.
+
+Verification: 22 new JVM tests (1M-character AI-style paste, 250k single line, edit
+race, conflict/keep-both, damaged recovery, highlighter fuzz). Unit suite in the PR's scope:
+1,534 run, the same 15 unrelated failures as before, 3 skipped. Debug APK and instrumentation
+sources build; the APK launched on the test emulator only.

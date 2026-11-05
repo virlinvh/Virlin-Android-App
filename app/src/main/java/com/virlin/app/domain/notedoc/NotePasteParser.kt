@@ -48,7 +48,7 @@ object NotePasteParser {
                 (htmlOnlyWrapsPlainText || htmlContainsRawMarkdown))) htmlBlocks
         else fromMarkdown(plainText)
         val grouped = groupMetricCards(blocks)
-        return grouped
+        return ChatPromptCards.group(grouped)
     }
 
     private fun block(type: NoteDocBlockType, text: String, runs: List<NoteDocRun> = emptyList(),
@@ -188,16 +188,15 @@ object NotePasteParser {
         }
         var at = 0
         while (at < source.length) {
-            val link = Regex("^\\[([^]]+)]\\((https?://[^\\s)]+)\\)").find(source, at)
-                ?.takeIf { it.range.first == at }
-            if (link != null) {
-                append(link.groupValues[1], link = link.groupValues[2])
-                at = link.range.last + 1
-                continue
+            if (source[at] == '[') {
+                val link = MARKDOWN_LINK.matcher(source).region(at, source.length)
+                if (link.lookingAt()) {
+                    append(link.group(1), link = link.group(2))
+                    at = link.end()
+                    continue
+                }
             }
-            val token = listOf("**" to NoteDocMark.BOLD, "__" to NoteDocMark.BOLD,
-                "~~" to NoteDocMark.STRIKE, "`" to NoteDocMark.CODE,
-                "*" to NoteDocMark.ITALIC, "_" to NoteDocMark.ITALIC)
+            val token = INLINE_TOKENS
                 .firstOrNull { (delimiter, _) -> source.startsWith(delimiter, at) &&
                     !(delimiter.startsWith("_") && at > 0 && source[at - 1].isLetterOrDigit()) &&
                     source.indexOf(delimiter, at + delimiter.length) > at + delimiter.length }
@@ -212,12 +211,22 @@ object NotePasteParser {
                     at += 2
                     continue
                 }
-                append(source[at].toString())
+                out.append(source[at])
                 at++
             }
         }
         return out.toString() to runs
     }
+
+    /**
+     * `[label](https://…)` matched only where it starts. Label and URL lengths are bounded so a
+     * long line full of unmatched `[` stays linear instead of rescanning to the end each time.
+     */
+    private val MARKDOWN_LINK = java.util.regex.Pattern.compile("\\[([^]\\n]{1,1000})]\\((https?://[^\\s)]{1,4000})\\)")
+
+    private val INLINE_TOKENS = listOf("**" to NoteDocMark.BOLD, "__" to NoteDocMark.BOLD,
+        "~~" to NoteDocMark.STRIKE, "`" to NoteDocMark.CODE,
+        "*" to NoteDocMark.ITALIC, "_" to NoteDocMark.ITALIC)
 
     private data class InlineStyle(
         val marks: Set<NoteDocMark> = emptySet(),

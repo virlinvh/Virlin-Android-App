@@ -385,7 +385,8 @@ class NotePasteParserTest {
             val ids = SequentialIdProvider()
             val vm = NotesViewModel("task-large-rich-paste", "Note",
                 DefaultVirlinActions(InMemoryWorkStreamRepository(),
-                    FakeClock(Instant.EPOCH), ids), ids)
+                    FakeClock(Instant.EPOCH), ids), ids,
+                pasteDispatcher = UnconfinedTestDispatcher(testScheduler))
             val id = vm.state.value.blocks.single().id
             val pasted = buildString {
                 append("## TASK: Complete implementation\n\n")
@@ -430,7 +431,8 @@ class NotePasteParserTest {
             val ids = SequentialIdProvider()
             val vm = NotesViewModel("task-long-paste", "Note",
                 DefaultVirlinActions(InMemoryWorkStreamRepository(),
-                    FakeClock(Instant.EPOCH), ids), ids)
+                    FakeClock(Instant.EPOCH), ids), ids,
+                pasteDispatcher = UnconfinedTestDispatcher(testScheduler))
             val id = vm.state.value.blocks.single().id
             assertTrue(vm.pasteStructured(id, plain, plain))
             assertEquals(parsed.map { it.type }, vm.state.value.blocks.map { it.type })
