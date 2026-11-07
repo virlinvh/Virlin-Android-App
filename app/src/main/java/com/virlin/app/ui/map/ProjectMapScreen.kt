@@ -951,10 +951,16 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
             }
             // A Note opens the full-page Notes workspace. Its document is self-contained: the
             // task id only namespaces the key and titles the header, and no map node is created.
+            // Every Add → Note starts a new note on this task; earlier ones stay on its Page.
             MapAddKind.NOTE -> {
                 addChoice = null
-                scope.launch { com.virlin.app.domain.action.TaskPageActions(VirlinGraph.repository, VirlinGraph.clock, VirlinGraph.ids).ensure(topic.id, com.virlin.app.domain.model.TaskPageTypeKeys.NOTE, com.virlin.app.domain.model.TaskPageTypeKeys.noteOwner(topic.id)) }
-                navController.navigate(com.virlin.app.ui.notes.notesForTask(topic.id, topic.title))
+                scope.launch {
+                    val note = runCatching {
+                        com.virlin.app.domain.action.TaskPageActions(VirlinGraph.repository, VirlinGraph.clock, VirlinGraph.ids).newNote(topic.id)
+                    }.getOrNull()
+                    if (note == null) problem = "This task is no longer available."
+                    else navController.navigate(com.virlin.app.ui.notes.notesRoute(note.ownerKey, note.title))
+                }
             }
             // Audio v1 = a recorded voice note owned by this task. It reuses the existing Capture
             // Voice workspace unchanged; only the task context is new. No map node is created.

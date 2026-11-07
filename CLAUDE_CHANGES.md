@@ -1111,3 +1111,475 @@ fix all audit findings). Details: `docs/NOTE_EDITOR_RESTORE_2026-11-05.md` § St
 - **Build label:** debug `versionNameSuffix` is now `-notes-addsheet-20261105-2225` so this
   build is distinguishable from earlier same-day builds that shared the old suffix.
   APK: `releases/Virlin-Android-1.0.9-notes-addsheet-20261105-2225-debug.apk`.
+
+## 2026-11-05 — Note editor Delete tool (Cursor agent)
+
+**Requested by:** User ("add a delete icon and make it work when select things").
+
+- **Added:** `NoteTool.DELETE` (trash icon after Undo/Redo, also in the "+" sheet's tool grid),
+  enabled only while something is selected. `ui/notes/NoteSelectionDelete.kt`
+  (`projectedBlocks`, `deleteProjectedRange`). `NotesViewModel.deleteSelection()` removes the
+  selected characters of the focused block; `deleteDocumentRange()` handles a "Select across
+  blocks" selection: fully selected blocks are removed, partly selected text is trimmed, a
+  partly selected table/image/divider is kept whole, and an emptied note keeps one paragraph.
+  Each delete is one undo step and saves through the normal path.
+- **Changed:** `VirlinNotesScreen` (enum entry, tool spec, label), `NotesRoute` (DELETE in
+  document-selection mode, enabled state), `NoteAddSheet` (grid tile).
+- **Tests:** `NoteSelectionDeleteTest` (7). Device: trash icon disabled with no selection,
+  word deleted after long-press selection, Undo restored it.
+- **Build label:** `-notes-delete-20261105-2315`;
+  APK `releases/Virlin-Android-1.0.9-notes-delete-20261105-2315-debug.apk`.
+- **Not touched:** schema, codecs, stored notes, other tools' behaviour.
+
+## 2026-11-05 — Heading 4/5 and compact paragraph-style popup (Cursor agent)
+
+**Requested by:** User ("add Heading 4 and Heading 5 … keep it really compact … small pop-up").
+
+- **Added:** `NoteDocBlockType.HEADING_4` / `HEADING_5`, appended after the existing entries so
+  stored names and ordinals are unchanged, plus `headingLevel` (1–5, 0 otherwise).
+  `ui/notes/NoteParagraphStylePopup.kt`: a 196dp popup anchored under the toolbar's
+  paragraph chip (window bounds captured in `NoteFormattingRail`, kept on screen, with a
+  fallback position). Rows are drawn in their own style: Normal, H1–H5 at decreasing sizes,
+  then Quote / Code / Prompt with icons. Tapping outside or pressing Back closes it.
+- **Changed:** the rich adapter projects level 4 as H4 and levels 5–6 as H5. A stored level 6
+  keeps its level unless the block is restyled. Editor, reader, selection projection, folding,
+  default sizes (H4 16, H5 14), the Master Document export (`####` / `#####`) and the "+"
+  sheet's Text section now cover H4/H5. `CaptureNoteBridge` preview maps H4/H5 to Heading 3.
+  The old "Paragraph style" `PickerDialog` is replaced by the popup.
+- **Unchanged on purpose:** `NotePasteParser` still pastes `####` and `<h4>`–`<h6>` as Heading 3.
+- **Tests:** `NoteParagraphStylePopupTest` (2), `RichNoteAdapterTest` (+2, level-5 expectation
+  updated), `NoteAddSheetTest` (H4/H5 rows). Device (5556): popup under the chip, Heading 4
+  applied and saved, Back dismisses.
+- **Build label:** `-notes-headings-20261105-2325`;
+  APK `releases/Virlin-Android-1.0.9-notes-headings-20261105-2325-debug.apk`.
+- **Not touched:** schema version, codecs' stored format, existing notes.
+
+## 2026-11-05 — Note font library (Cursor agent)
+
+**Requested by:** User ("add more fonts … 100+ … formal, hand-drawn, creative, handwritten …
+the name should be represented in their actual style").
+
+- **Added:** `androidx.compose.ui:ui-text-google-fonts` (new library, version from the existing
+  Compose BOM 2024.06.00; nothing upgraded) and `res/values/font_certs.xml` (the standard Google
+  Play services font-provider certificates). Fonts are downloaded and cached by Play services on
+  first use. Nothing is bundled: the APK grew about 55 KB.
+- **Added:** `ui/notes/NoteFontCatalog.kt`, generated from the live Google Fonts catalog
+  (fonts.google.com/metadata/fonts): 1,540 families with a Latin subset and a regular style,
+  excluding Noto, colour and icon fonts and families added in the last year. That is 244
+  handwriting, 442 display, 296 serif, 513 sans and 45 monospace, most popular first, plus 184
+  curated "Featured" picks (handwritten, script & calligraphy, creative, formal serif, clean sans,
+  mono) drawn from 2026 font round-ups.
+  `ui/notes/NoteFonts.kt`: categories, search, and a cached `familyFor(name)`. The stored names
+  `Inter` / `Serif` / `Mono` render exactly as before; unknown names fall back to the default.
+  `ui/notes/NoteFontPickerSheet.kt`: a bottom sheet with search, category tabs with counts, and
+  rows showing each name in its own font, the current one ticked.
+- **Changed:** the editor (`NoteRun.toSpanStyle`) and reader use `NoteFonts.familyFor`. The
+  toolbar font chip truncates long names. The "Font" `PickerDialog` is replaced by the sheet.
+  While a picker is open, the editor's selection handle is transparent so it no longer draws over
+  the picker; focus and selection are untouched.
+- **Storage:** unchanged. The family name stays in the run's existing `fontFamily` field (rich
+  `textStyle.fontFamily`, legacy `ff`).
+- **Tests:** `NoteFontsTest` (5), `NoteFontPickerSheetTest` (3).
+  Device (5556): Play services FontLog showed downloads. Caveat applied to a line and was still
+  there after reopening. With one word selected, searching "pacifico" and picking it restyled only
+  that word. The handle no longer overlaps the sheet.
+- **Build label:** `-notes-fonts-20261105-2346`;
+  APK `releases/Virlin-Android-1.0.9-notes-fonts-20261105-2346-debug.apk`.
+- **Not touched:** schema, codecs, desktop protocol, cross-block selection projection (it maps
+  monospace back to the Code mark, so it keeps ignoring families).
+
+## 2026-11-05 — Inline text-size stepper (Cursor agent)
+
+**Requested by:** User ("I don't want to see any pop-ups like this … small up and down arrows …
+scroll … click … type the specific size").
+
+- **Added:** `ui/notes/NoteSizeStepper.kt`, a 48×44dp control with ▲, the number, and ▼.
+  - Tapping an arrow steps the size by 1; at 8 or 96 that arrow is disabled.
+  - Dragging up or down steps every 14dp (a mouse or trackpad wheel also works), with a light haptic tick.
+  - Tapping the number opens a 2-digit numeric field; Done or leaving the field applies the size, clamped to 8–96 (the desktop protocol's range).
+  - TalkBack gets increase/decrease custom actions.
+- **Added in `NotesViewModel`:**
+  - `stepFontSize`, and `applyFontSize(sp, target)`, which restores the selection captured by `styleTarget()` before typing began.
+  - A run of size changes on one block coalesces into one undo step: `applyAttribute` gained an optional `coalesceWith`.
+- **Changed:**
+  - The toolbar SIZE chip is now the stepper (`NoteSizeControl` passed through `VirlinNotesScreen` / `NoteFormattingRail`).
+  - The "+" sheet's Text size tile embeds the same stepper and the sheet stays open.
+  - The old "Text size" `PickerDialog` is only reached if no size control is supplied.
+- **Tests:** `NoteSizeStepperTest` (7: arrows, limits, drag, typed + clamp, disabled, view-model
+  steps + undo, typed size keeps the earlier selection), `NoteAddSheetTest` (+1). Device (5556):
+  arrows 16 → 17, drag up → 21, typed 28 → 28, saved.
+- **Build label:** `-notes-size-20261105-2353`;
+  APK `releases/Virlin-Android-1.0.9-notes-size-20261105-2353-debug.apk`.
+- **Not touched:** storage (`fontSizeSp` as before), other pickers.
+
+## 2026-11-06 - Inline table size entry + growing tables (Cursor agent)
+
+**Requested by:** User ("in the toolbar itself there should be two options - rows and columns -
+Done - extend that table column-wise and row-wise - I don't want to see the popup").
+
+- **Removed:** the "Insert table" `PickerDialog` with fixed sizes (2x2, 3x2, 3x3, 4x3). `NoteDialog.Table` now renders nothing.
+- **Added:** `ui/notes/NoteTableEntryBar.kt` (`NoteTableEntry`, `NoteTableEntryBar`).
+  - While the table tool is open, the formatting rail shows `[table] [ROWS] x [COLUMNS] [Done] [close]` instead of its tools.
+  - The fields take numbers only, are clamped as typed to 1-50 rows and 1-12 columns, and default to 3 x 3. Rows is focused first; Next moves to Columns, and Done inserts.
+  - Back or the close button cancels.
+  - The "+" sheet's Table row opens the same bar.
+- **Added (domain):** `NoteDocTable.withRowAt` / `withColumnAt` and `MAX_ROWS` / `MAX_COLS`.
+- **Added (`NotesViewModel`):** `insertTable(rows, cols)`, `addTableRow(blockId, atTop)` and `addTableColumn(blockId)`. Each structural change is one undo step and stops at the size limit.
+- **Changed (editor):** `NoteTableBlock` has "+" edges above, below and to the right of the grid.
+  - They are active while a cell is focused. Otherwise they are faint, and the first tap only reveals them for 5s, so a stray tap never reshapes a table.
+  - After adding, the new row or column cell takes focus.
+- **Changed (rich storage):** `RichNoteAdapter.patch` now grows a stored table by whole rows (top or bottom) and columns (left or right).
+  - Existing row and cell nodes, including their marks, are kept untouched.
+  - New cells copy the neighbouring cell type (header or cell) and get unique paragraph ids.
+  - Shrinking, ragged rows and merged cells (colspan/rowspan) are still refused, so the save is rejected rather than losing structure.
+- **Tests:**
+  - `RichNoteAdapterTest`: +3 tests (bottom/right growth keeps a mark and unique ids, top insert, merged cells refused). The old resize-refused case is now a shrink.
+  - `RichNoteActionsTest`: its refused-structure example is now a shrink.
+  - `NoteTableEntryTest` (4: insert on Done or IME, clamp + disabled + cancel, view-model grow + undo, size limit).
+  - Notes + notedoc suites: 106 run, 0 failures. The full unit suite was not completed (that run was stopped).
+- **Fix after device check:** the right-edge "Add column" bar had zero width (its box was only as wide as the grid); the box now spans the grid plus the edge.
+- **Build label:** `-notes-tables-20261106-0120`;
+  APK `releases/Virlin-Android-1.0.9-notes-tables-20261106-0120-debug.apk` (the earlier 0111 build had the zero-width column bar and was removed).
+  Verified on 5556: inline bar opens with no popup, 4 x 3 inserted, cell typing, add row below, add column (focus moves to the new column), all saved.
+- **Not touched:** desktop protocol, legacy codec, other pickers.
+
+## 2026-11-06 - Notes: colour strips, grouped toolbar, toggle headings, + quick-tools fan
+
+- **Colour strips (new `ui/notes/NoteColorStrip.kt`):** Text colour and Highlight no longer open popups.
+  - A 52dp strip opens below the toolbar: Default / None plus ~60 text colours and ~50 highlight colours (many yellows), round swatches, feathered edges, horizontal scroll.
+  - "#" entry accepts `#RRGGBB`, `RRGGBB`, `#RGB`, with a preview circle and Done; invalid codes are refused. Dark pasted highlights are softened (still opaque, so storage is unchanged).
+  - Custom colours are remembered (SharedPreferences `note_colors`, max 8) and shown at the front.
+  - Closes with the tool again, x or Back. Swatch taps keep the editor selection; the hex field captures a `StyleTarget` first.
+  - `NotesViewModel.pickColor(argb, highlight, target)` is one undo step per block; old `setTextColor` / `setHighlight` kept.
+- **Grouped toolbar (`VirlinNotesScreen`):** `ToolSpec.groupStart`; order Edit | Text style | Format | Colour | Layout | Lists | Insert | Document with 1dp dividers. UI only.
+- **Toggle headings:**
+  - Domain: `NoteDocBlock.toggleHeading`; `visibleNoteBlocks` hides a collapsed toggle heading's section (until the next heading of the same or higher level) even outside heading-fold mode.
+  - Storage: legacy codec `"toggleHeading":true`; rich v2 stores `"toggle":true` on the heading node (older readers and the desktop still see a normal heading); desktop export/import carries the flag.
+  - Rich patch: paragraph/heading <-> Toggle block wraps/unwraps (`convertToggle`); a Toggle that still holds blocks cannot be unwrapped and the save is refused, never flattened.
+  - `NotesViewModel.setParagraphStyle(type, toggle)`; Enter on a collapsed toggle heading opens it; label "Toggle heading N"; changing type clears the flag.
+  - UI: paragraph popup has a ">" button per Normal / Heading 1-5 row (Normal > = Toggle list); toggle headings show a collapse arrow in the editor.
+  - The read-only preview shows everything expanded, as it already did for Toggle blocks.
+- **+ quick-tools fan (new `ui/notes/NoteAddFan.kt`):** first tap fans Flashcard (left), Select across blocks (up-left), Heading fold (up) on a quarter circle with a spring (snaps when animations are off); + rotates to x. Second tap closes the fan and opens the unchanged Add sheet. Outside tap / Back close the fan. Buttons call the same tool handler as the toolbar and respect enabled state.
+- **Tests:** `NoteColorPalettesTest` (3), `RichNoteAdapterTest` +2 (toggle attr round trip, wrap/unwrap/refuse), `VirlinNoteDocTest` +1, `NotesEditorTest` +1. Notes + notedoc + editor + desktop suites: 203 run, 0 failures. `ProjectKnowledgeAddUiTest` passes.
+- **Build label:** `-notes-all-20261106-0703`; APK `releases/Virlin-Android-1.0.9-notes-all-20261106-0703-debug.apk`.
+  Verified on 5556 only: popup > buttons, toggle heading 2 create / Enter / collapse / reopen / back to plain heading, Toggle list, toolbar dividers, red text on a selection, `FEB` highlight via "#", fan open / outside tap / Back / second tap -> Add sheet, fan Heading fold / Select across blocks / Flashcard.
+
+## 2026-11-06 - Notes: bold toggle arrows
+
+- **New `ui/notes/NoteToggleArrow.kt`:** a drawn solid triangle (rounded corners) replacing the small Unicode arrow glyphs. Right when collapsed, down when open, 160ms rotation (snaps when animations are off).
+  - Sized from the line's text size (`NotesViewModel.defaultSizeFor`) and centred on the first line (`NoteDocumentLayout.lineHeightSp`), in the text colour.
+- **Used in:** toggle headings and Toggle blocks in the editor (rows now top-aligned so wrapped headings keep the arrow on line one), the Toggle block in the read-only preview, the paragraph popup's toggle buttons and the toolbar Toggle chip.
+- Same click handlers, content descriptions and test tags as before; no storage or behaviour change.
+- **Tests:** notes UI + editor suites 123 run, 0 failures.
+- **Build label:** `-notes-arrow-20261106-0733`; APK `releases/Virlin-Android-1.0.9-notes-arrow-20261106-0733-debug.apk`. Verified on 5556: wrapped toggle heading open/collapsed, Toggle block open/collapsed, popup buttons.
+
+## 2026-11-06 - Notes: Toggle tool wraps the selection
+
+- **Behaviour:** with text selected, the toolbar Toggle tool now puts the selected block(s) inside a new Toggle placed before them (empty title, caret moves to it). With only a caret it still adds a new toggle as before.
+  - Single block: selection inside the focused block wraps that whole block.
+  - Select across blocks: every block the selection touches is wrapped; select mode then closes.
+- **New `ui/notes/NoteToggleWrap.kt`:** `wrapBlocksInToggle(blocks, range, id)` (toggle takes the shallowest indent, wrapped blocks +1, deeper blocks right after the range - e.g. a toggle's hidden children - move with their parent; text/marks/ids untouched; refused at indent 5) and `projectedBlockRange` (cross-block selection -> block indices).
+- **`NotesViewModel`:** `wrapInToggle(range)`, `wrapDocumentRangeInToggle(start, end)`; one undo step.
+  - Safety: for rich (v2) notes the next save's merge is run first (`RichNoteAdapter.applyBlockEdits` on the stored tree, kept as `baseRich`) and must read back with the same ids/types/indents; otherwise nothing changes and a message explains it (e.g. list items, which the rich format cannot re-indent). Block-only notes always accept.
+- **Route:** Toggle in select-across mode uses the cross-block selection.
+- **Tests:** `NoteToggleWrapTest` (6: wrap, nesting + hidden children, depth limit, range mapping, rich round trip, rich list refused) and `NotesEditorTest` +1 (wrap, focus, undo, caret still inserts). Notes + notedoc + editor + desktop suites: 210 run, 0 failures.
+- **Build label:** `-notes-wrap-20261106-0742`; APK `releases/Virlin-Android-1.0.9-notes-wrap-20261106-0742-debug.apk`. Verified on 5556: single-line wrap + title + collapse + reopen; two-line wrap via Select across blocks.
+
+## 2026-11-06 - Notes: line-spacing chip + dropdown
+
+- **Toolbar:** the bare "↕" tool is now a labelled chip (line-spacing icon + current value + "▾", e.g. "1.5 ▾"), like the paragraph chip. `NoteToolState.spacingLabel` (default "Single") comes from the focused block's `lineSpacing`.
+- **New `ui/notes/NoteLineSpacingPopup.kt`:** anchored dropdown under the chip (same position/animation as the paragraph popup) replacing the centred PickerDialog. Rows Single / 1.25 / 1.5 / Double, each with a three-line preview drawn at that spacing, selected row highlighted with a check. Tags `notes_spacing_<label>`.
+- Anchor: `onSpacingChipPlaced` passed through `VirlinNotesScreen` / `NoteFormattingRail`; the chip shows as active while the menu is open. `setLineSpacing` unchanged.
+- **Tests:** `NotesEditorTest` asserts the chip label (Single / 1.5 / Double). Notes UI + editor suites: 130 run, 0 failures.
+- **Build label:** `-notes-spacing-20261106-0752`; APK `releases/Virlin-Android-1.0.9-notes-spacing-20261106-0752-debug.apk`. Verified on 5556: chip, dropdown, pick 1.5, chip updates, saved.
+
+## 2026-11-06 - Notes: bullet and numbering style strip
+
+- **Toolbar:** tapping Bullets or Numbering makes the line that kind of list (if it is not yet) and opens a style strip under the toolbar (like the colour strip). Tapping the same tool again, the strip's X, or Back closes it and keeps the list. The strip's "None" turns the line back into Normal text.
+  - Bullet styles: dot, circle, square, open square, diamond, dash, arrow, chevron, triangle, star, tick.
+  - Numbering styles: 1. / 1) / 01. / a. / a) / A. / i. / I.
+  - Each tile previews three lines with their markers; the current style is highlighted. Taps do not take focus.
+- **Model:** new optional `NoteDocBlock.listStyle` (null = default dot / 1. 2. 3., so existing notes are unchanged). New `domain/notedoc/NoteListStyles.kt`: catalogue, `marker()` (letters, Roman numerals), `storedKey()`, `listGroup()`.
+- **Storage:** legacy codec writes `"listStyle"` only when set. Rich (v2) notes keep it as a `listStyle` attr on the bulletList/orderedList node; lists split when the style differs; restyling patches only the list node; a stale style on a non-list line is ignored (never refuses a save). Desktop protocol exports/imports `listStyle` (unknown keys dropped). No schema change.
+- **`NotesViewModel`:** `setListStyle(type, key)` restyles the whole list the line belongs to (same type + indent, nested lines skipped) as one undo step, pre-checked against the rich document like toggle-wrap; `removeListFromFocused()`. Enter continues the style; a line joining a neighbouring list takes its style; changing to another block type clears it.
+- **Rendering:** editor list rows and reader preview use the style's marker. Select-across-blocks text projection still uses the plain "1." / dot prefixes (unchanged on purpose).
+- **Behaviour change:** a second tap on Bullets/Numbering now closes the strip instead of removing the list (use "None"). `NotesEditorTest` updated for this.
+- **Tests:** new `NoteListStylesTest` (6: markers, defaults, group, codec, rich split, rich patch) and `NotesEditorTest` +2. Notes + notedoc + editor + desktop suites: 218 run, 0 failures.
+- **Build label:** `-notes-bullets-20261106-0805`; APK `releases/Virlin-Android-1.0.9-notes-bullets-20261106-0805-debug.apk`. Verified on 5556: numbering strip, "a. b. c." applied, bullets strip, Arrow applied, Back closes strip.
+
+## 2026-11-06 - Notes: change-case tool (Aa)
+
+- **Toolbar:** new "Aa" chip after Strike (also in the + sheet tool grid). Each tap moves the selected text to the next case: ALL CAPS -> Title Case (first letter of each word capital, rest small) -> lowercase -> ALL CAPS. A step that would change nothing is skipped. With only a caret, the word under the caret changes. Works on a Select-across-blocks selection too (the selection stays, so taps keep cycling).
+- **Safety:** new `domain/notedoc/NoteTextCase.kt` (`NoteTextCases.nextCase / convert / wordAt`). Only letters change and the text length never changes (a character whose case form would be longer, e.g. German sharp s, is kept), so bold/colour/link runs, the caret and the selection stay exactly where they were. Inline maths `\(...\)` keeps its case; code/maths blocks are skipped (tool disabled there). Locale-independent. One undo step per tap. Rich (v2) notes: text-only edit, same path as typing. No schema change.
+- **`NotesViewModel`:** `cycleTextCase()`, `cycleDocumentRangeCase(start, end)`; `NoteTool.CHANGE_CASE` (appended to the enum) enabled for text blocks that contain letters.
+- **Tests:** new `NoteTextCaseTest` (5) and `NotesEditorTest` +1 (cycle, marks kept, selection kept, undo, caret word). Notes + notedoc + editor + desktop suites: 224 run, 0 failures.
+- **Build label:** `-notes-case-20261106-0821`; APK `releases/Virlin-Android-1.0.9-notes-case-20261106-0821-debug.apk`. Verified on 5556: caret word Group -> group -> GROUP -> Group, Opening cycled, saved.
+
+## 2026-11-06 - Notes: keep the reading position (no jumps to top/bottom)
+
+- **Root causes (reproduced on 5556):**
+  1. After the app was reopened (or after process death / a cross-block delete) no line is focused. Toolbar tools that work without focus (Toggle, Table, Divider, Image, + sheet blocks) then appended the new block at the END of the note, and the focus-scroll jumped to the bottom.
+  2. Turning Select-across-blocks on/off swaps the editor list for one long text item, so the scroll position was lost (landed at the end / somewhere else).
+  3. Nothing remembered where you were when the note was closed and opened again.
+- **Fixes:**
+  - `NotesViewModel`: `setViewAnchor(blockId)` (the line at the top of the screen, reported by the editor when scrolling stops) and `insertionPoint()`. With a focused line, inserts go after it as before; with nothing focused, the new block goes right after the top visible line (inside an open toggle it is indented as a child); only with no known position does it fall back to the end. Used by `insertBlock` and `insertImage`.
+  - `NoteBlockEditor`: the focus-scroll effect runs only when the focused line changes (not on every list change) and never in Select-across mode. Select-across on: scrolls the projection to the same top line; off: scrolls back to the top line seen in the projection.
+  - New `ui/notes/NotePositionStore.kt` (SharedPreferences "note_positions", value "blockId|offsetPx" per note owner key, written only when it changes). Opening a note restores the saved top line; missing/deleted lines fall back to the top. `NotesRoute` passes `positionKey = ownerKey`. Not in Room, no schema change.
+- **Tests:** `NotePasteUiTest` +3 (reopen keeps the top line, select-across on/off keeps it, Toggle with nothing focused goes under the top line and the view stays). Notes + notedoc + editor + desktop suites: 227 run, 0 failures.
+- **Build label:** `-notes-position-20261106-0843`; APK `releases/Virlin-Android-1.0.9-notes-position-20261106-0843-debug.apk`. Verified on 5556: close/reopen returns to Line9; Home + kill + reopen keeps Line9 and Toggle is inserted under Line9 without scrolling; Select-across on/off stays at Line9.
+
+## 2026-11-06 - Notes: pasted diagrams / pictures are no longer lost silently
+
+- **Finding:** a text paste carries only what the source app puts on the clipboard. Our parser never drops a diagram that arrives as text or code (it becomes a code block at worst). A diagram missing between two headings means the source put no picture/diagram data on the clipboard (copy of on-screen text). `Note options > Paste details` now shows this per paste.
+- **Real gaps fixed in our pipeline (when the data IS there):**
+  - `NotePasteParser`: an `<img>` inside inline markup (`<p><span><img>`) was skipped; it now follows its paragraph as an image block. An inline `<svg>` drawing keeps its words one per line (icons without words add nothing; previously all labels were glued into one paragraph). `<canvas>` is ignored like script.
+  - A picture that cannot be stored keeps its description, linked to its web address when it has one.
+  - Markdown image lines `![alt](src)` become image blocks (or the linked description).
+  - When the HTML copy is used but leaves out a code / prompt / table block that the plain Markdown has (a diagram's source rendered as a picture or widget), that block is put back after the last matching HTML block. Blocks the HTML already has are not duplicated (content-key match).
+  - `NoteBlockEditor` paste resolver: embedded `data:image/...;base64` pictures are stored via the existing `NoteImageStore.importDataUri` (it was never called, so they became "Image unavailable").
+- **Paste a copied picture:** new `NoteClipboardImages`. When the clipboard holds a picture, the Image tool (rail and + sheet) asks "Paste copied picture" / "Choose from device"; otherwise it opens the picker exactly as before. Checking uses only the clip description.
+- **Paste details:** new `domain/notedoc/NotePasteReport` (counts and MIME types only, never content); `NotesViewModel.lastPasteReport`, `pasteStructured(..., clipSummary)`; `NoteDialog.PasteDetails` / `NoteDialog.ImageSource`; `VirlinNotesScreen` `onPasteDetails` menu item. Not persisted.
+- No schema change, no new dependency, no rewrite of existing notes.
+- **Tests:** `NotePasteParserTest` +8 (inline picture, linked description, svg words, Markdown image, restored missing code, no duplicates, report wording, view model records report). Notes + notedoc + editor + paste + desktop suites: 265 run, 0 failures.
+- **Build label:** `-notes-pastediagram-20261106-0904`; APK `releases/Virlin-Android-1.0.9-notes-pastediagram-20261106-0904-debug.apk`. Verified on 5556: menu item, empty report, real copy+paste report ("text/plain ... No picture or diagram was on the clipboard"), Image tool still opens the picker when the clipboard has text. Pasting a clipboard picture was not exercised on the emulator (no way to place an image clip via adb).
+
+## 2026-11-06 - Notes: word count popup
+
+- **Toolbar:** new "#" chip (Word count) at the start of the document group (before Select across); also in the + sheet tool grid. Always enabled, including in Select-across mode. Tapping opens a card: Words and Characters as two large tiles, "Characters without spaces" below, and a Done button. Screen readers hear "43 words", "272 characters", etc.
+- **Counting:** new `domain/notedoc/NoteWordCount.kt` (pure). Whole note: every block's text (collapsed toggles and folded sections included), table cells and prompt titles; images and dividers add nothing. Characters are code points without line breaks (an emoji is one). A word is a whitespace-separated run with a letter or digit (a dash alone is not a word). Computed only when the card opens (and if the note changes underneath it), never per keystroke.
+- **Wiring:** `NoteTool.WORD_COUNT` (appended), `NoteDialog.WordCount`, `NotesViewModel.wordCount()`, `NoteWordCountPopup.kt`. Read-only: no edit, no save, no schema change.
+- **Tests:** new `NoteWordCountTest` (4) and `NotesEditorTest` +1. Notes suites: 270 run, 0 failures.
+- **Build label:** `-notes-wordcount-20261106-0933`; APK `releases/Virlin-Android-1.0.9-notes-wordcount-20261106-0933-debug.apk`. Verified on 5556: chip in rail, card shows 43 words / 272 characters / 262 without spaces, Done closes.
+
+## 2026-11-06 - Notes: combined test build
+
+- **Build label:** `-notes-latest-20261106-0938`; APK `releases/Virlin-Android-1.0.9-notes-latest-20261106-0938-debug.apk`. Same source as the word-count build (no code change); contains all notes work of this session. Installed and launched on 5556.
+
+## 2026-11-06 - Notes: + button opens / closes the fan; only a quick triple tap opens the Add sheet
+
+- **Behaviour:** tap 1 opens the quick-tools fan (Flashcard, Select across, Heading folding); tap 2 closes it; tap 3 opens the Add sheet only when the three taps are one continuous run (each within 600 ms of the previous, `ADD_FAN_TAP_RUN_MS`). After a pause the next tap starts a new run and just opens the fan again. Tapping outside the fan, Back, or using a fan button also ends the run. Previously the 2nd tap closed the fan AND opened the sheet.
+- **Accessibility:** button reads "Show quick tools" / "Hide quick tools" and offers an "Add block" accessibility action (screen-reader users do not need the triple tap).
+- **Code:** `NoteAddFan.kt` only (tap-run counter, optional injectable `now` clock for tests). Fan look, positions and animation unchanged.
+- **Tests:** new `NoteAddFanTest` (3: quick run opens sheet, pause restarts, accessibility action). Notes UI suites: 140 run, 0 failures.
+- **Build label:** `-notes-plustaps-20261106-1020`; APK `releases/Virlin-Android-1.0.9-notes-plustaps-20261106-1020-debug.apk`. Verified on 5556: slow taps 2 s apart = open, close, open (no sheet); three fast taps (~250 ms apart) = Add sheet.
+
+## 2026-11-06 - Notes: smaller Toggle chip in the toolbar
+
+- **Look only:** the toolbar's Toggle chip drew the disclosure arrow at heading size (22sp) with 12dp side padding, so it read as a big play button. It now uses 16sp with 5dp padding, making the chip the same size as the neighbouring icon chips (Image, Code). `VirlinNotesScreen.kt` rail only; the arrow in the editor, tool behaviour, label and enabled state are unchanged.
+- **Tests:** notes UI suites 134 run, 0 failures. No golden covers the notes rail.
+- **Build label:** `-notes-toggleicon-20261106-1025`; APK `releases/Virlin-Android-1.0.9-notes-toggleicon-20261106-1025-debug.apk`. Verified on 5556: Toggle chip visually matches the Image chip.
+
+## 2026-11-06 - Notes: paragraph styles as a scrolling strip
+
+- **Behaviour:** the "Normal text" toolbar chip now opens a horizontal strip under the toolbar (same look as the colour and list strips) instead of the dropdown popup. Order: Normal text, Heading 1-5 (each drawn in its own size) | divider | Toggle list, toggle H1-H5 | divider | Quote, Code, Prompt. Picking applies to the focused block and the strip stays open so styles can be compared; the current style is outlined in green and scrolled into view. Close with the X, Back, or by tapping the chip again.
+- **Code:** new `NoteParagraphStyleStrip.kt`; `NotesRoute.kt` builds the strip state, marks the chip active, keeps selection colours visible, and the popup case in `NoteDialogHost` is now a no-op; `VirlinNotesScreen.kt` renders the strip next to the colour/list strips; `NotesViewModel.kt` adds optional `keepOpen` to `setBlockType` / `setParagraphStyle` (default unchanged) and makes the PARAGRAPH chip toggle the strip. Style logic (toggle headings, block conversions, undo) is the same code the popup used. `NoteParagraphStylePopup.kt` is kept (its `NoteChipAnchor` is still used; popup composable now unused).
+- **Tests:** new `NoteParagraphStyleStripTest` (3: all 15 options call the right action, current toggle heading marked, close) and `NotesEditorTest` +1 (chip toggles, picks keep it open, undo). Notes suites: 277 run, 0 failures.
+- **Build label:** `-notes-paragraphstrip-20261106-1031`; APK `releases/Virlin-Android-1.0.9-notes-paragraphstrip-20261106-1031-debug.apk`. Verified on 5556: strip scrolls through all groups with visible dividers; Heading 2 then Heading 4 applied to the same line with the strip open; X and chip both close; undo restored the line.
+
+## 2026-11-06 - Notes: line spacing as a strip
+
+- **Behaviour:** the line-spacing toolbar chip now opens a horizontal strip under the toolbar (same look as the paragraph-style strip) instead of the dropdown popup: Single, 1.25, 1.5, Double, each tile with its three-line spacing preview. Picking applies to the focused line and the strip stays open; the current spacing is outlined in green. Close with the X, Back, or by tapping the chip again.
+- **Code:** new `NoteLineSpacingStrip.kt`; `NotesRoute.kt` builds the strip state, keeps selection colours visible, and the popup case in `NoteDialogHost` is now a no-op; `VirlinNotesScreen.kt` renders it with the other strips; `NotesViewModel.kt` adds optional `keepOpen` to `setLineSpacing` (default unchanged) and makes the LINE_SPACING chip toggle the strip. Spacing values and storage unchanged (`NotesViewModel.SPACINGS`). `NoteLineSpacingPopup.kt` kept but now unused.
+- **Tests:** new `NoteLineSpacingStripTest` (3) and `NotesEditorTest` +1. Notes suites: 281 run, 0 failures.
+- **Build label:** `-notes-spacingstrip-20261106-1040`; APK `releases/Virlin-Android-1.0.9-notes-spacingstrip-20261106-1040-debug.apk`. Verified on 5556: strip opens under the rail, 1.5 then Double applied to the same line with the strip open, chip and X both close, undo restored Single.
+
+## 2026-11-06 - Notes: line spacing as a strip
+
+- **Behaviour:** the line-spacing toolbar chip now opens a horizontal strip under the toolbar (same look as the paragraph-style strip) instead of the dropdown popup: Single, 1.25, 1.5, Double, each tile with its three-line spacing preview. Picking applies to the focused line and the strip stays open; the current spacing is outlined in green. Close with the X, Back, or by tapping the chip again.
+- **Code:** new `NoteLineSpacingStrip.kt`; `NotesRoute.kt` builds the strip state, keeps selection colours visible, and the popup case in `NoteDialogHost` is now a no-op; `VirlinNotesScreen.kt` renders it with the other strips; `NotesViewModel.kt` adds optional `keepOpen` to `setLineSpacing` (default unchanged) and makes the LINE_SPACING chip toggle the strip. Spacing values and storage unchanged (`NotesViewModel.SPACINGS`). `NoteLineSpacingPopup.kt` kept but now unused.
+- **Tests:** new `NoteLineSpacingStripTest` (3) and `NotesEditorTest` +1. Notes suites: 281 run, 0 failures.
+- **Build label:** `-notes-spacingstrip-20261106-1040`; APK `releases/Virlin-Android-1.0.9-notes-spacingstrip-20261106-1040-debug.apk`. Verified on 5556: strip opens under the rail, 1.5 then Double applied to the same line with the strip open, chip and X both close, undo restored Single.
+
+## 2026-11-06 - Notes: selection toolbar stall fix (toolbarfix build)
+- Root cause: every note line is its own BasicTextField; Compose 1.6.8 shares one floating Copy/Paste toolbar per window and every unfocused field hides it on recomposition, so the focused field reopened it as a new window 4-7 times per formatting tap (main thread blocked on window/renderer creation; one capture reached a 5 s ANR).
+- New app/src/main/java/com/virlin/app/ui/notes/NoteTextToolbar.kt: CoalescingTextToolbar defers hide() to the next main-looper message and cancels it on showMenu (last request still wins); flush() on dispose.
+- NotesRoute.kt: provides LocalTextToolbar = rememberCoalescingTextToolbar() alongside LocalNotesPalette. Dialogs/popups re-provide their own toolbar, so they are unaffected.
+- New test CoalescingTextToolbarTest (3 cases). Notes suite: 284 tests, 0 failures.
+- Measured on emulator-5556 (20-line note, Bold with selection): toolbar recreations 4-7 -> 0; remaining window churn is Compose's selection-handle popup and the framework's own toolbar reposition after the text width changes.
+- APK: releases\Virlin-Android-1.0.9-notes-toolbarfix-20261106-1226-debug.apk
+
+## 2026-11-07 - Rich notes: line-style changes no longer refused ("Note not saved")
+- Root cause: on notes stored as a rich tree (v2), RichNoteAdapter.applyBlockEdits could not express a same-id type change into/out of a container (paragraph -> bullet etc.), returned null, and every later autosave/preview/close save was refused with RICH_STRUCTURE.
+- RichNoteAdapter: convertStep supports paragraph/heading/toggle <-> bullet/numbered/checklist (joins adjacent lists, splits lists), list kind switches, <-> quote, <-> code/prompt (plain text only); new lines typed inside a list are inserted as list items. Nested items, nested containers, formatted text -> code and id-less nodes are still refused (no data loss).
+- NotesViewModel: styleChangeRefused pre-check; an unsupported style change now shows "Nothing was changed" and is not applied, so the editor never enters an unsavable state.
+- NoteDocActions.RICH_STRUCTURE copy clarified.
+- Tests: RichNoteTypeChangeTest (8), RichNoteActionsTest +1. Verified on emulator-5556 with an injected rich test note: bullet x2, Enter new item, preview, close - all saved, tree still v2 with table/bold/toggle.
+- APK: releases\Virlin-Android-1.0.9-notes-richlists-20261107-0622-debug.apk
+
+## 2026-11-07 - + fan stays open while heading fold steps through its levels
+- NoteAddFan: new keepOpenAfter(tool) parameter; fan buttons close the fan unless it returns true.
+- VirlinNotesScreen: keepOpenAfter = HEADING_FOLD while headingFoldStep < headingLevels.size, so show controls -> fold deepest..H1 keep the fan out; the final "Expand all headings" tap ends the cycle and closes it. Flashcard / Select still close at once; outside tap and Back still close.
+- Test: NoteAddFanTest.headingFoldKeepsTheFanOpenUntilTheCycleExpandsEverythingAgain. Verified on emulator-5556.
+- APK: releases\Virlin-Android-1.0.9-notes-foldfan-20261107-0636-debug.apk
+
+## 2026-11-07 07:10 - Notes tables: cell formatting + table strips (APK releases\Virlin-Android-1.0.9-notes-tables-20261107-0703-debug.apk)
+- Bug: table cells never became the style target, so Bold/colour/size hit the previously focused line. Cells now report focus/edits to NotesViewModel (focusedCell / activeCell); every inline style tool targets the focused cell (styleBlock / mutateStyleBlock); toolbar shows "Table cell".
+- NoteDocTable gains optional cellRuns, cellFills, colWidths, headerRow, headerColumn, gridLines (codec keys cellRuns/fills/widths/headerRow/headerColumn/gridLines; absent = old behaviour).
+- Rich notes: tableHeader cells, cell background/colwidth attrs, table gridLines attr. Simple rich tables are rebuilt from the model (untouched cells keep their nodes/marks); tables with merged or multi-paragraph cells keep the old edge-growth-only path and other layout changes are refused with a message (nothing changed).
+- Table tool: opens a 60dp create strip (rows x cols + Create) under the rail; creating focuses cell 1,1 and opens the new NoteTableToolsStrip (row above/below, col left/right, delete row/col/table, header row/col, grid lines, column width -/+, even cols, cell shading). Focusing a cell opens it; focusing a line closes it.
+- Preview renders headers, shading, grid lines and cell styles.
+- Files: VirlinNoteDoc.kt, VirlinNoteCodec.kt, RichNoteAdapter.kt, NotesViewModel.kt, NoteTableStrip.kt (new), NoteTableEntryBar.kt, VirlinNotesScreen.kt, NotesRoute.kt, NoteBlockEditor.kt; tests NoteTableEntryTest, RichNoteAdapterTest, RichNoteActionsTest, VirlinNoteDocTest.
+- Verified: notes/notedoc/desktop unit tests 300/300; emulator-5556 rich note (bold in a cell, row below, header col, lines off, shade, width) saved into the rich tree.
+
+## 2026-11-07 07:35 - Notes: image editing (strip + full-screen editor)
+- Tap an image in a note to select it; the image tool then toggles an image strip (Crop / Adjust / Markup / Rotate / Replace / Delete). With no image selected the image tool still opens the picker.
+- New ui/notes/NoteImageEdit.kt (pure edit model, crop geometry, colour matrix, Whiten paper estimate), NoteImageRender.kt (bitmap render), NoteImageEditor.kt (strip + full-screen editor: crop ratios, filters Original/Whiten/B&W scan/Grey, brightness/contrast/saturation, pen + highlighter with 8 colours and 4 sizes, undo).
+- Save renders a NEW private file (NoteImageStore.saveEdited); the block points at it; old file kept so note undo restores it. Only app-managed images are editable; linked images are refused with a message.
+- RichNoteAdapter: an image node may now swap only its stored file name (managed UUID); any other image change is still refused.
+- NoteTableStrip: shared NoteToolStripShell / ToolTile / GroupDivider (table strip unchanged visually).
+- Whiten estimate uses a trimmed mean of each block's bright samples (fixes colour halos beside text).
+- Tests: NoteImageEditTest, NoteImageRenderTest, NoteImageToolsTest, RichNoteAdapterTest image swap. 317 notes tests pass.
+- APK: releases\Virlin-Android-1.0.9-notes-imageedit-20261107-0732-debug.apk (verified on emulator-5556).
+
+## 2026-11-07 - Notes: YouTube clip embed (toolbar tool)
+- New non-textual block NoteDocBlockType.VIDEO (appended to enum; ordinals unchanged) carrying NoteDocVideo(videoId, startSeconds, endSeconds, title, channel). Stored in documentJson, so no Room migration. Codec key "video"; a damaged clip decodes to video=null and the block is kept.
+- Rich tree node "youtube" (attrs id/videoId/start/end/title/channel/indent), projected as Target.Fixed; patch only accepts a valid clip change with same type/indent, anything else is refused.
+- domain/notedoc/NoteYouTube.kt: link parsing (youtu.be, watch, shorts, live, embed, nocookie, ?t=/start=), time parse/format, plain-text projection.
+- Toolbar tool YOUTUBE after IMAGE opens a strip panel (ui/notes/NoteVideoEntry.kt): paste/type link, oEmbed validation (title/channel, private/embedding-off/not-found/offline), start/end fields, Embed/Update. Start follows the link's ?t= until the user types their own.
+- ui/notes/NoteVideoBlock.kt: card (thumbnail, range chip, clip length, menu Edit clip times / Open in YouTube / Remove) and in-place WebView player on the official embed URL; injected clip script keeps playback inside start..end (resets to start and pauses at end, snaps seeks back into range). One player at a time (NotesUiState.playingVideoId, not stored).
+- VM: insertVideo (after caret block + new paragraph), updateVideo, deleteVideo, playVideo; all undoable.
+- Tests: NoteYouTubeTest, NoteVideoEmbedTest; NoteAddSheetTest tool set updated. 331 notes tests pass.
+- Verified on emulator-5556: lookup, embed, DB node, clip 5..12 enforced via WebView devtools, edit, remove, undo, reading view.
+- APK: releases\Virlin-Android-1.0.9-notes-youtube-20261107-0800-debug.apk
+
+## 2026-11-07 - Notes: voice recording tool (mic in toolbar)
+- New non-textual block NoteDocBlockType.AUDIO (appended after VIDEO; ordinals unchanged) carrying NoteDocAudio(file, durationMs, peaks). Stored in documentJson ("audio":{"file","ms","peaks"}), so no Room migration. Only names matching <uuid>.m4a are valid; a damaged entry decodes to audio=null and the block is kept.
+- Rich tree node "audio" (attrs id/file/durationMs/peaks/indent), Target.Fixed; any in-place change is refused (only insert/remove).
+- data/noteaudio/NoteAudioStore.kt: private files under filesDir/note_audio. Files are not deleted when a block is removed (undo restores it), same as note images.
+- Toolbar tool AUDIO ("Record audio", mic icon) after YOUTUBE opens a strip (NoteDialog.Audio): Record (asks RECORD_AUDIO, already in manifest) -> live waveform + timer + Stop / Discard -> preview with play/pause, seekable waveform, Record again, Insert. Close/Back discards an uninserted recording; leaving the app mid-recording stops it into the preview.
+- ui/notes/NoteAudioBlock.kt: recorder strip, NoteAudioCard (bordered card: play, loudness outline with tap/drag seek, time, menu Remove recording), NoteAudioPlayback (single MediaPlayer, one recording at a time), NoteAudioPlaybackHost (pauses on background, releases on leaving editor/reader).
+- VM: insertAudio (after caret block + new paragraph), deleteAudio; both undoable. Text projections show "[Audio]" / "[Audio ? m:ss]"; word count skips it.
+- Tests: NoteAudioDocTest, NoteAudioInsertTest; NoteAddSheetTest tool set updated. 342 notes tests pass.
+- Verified on emulator-5556: permission prompt, recording timer, stop -> preview, play/pause/seek, insert, DB node, reopen + play, remove + undo, discard deletes the file.
+- APK: releases\Virlin-Android-1.0.9-notes-audio-20261107-0814-debug.apk
+
+## 2026-11-07 - Notes: Text to audio (Cursor agent)
+- New toolbar tool "Text to audio" (RecordVoiceOver icon) right after "Record audio"; opens a popup (NoteTextToAudioDialog in ui/notes/NoteTextToAudio.kt).
+- Popup: paste/type text (max 20000 chars), Paste/Clear, speed Slower/Normal/Faster, Generate audio -> progress (part i of n, Cancel) -> preview player, Generate again, Insert.
+- Uses Android's built-in TextToSpeech (offline, no library, no download, no network). synthesizeToFile writes WAV parts to cache/note_tts (deleted after), which are encoded to AAC .m4a via MediaCodec + MediaMuxer into files/note_audio (NoteAudioStore).
+- Inserts the existing AUDIO block; NoteDocAudio gains optional title (start of the text, <=80 chars shown, <=120 stored). Codec "audio.title" and rich node attr "title" are additive; old notes unchanged. Card shows the title.
+- Generated file is deleted if the popup closes, text/speed changes or Generate again is pressed without Insert.
+- No speech engine / missing voice -> message + "Speech settings" button (com.android.settings.TTS_SETTINGS).
+- Tests: NoteAudioDocTest.spokenTextKeepsItsTitleInBothFormats, NoteAudioInsertTest.textToAudioOpensItsPopupAndInsertsLikeARecording + longTextIsSpokenInSentenceSizedParts; NoteAddSheetTest block-tool set. Notes suite 345/345.
+- APK: releases\Virlin-Android-1.0.9-notes-tts-20261107-0833-debug.apk (+~47 KB vs audio build). Verified on emulator-5556 only.
+
+## 2026-11-07 - Notes: Arrange blocks (drag to reorder) (Cursor agent)
+- New toolbar tool "Arrange blocks" (DragIndicator six-dot icon) in the document group before "Select across blocks"; also in the + sheet tool grid.
+- Arrange mode (route state in NotesRoute, like Select across): editor slot shows NoteBlockArranger (ui/notes/NoteBlockArranger.kt) - each visible block as a bordered read-only card (PreviewBlock, now internal) with a translucent six-dot handle on the left. Drag the handle, or long-press the card, to lift it; other cards slide (animateItemPlacement), auto-scroll near edges, spring settle on drop, haptics. Done / Back / any other tool (except undo/redo) leaves the mode.
+- Move rule: domain/notedoc/NoteBlockMove.kt moveNoteBlock(blocks, id, to) - a collapsed toggle / toggle heading carries its hidden lines; dropping right after a collapsed toggle outdents just enough to stay visible; any move that would fold visible blocks away is refused (WouldHide).
+- NotesViewModel.moveBlock(id, toIndex): one undo step, debounced save; refused with a message when richDocumentAccepts fails.
+- RichNoteAdapter.applyBlockEdits: new reorderTopLevel step - reorders whole top-level nodes only when it is a pure reorder, every kept block has its own id, and the read-back order matches; otherwise the tree is left exactly as before (old behaviour), so splitting a list/quote/toggle is refused, never lossy.
+- Tests: NoteBlockMoveTest (6), NoteArrangeTest (3), NoteAddSheetTest grid. Notes suite 354/354.
+- APK: releases\Virlin-Android-1.0.9-notes-arrange-20261107-0900-debug.apk. Verified on emulator-5556 only (rich note: handle drag down, long-press drag up with auto-scroll, undo in mode, Back).
+
+## 2026-11-07 - Notes: Arrange blocks (drag to reorder) (Cursor agent)
+- New toolbar tool "Arrange blocks" (DragIndicator six-dot icon) in the document group before "Select across blocks"; also in the + sheet tool grid.
+- Arrange mode (route state in NotesRoute, like Select across): editor slot shows NoteBlockArranger (ui/notes/NoteBlockArranger.kt) - each visible block as a bordered read-only card (PreviewBlock, now internal) with a translucent six-dot handle on the left. Drag the handle, or long-press the card, to lift it; other cards slide (animateItemPlacement), auto-scroll near edges, spring settle on drop, haptics. Done / Back / any other tool (except undo/redo) leaves the mode.
+- Move rule: domain/notedoc/NoteBlockMove.kt moveNoteBlock(blocks, id, to) - a collapsed toggle / toggle heading carries its hidden lines; dropping right after a collapsed toggle outdents just enough to stay visible; any move that would fold visible blocks away is refused (WouldHide).
+- NotesViewModel.moveBlock(id, toIndex): one undo step, debounced save; refused with a message when richDocumentAccepts fails.
+- RichNoteAdapter.applyBlockEdits: new reorderTopLevel step - reorders whole top-level nodes only when it is a pure reorder, every kept block has its own id, and the read-back order matches; otherwise the tree is left exactly as before (old behaviour), so splitting a list/quote/toggle is refused, never lossy.
+- Tests: NoteBlockMoveTest (6), NoteArrangeTest (3), NoteAddSheetTest grid. Notes suite 354/354.
+- APK: releases\Virlin-Android-1.0.9-notes-arrange-20261107-0900-debug.apk. Verified on emulator-5556 only (rich note: handle drag down, long-press drag up with auto-scroll, undo in mode, Back).
+
+## 2026-11-07 - Notes: Rename note strip (Cursor agent)
+- New toolbar tool "Rename note" (DriveFileRenameOutline pen icon), first in the document group; also "Rename" in the + sheet grid.
+- Opens NoteDialog.Rename -> NoteRenameStrip (ui/notes/NoteRenameStrip.kt) under the rail: 60dp white strip, pen badge, single-line field pre-filled with the current name (all selected, keyboard opens), Save button (disabled when blank), close X, Back closes, IME Done saves.
+- NotesViewModel.renameNote(name): collapses whitespace, trims, caps at MAX_TITLE=120, refuses blank, saves via the existing title path (onTitleChanged -> debounced saveNoteDoc) and closes the strip.
+- Only the note's own stored title changes. Mind-map boxes use project/stream/task titles, so a task note's name is independent of its box. For Inbox (capture) notes the existing save path keeps the capture title equal to the note title, as before.
+- Tests: NoteRenameTest (3); NoteAddSheetTest grid picks up the new tool. Notes suite 357/357.
+- APK: releases\Virlin-Android-1.0.9-notes-rename-20261107-0938-debug.apk. Verified on emulator-5556 only (Done key save, Save button, X discards); test note renamed back to "Rich test".
+
+## 2026-11-07 10:44 - Note card preview matches the note (task Page / map page)
+- ui/notes/NotesRoute.kt: extracted the reading view's block loop into NoteDocumentBlocks (unchanged behaviour); new NoteDocumentPreview(blocks, palette) renders a note exactly like the reader (fonts, runs, colours, alignment, lists, tables, code, equations, media) in the project's note palette.
+- ui/hierarchy/MasterDocument.kt: MasterDocumentEntry gains optional noteBlocks (default null, so PDF export and other callers are untouched); previewableNoteBlocks(doc) returns blocks only for readable, non-empty notes.
+- ui/hierarchy/MapContainerPageScreen.kt: MasterDocumentItem takes optional notePalette; when the entry has noteBlocks the expanded card shows NoteDocumentPreview (tag map_page_note_preview_<id>) instead of the flat text body. Card shell, header and Open button unchanged. Map page task-note entries pass their blocks.
+- ui/page/TaskPageScreen.kt: TaskPageRow gains noteBlocks; Note rows keep the loaded doc's blocks and pass them plus the project palette to the card.
+- Empty or unreadable notes keep the previous text preview ("No note content yet").
+- Tests: MasterDocumentItemUiTest +2 (preview shown, flat text gone, Open still works; previewable rules). 369/369 focused tests pass.
+- APK: releases\Virlin-Android-1.0.9-notes-notepreview-20261107-1036-debug.apk (verified on emulator-5556 only).
+
+## 2026-11-07 10:52 - Note cards show the note's own name
+- ui/hierarchy/MasterDocument.kt: noteCardTitle(doc, fallback = "Notes") - the note doc's title (whitespace collapsed), else the fallback.
+- ui/page/TaskPageScreen.kt: task Page Note rows are titled noteCardTitle(doc) instead of the fixed "Notes". The same title is passed when opening the note, which the editor only uses when the note has no stored title, so opening is unchanged.
+- ui/hierarchy/MapContainerPageScreen.kt: map page task-note entries use noteCardTitle(doc, entry.label) instead of the fixed label.
+- Tests: MasterDocumentItemUiTest +1. Verified on emulator-5556: rename shows on the card while the task/map box keeps its own name; test note renamed back to "Natural Language".
+- APK: releases\Virlin-Android-1.0.9-notes-notetitle-20261107-1048-debug.apk
+
+## 2026-11-07 11:04 - Unlimited notes per mind-map task (Add > Note always starts a new note)
+- domain/model/TaskPageModels.kt: TaskPageTypeKeys.extraNoteOwner(taskId, noteId) = "task-<taskId>#note-<id>" plus isExtraNoteOwner / noteTaskId / canonicalNoteOwner / extraNotePrefix. Canonical "task-<taskId>" keys unchanged; no schema change.
+- domain/action/TaskPageActions.kt: newNote(taskId) -> NewTaskNote(ownerKey, title): the canonical note while it has never been written, otherwise a new extra note ("<task> N") with its Page block created up front. loadAndReconcile drops Page blocks of extra notes that were never saved (opened and left empty) and re-densifies order.
+- ui/map/ProjectMapScreen.kt: Add > Note calls newNote and opens notesRoute(ownerKey, title). Voice/Prompt/Link/PDF/Attachment/Image already create a new capture each time (unchanged).
+- ui/notes/NotesRoute.kt: project palette resolves extra task-note keys; an extra note re-ensures its Page block once saved.
+- ui/page/TaskPageScreen.kt + ui/hierarchy/MapContainerPageScreen.kt: Note rows read and open block.contentId (identical for canonical notes); unsaved extra notes are hidden.
+- domain/action/ProjectDeletion.kt, RoomWorkStreamRepository, InMemoryWorkStreamRepository: deleting a task/project also deletes its extra notes (prefix match via substr, chunks too); late saves to an extra note of a deleted task are refused like canonical ones.
+- domain/project/ProjectDuplicator.kt: extra notes copy to the new task's extra keys.
+- Tests: TaskPageActionsTest +4. Wider suite 658 run; 6 failures in ProjectAppearanceUiTest / PopupViewportUiTest / MasterResumeRoomTest, none of which touch this change.
+- Verified on emulator-5556: second note created and listed, empty third note left no card, card opens its own note; DB shows only the two notes. A test note "Natural Language 2" remains on the test AVD.
+- APK: releases\Virlin-Android-1.0.9-notes-multinote-20261107-1100-debug.apk
+
+## 2026-11-07 - Duplicate note tool (APK notes-duplicate-20261107-1108)
+- TaskPageActions.duplicateNote(sourceOwner): one transaction; copies the stored task note (blocks + rich document verbatim, title "<title> (copy)") into a new extra owner task-<id>#note-<id>, lists it on the box Page right after the source. Refuses non-task, unsaved, damaged notes or missing tasks (writes nothing).
+- NoteTool.DUPLICATE (ContentCopy, "Duplicate note") after Rename in the toolbar and the + sheet grid; enabled only for task notes that loaded cleanly. NotesViewModel.duplicateNote saves pending edits first, then shows where the copy went; the open note is unchanged.
+- Images/audio are shared by reference (stores never GC files). Test: TaskPageActionsTest duplicating_a_note_copies_its_document_and_lists_the_copy_right_after_it.
+
+## 2026-11-07 - Notes YouTube: picture fix, minimal player, digit time entry (APK notes-videoplayer-20261107-1202)
+- Root cause of 'audio but no picture': Compose AndroidView gives the WebView WRAP_CONTENT layout params; a wrap-content WebView lays the page out at zero height (html computed height 0px), so YouTube sized its video element to height 0. Verified via WebView devtools (video style height:0px, readyState 4, playing). Fix: WebView layoutParams MATCH_PARENT in NoteVideoPlayer. Hardware layer kept.
+- Player: embed URL now controls=0&iv_load_policy=3 (documented params); a control row below the video (never over it): play/pause, clip-relative seek slider, elapsed/clip time; seek off during adverts; YouTube branding and pause overlay untouched. Status polled via evaluateJavascript (no JS bridge). Scripted fullscreen is refused by WebView without a page gesture, so no fullscreen button; Open in YouTube stays in the menu. Card padding 8->5dp for a larger player.
+- Time entry: start/end fields take digits filled from the right (130 = 1:30, 10230 = 1:02:30), shown formatted; leaving a field normalises carry-over (90 -> 1:30). Clip summary/hint line under the fields. NoteYouTube.clockDigits/formatClockDigits/clockDigitsSeconds/secondsToClockDigits.
+- Tests: NoteYouTubeTest (+2, embed URL updated). 219 notes tests pass. Not changed: ui/link/YouTubeInlinePlayer.kt (same wrap-content pattern there).
+
+## 2026-11-07 - Notes editor: opening space scrolls with the document (APK notes-scrolltop-20261107-1214)
+- VirlinNotesScreen: removed the fixed top=28dp padding around the editor slot (it clipped text under a white band below the rail). New NoteDocumentTopSpace = 28.dp.
+- NoteBlockEditor LazyColumn: contentPadding(top = NoteDocumentTopSpace), so the space shows at the top of the note and scrolls away; item indices, scroll anchors and saved reading positions unchanged.
+- NotesRoute: arrange mode, damaged-note panel and paste indicator keep the 28dp top offset (look unchanged).
+- NotePasteUiTest.topBlockIndex now ignores blocks only visible inside the opening space. 274 notes tests pass.
+
+## 2026-11-07 - Notes reading view uses the editor renderer (read-only)
+- NotesReaderRoute (ui/notes/NotesRoute.kt) now draws NoteBlockEditor(readOnly = true) with the note's project palette (shared rememberNoteProjectId) instead of the older NoteDocumentBlocks preview. Header: '<- Edit' + 'Reading view'; title as the first scrolling item.
+- NoteBlockEditor.kt: readOnly + readerHeader params; NoteRowActions keeps collapse/video play view-local in read-only mode; ReadOnlyBlockText (read-only selectable text, same style/transformations), ReadOnlyTable (same widths/fills, no edge + controls); edit/remove/LaTeX-source/checklist-toggle disabled when read-only; shared blockTextStyle().
+- No document is written from the reader. Test: NoteReadingViewUiTest. APK releases/Virlin-Android-1.0.9-notes-readingview-20261107-1222-debug.apk
+
+## 2026-11-07 - Notes header: three-dot menu removed, compact save status
+- VirlinNotesScreen.kt: removed the 'Note options' overflow menu (Preview / Export / Paste details) ahead of a planned redesign; onExport/onPasteDetails params dropped (NotesRoute updated). Preview stays on the eye button. VM onExport() and the PasteDetails dialog code remain for reuse.
+- Save status is now a compact 13dp check + 11sp label (tag notes_save_status) at the right edge; title gets the freed width.
+- APK releases/Virlin-Android-1.0.9-notes-header-20261107-1238-debug.apk
+
+## 2026-11-07 - Notes: Print / Save PDF
+- New NoteTool.PRINT (rail, after Duplicate; Add sheet 'Print / PDF') opens NoteDialog.Print -> NotePrintStrip (ui/notes/NotePrintStrip.kt): Paper A4/Letter/Legal/A5, Layout portrait/landscape, Page numbers off/top/bottom + position left/centre/right, Margins narrow/normal/wide, Title show/hide, live page count, PDF and Print buttons.
+- ui/notes/NotePrint.kt: NotePrintRenderer draws the note with the editor's sizes/rhythm/project colours/fonts (Google fonts resolved via LocalFontFamilyResolver), runs (bold/italic/underline/strike/colour/highlight/size/font/link), lists, checklists, quote, code (syntax colours), equation (LaTeX source in card), prompt, divider, tables (split between rows), images, video and audio cards; collapsed sections print expanded. NotePrinting.print uses PrintManager + PrintDocumentAdapter (re-lays out for the paper chosen in the system dialog); Save PDF writes via CreateDocument. Uses android.graphics.pdf only; no new dependencies; note data is never modified.
+- Tests: NotePrintRendererTest. APK releases/Virlin-Android-1.0.9-notes-print-20261107-1255-debug.apk
+
+## 2026-11-07 - Notes: Export (PDF / Word / Markdown / Image)
+- New toolbar + Add-sheet tool EXPORT (NoteTool.EXPORT, NoteDialog.Export) opening NoteExportStrip under the rail: four animated format tiles; each format's options animate in within the same strip.
+- NoteExport.kt: NoteExportSettings, CreateExportDocument (SAF, dynamic MIME), NoteExportImages (downscale to display size x DPI; JPEG unless real transparency), NoteExporter (bytes per format, zip, file names, size label).
+- NotePdfSlimmer.kt: rewrites PdfDocument's lossless opaque RGB / sRGB-ICC image streams as JPEG and rebuilds xref; returns the original on anything unexpected or when not smaller.
+- NoteDocxWriter.kt: hand-written OOXML (.docx) - styles (Title, Heading1-5, Quote, Code, Prompt), real numbering lists, tables, hyperlinks, fonts/colours/highlights, embedded pictures. Opens in Word; Google Docs compatible.
+- NoteMarkdownWriter.kt: GFM output (marks, lists, checklists, quotes, fenced code with language, $$ equations, pipe tables); optional .zip with images.
+- NotePrint.kt: NotePrintSource.imageDpi, layoutLong(), public drawPageNumber(), SYNTAX_COLORS internal, image decode via NoteExportImages.decodeFor. Print behaviour unchanged.
+- No new dependencies. Test: NoteExportTest (7). Notes suite 291/0. APK releases\Virlin-Android-1.0.9-notes-export-20261107-1333-debug.apk (emulator-5556 only).
+
+## 2026-11-07 - Notes: page formatting (Formatting tool, page view, formatted print/export)
+- New rail + Add sheet tool NoteTool.FORMATTING ("Page formatting"), handled in NotesRoute (view state, not a VM dialog).
+- NoteFormattingStrip.kt: one compact sideways-scrolling strip (paper A4/A3/A5/Letter/Legal, layout, margins, page numbers, position, title) with feathered edges and a one-time peek; shared NoteFeatheredRow + NoteStripChoice.
+- NotePageSetupStore.kt: per-note page setup + on/off in SharedPreferences "note_page_setup" (beside the note, never in the document; no Room change).
+- NotePageView.kt + NoteBlockEditor(pageView=): editor drawn at paper scale (LocalDensity override) as white sheets on a desk, margins, title on page 1, Page N of M header/footer; breaks from NotePrintRenderer.paginate; page fill from measured block heights. Folded blocks show open; arrange/select-across turn it off.
+- NotePrint.kt: A3 paper, NotePaper.offered, keepBlocksWhole, NotePagination/paginate, video card drawn like the editor (16:9 thumbnail, badge, title), Save PDF slimmed.
+- Print strip slimmed to its header (summary opens formatting); Export strip slimmed to tiles + one feathered row (Pages chip + format options). NoteExportSettings lost paper/layout/numbers/title; exporter takes the page setup. Word uses its margins and live PAGE/NUMPAGES header or footer.
+- Print / Save PDF / Export (PDF, Word, Image) without formatting on asks "Format the pages first?" (Turn on formatting / Continue anyway with A4 defaults). Markdown never asks.
+- Tests: NotePrintRendererTest (+3: pagination matches layout, A3, setup round trip), NoteExportTest updated (footer). Notes suite 294/0.
+- APK: releases\Virlin-Android-1.0.9-notes-formatting-20261107-1358-debug.apk (installed on emulator-5556 only).
+
+## 2026-11-07 - Notes: Page section note preview drawn by the editor itself
+- NoteDocumentPreview (Page / map page cards) now uses NoteReadOnlyBlocks (NoteBlockEditor.kt): the editor's own NoteBlockRow, read only, so prompt/code boxes with Copy, tables, media, fonts and spacing match the editor exactly. Toggles fold and videos play as view-only state.
+- NoteBlockRow / BlockTextField / NoteTableBlock accept a null view model, which forces read only (no edit callback can run). List numbering moved to noteListNumbers().
+- Removed NoteDocumentBlocks (the simplified preview list); PreviewBlock stays for the arranger.
+- Tests: notes + hierarchy + task page suites 465 run; only the pre-existing PopupViewportUiTest / ProjectAppearanceUiTest failures (settings dialogs, unrelated).
+- APK: releases\Virlin-Android-1.0.9-notes-pagepreview-20261107-1414-debug.apk (emulator-5556 only).
+
+## 2026-11-07 - Notes: removed the YouTube entry hint
+- NoteVideoEntry.kt LookupRow: the 'Copy a video's link in YouTube (Share -> Copy link)...' hint is gone; the status row is skipped while the link is empty (no blank gap). Errors, checking and found-video rows unchanged.
+- APK: releases\Virlin-Android-1.0.9-notes-videohint-20261107-1417-debug.apk (emulator-5556 only).
+
+## 2026-11-07 - Notes: rounded YouTube player corners
+- NoteVideoBlock.kt NoteVideoPlayer: the WebView clips to a 10dp rounded outline (ViewOutlineProvider + clipToOutline, which also clips the hardware video layer); the black backdrop and load-error panel use the same shape. Matches the thumbnail's 10dp. Player, controls, clip script and fullscreen unchanged; nothing overlays YouTube's player.
+- APK: releases\Virlin-Android-1.0.9-notes-videocorners-20261107-1425-debug.apk (emulator-5556 only).

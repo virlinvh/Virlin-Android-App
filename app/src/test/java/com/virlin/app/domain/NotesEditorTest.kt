@@ -2,6 +2,7 @@ package com.virlin.app.domain
 
 import com.virlin.app.domain.action.DefaultVirlinActions
 import com.virlin.app.domain.notedoc.NoteDocAlign
+import com.virlin.app.domain.notedoc.NoteDocBlock
 import com.virlin.app.domain.notedoc.NoteDocBlockType
 import com.virlin.app.domain.notedoc.NoteDocMark
 import com.virlin.app.domain.notedoc.NoteRuns
@@ -21,6 +22,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -66,6 +68,80 @@ class NotesEditorTest {
         vm.foldHeadingsAtLevel(null)
         assertEquals(listOf(mainId, sectionId, subsectionId, bodyId),
             visibleNoteBlocks(vm.state.value.blocks).map { it.id })
+    }
+
+    @Test fun toggleHeadingsCollapseTheirSectionAndConvertBackKeepingContent() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val headingId = vm.focusFirst()
+        vm.setParagraphStyle(NoteDocBlockType.HEADING_2, toggle = true)
+        assertEquals("Toggle heading 2", vm.toolState().paragraphLabel)
+        vm.onTextChanged(headingId, "Section", TextRange(7))
+        vm.onTextChanged(headingId, "Section\n", TextRange(8))
+        val bodyId = vm.state.value.focusedBlockId!!
+        assertNotEquals(headingId, bodyId)
+        vm.onTextChanged(bodyId, "Body", TextRange(4))
+        val heading = vm.state.value.blocks.first { it.id == headingId }
+        assertEquals(NoteDocBlockType.HEADING_2, heading.type)
+        assertTrue(heading.toggleHeading)
+
+        vm.toggleCollapsed(headingId)
+        assertEquals(listOf(headingId), visibleNoteBlocks(vm.state.value.blocks, foldHeadings = false).map { it.id })
+
+        vm.onFocusChanged(headingId, true)
+        vm.onSelectionChanged(headingId, TextRange(7))
+        vm.onTextChanged(headingId, "Section\n", TextRange(8))
+        assertFalse("Enter on a collapsed toggle heading opens it",
+            vm.state.value.blocks.first { it.id == headingId }.isCollapsed)
+
+        vm.onFocusChanged(headingId, true)
+        vm.onSelectionChanged(headingId, TextRange(0))
+        vm.toggleCollapsed(headingId)
+        vm.setParagraphStyle(NoteDocBlockType.HEADING_2, toggle = false)
+        val plain = vm.state.value.blocks.first { it.id == headingId }
+        assertFalse(plain.toggleHeading)
+        assertFalse(plain.isCollapsed)
+        assertTrue(vm.state.value.blocks.any { it.id == bodyId && it.text == "Body" })
+
+        vm.setParagraphStyle(NoteDocBlockType.PARAGRAPH, toggle = true)
+        assertEquals(NoteDocBlockType.TOGGLE, vm.state.value.blocks.first { it.id == headingId }.type)
+        vm.setParagraphStyle(NoteDocBlockType.PARAGRAPH, toggle = true)
+        assertEquals(NoteDocBlockType.PARAGRAPH, vm.state.value.blocks.first { it.id == headingId }.type)
+    }
+
+    @Test fun toggleToolPutsSelectedTextInsideANewToggleAndUndoRestoresIt() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val firstId = vm.focusFirst()
+        vm.onTextChanged(firstId, "Speak naturally", TextRange(15))
+        vm.onTextChanged(firstId, "Speak naturally\n", TextRange(16))
+        val secondId = vm.state.value.focusedBlockId!!
+        vm.onTextChanged(secondId, "Keep this", TextRange(9))
+        val before = vm.state.value.blocks
+
+        vm.onFocusChanged(firstId, true)
+        vm.onSelectionChanged(firstId, TextRange(0, 15))
+        vm.onTool(NoteTool.TOGGLE)
+        val blocks = vm.state.value.blocks
+        assertEquals(3, blocks.size)
+        assertEquals(NoteDocBlockType.TOGGLE, blocks[0].type)
+        assertEquals("", blocks[0].text)
+        assertEquals(blocks[0].id, vm.state.value.focusedBlockId)
+        assertEquals(firstId, blocks[1].id)
+        assertEquals("Speak naturally", blocks[1].text)
+        assertEquals(1, blocks[1].indent)
+        assertEquals(before[1], blocks[2])
+
+        vm.undo()
+        assertEquals(before, vm.state.value.blocks)
+
+        vm.onFocusChanged(secondId, true)
+        vm.onSelectionChanged(secondId, TextRange(9))
+        vm.onTool(NoteTool.TOGGLE)
+        val inserted = vm.state.value.blocks
+        assertEquals("a caret alone still adds a new toggle", 4, inserted.size)
+        assertEquals(NoteDocBlockType.TOGGLE, inserted[2].type)
+        assertEquals(before, inserted.filter { it.id in before.map(NoteDocBlock::id) })
     }
 
     private val clock = FakeClock(Instant.parse("2026-09-30T09:00:00Z"))
@@ -359,8 +435,6 @@ class NotesEditorTest {
         val id = vm.focusFirst()
         vm.onTextChanged(id, "item", TextRange(4))
         listOf(
-            NoteTool.BULLETS to NoteDocBlockType.BULLET,
-            NoteTool.NUMBERING to NoteDocBlockType.NUMBERED,
             NoteTool.CHECKLIST to NoteDocBlockType.CHECKLIST,
             NoteTool.QUOTE to NoteDocBlockType.QUOTE,
             NoteTool.PROMPT to NoteDocBlockType.PROMPT,
@@ -370,6 +444,133 @@ class NotesEditorTest {
             vm.onTool(tool)  // toggling back returns to a plain paragraph
             assertEquals(NoteDocBlockType.PARAGRAPH, vm.state.value.blocks.first().type)
         }
+        // Bullets and numbering make the list and open their style strip; the same tool closes
+        // the strip and keeps the list, and the strip's None returns to a plain paragraph.
+        listOf(
+            NoteTool.BULLETS to NoteDocBlockType.BULLET,
+            NoteTool.NUMBERING to NoteDocBlockType.NUMBERED,
+        ).forEach { (tool, type) ->
+            vm.onTool(tool)
+            assertEquals(type, vm.state.value.blocks.first().type)
+            assertEquals(com.virlin.app.ui.notes.NoteDialog.ListStyle(type), vm.state.value.dialog)
+            vm.onTool(tool)
+            assertEquals(type, vm.state.value.blocks.first().type)
+            assertNull(vm.state.value.dialog)
+            vm.removeListFromFocused()
+            assertEquals(NoteDocBlockType.PARAGRAPH, vm.state.value.blocks.first().type)
+        }
+    }
+
+    @Test fun listStyle_appliesToTheWholeListContinuesOnEnterAndUndoes() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val id = vm.focusFirst()
+        vm.onTextChanged(id, "one", TextRange(3))
+        vm.onTool(NoteTool.NUMBERING)
+        vm.onTextChanged(id, "one\ntwo", TextRange(4))
+        val second = vm.state.value.blocks[1].id
+        assertEquals(second, vm.state.value.focusedBlockId)
+        assertTrue(vm.setListStyle(NoteDocBlockType.NUMBERED, "lower-roman"))
+        assertEquals(listOf("lower-roman", "lower-roman"), vm.state.value.blocks.map { it.listStyle })
+        vm.undo()
+        assertEquals(listOf<String?>(null, null), vm.state.value.blocks.map { it.listStyle })
+        vm.redo()
+        assertEquals(listOf("lower-roman", "lower-roman"), vm.state.value.blocks.map { it.listStyle })
+        vm.onTextChanged(second, "two\n", TextRange(4))
+        assertEquals("lower-roman", vm.state.value.blocks[2].listStyle)
+        assertEquals(NoteDocBlockType.NUMBERED, vm.state.value.blocks[2].type)
+        // Picking the default stores nothing, so the note is written exactly as before.
+        assertTrue(vm.setListStyle(NoteDocBlockType.NUMBERED, "decimal"))
+        assertTrue(vm.state.value.blocks.all { it.listStyle == null })
+    }
+
+    @Test fun spacingStrip_chipTogglesItAndPicksKeepItOpen() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val id = vm.focusFirst()
+        vm.onTextChanged(id, "Plan", TextRange(4))
+        vm.onTool(NoteTool.LINE_SPACING)
+        assertEquals(com.virlin.app.ui.notes.NoteDialog.LineSpacing, vm.state.value.dialog)
+        vm.setLineSpacing(1.5f, keepOpen = true)
+        vm.setLineSpacing(2f, keepOpen = true)
+        assertEquals(2f, vm.state.value.blocks.single().lineSpacing)
+        assertEquals(com.virlin.app.ui.notes.NoteDialog.LineSpacing, vm.state.value.dialog)
+        vm.onTool(NoteTool.LINE_SPACING)
+        assertEquals(null, vm.state.value.dialog)
+        vm.undo()
+        assertEquals(1.5f, vm.state.value.blocks.single().lineSpacing)
+    }
+
+    @Test fun paragraphStrip_chipTogglesItAndPicksKeepItOpen() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val id = vm.focusFirst()
+        vm.onTextChanged(id, "Plan", TextRange(4))
+        vm.onTool(NoteTool.PARAGRAPH)
+        assertEquals(com.virlin.app.ui.notes.NoteDialog.Paragraph, vm.state.value.dialog)
+        vm.setParagraphStyle(NoteDocBlockType.HEADING_2, toggle = false, keepOpen = true)
+        assertEquals(NoteDocBlockType.HEADING_2, vm.state.value.blocks.single().type)
+        assertEquals(com.virlin.app.ui.notes.NoteDialog.Paragraph, vm.state.value.dialog)
+        vm.setBlockType(NoteDocBlockType.QUOTE, keepOpen = true)
+        assertEquals(NoteDocBlockType.QUOTE, vm.state.value.blocks.single().type)
+        assertEquals(com.virlin.app.ui.notes.NoteDialog.Paragraph, vm.state.value.dialog)
+        vm.onTool(NoteTool.PARAGRAPH)
+        assertEquals(null, vm.state.value.dialog)
+        vm.undo(); vm.undo()
+        assertEquals(NoteDocBlockType.PARAGRAPH, vm.state.value.blocks.single().type)
+    }
+
+    @Test fun wordCount_isAlwaysAvailableAndCountsTheWholeNote() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val id = vm.focusFirst()
+        vm.onTextChanged(id, "plan the week", TextRange(13))
+        assertTrue(NoteTool.WORD_COUNT in vm.toolState().enabled)
+        vm.onTool(NoteTool.WORD_COUNT)
+        assertEquals(com.virlin.app.ui.notes.NoteDialog.WordCount, vm.state.value.dialog)
+        assertEquals(3, vm.wordCount().words)
+        assertEquals(13, vm.wordCount().characters)
+        assertEquals("plan the week", vm.state.value.blocks.single().text)
+    }
+
+    @Test fun changeCase_cyclesTheSelectionKeepsMarksAndUndoes() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val id = vm.focusFirst()
+        vm.onTextChanged(id, "plan the week", TextRange(13))
+        vm.onSelectionChanged(id, TextRange(0, 4))
+        vm.onTool(NoteTool.BOLD)
+        vm.onSelectionChanged(id, TextRange(0, 13))
+        assertTrue(NoteTool.CHANGE_CASE in vm.toolState().enabled)
+        vm.onTool(NoteTool.CHANGE_CASE)
+        assertEquals("PLAN THE WEEK", vm.state.value.blocks.single().text)
+        vm.onTool(NoteTool.CHANGE_CASE)
+        assertEquals("Plan The Week", vm.state.value.blocks.single().text)
+        vm.onTool(NoteTool.CHANGE_CASE)
+        assertEquals("plan the week", vm.state.value.blocks.single().text)
+        assertEquals(TextRange(0, 13), vm.state.value.selection)
+        assertTrue(NoteRuns.rangeHasMark(vm.state.value.blocks.single().runs, 0, 4, NoteDocMark.BOLD))
+        vm.undo()
+        assertEquals("Plan The Week", vm.state.value.blocks.single().text)
+        // With only a caret, the word under it changes ("The" is title case, so lowercase is next).
+        vm.onSelectionChanged(id, TextRange(6))
+        vm.onTool(NoteTool.CHANGE_CASE)
+        assertEquals("Plan the Week", vm.state.value.blocks.single().text)
+        vm.onTool(NoteTool.CHANGE_CASE)
+        assertEquals("Plan THE Week", vm.state.value.blocks.single().text)
+    }
+
+    @Test fun listStyle_onAPlainLineMakesItThatList() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        val id = vm.focusFirst()
+        vm.onTextChanged(id, "point", TextRange(5))
+        assertTrue(vm.setListStyle(NoteDocBlockType.BULLET, "arrow"))
+        val block = vm.state.value.blocks.single()
+        assertEquals(NoteDocBlockType.BULLET, block.type)
+        assertEquals("arrow", block.listStyle)
+        vm.onTool(NoteTool.QUOTE)
+        assertNull(vm.state.value.blocks.single().listStyle)
     }
 
     @Test fun alignIndentAndSpacing_areStoredOnTheBlock() = runTest {
@@ -386,8 +587,12 @@ class NotesEditorTest {
         assertEquals(2, vm.state.value.blocks.first().indent)
         vm.onTool(NoteTool.OUTDENT)
         assertEquals(1, vm.state.value.blocks.first().indent)
+        assertEquals("Single", vm.toolState().spacingLabel)
         vm.setLineSpacing(1.5f)
         assertEquals(1.5f, vm.state.value.blocks.first().lineSpacing)
+        assertEquals("1.5", vm.toolState().spacingLabel)
+        vm.setLineSpacing(2f)
+        assertEquals("Double", vm.toolState().spacingLabel)
     }
 
     @Test fun indentNeverGoesNegative() = runTest {

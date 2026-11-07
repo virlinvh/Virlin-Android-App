@@ -1,6 +1,7 @@
 package com.virlin.app.data.noteimage
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import java.io.File
@@ -42,6 +43,34 @@ object NoteImageStore {
             file.delete()
             throw error
         }
+    }
+
+    /**
+     * Stores an edited picture as a new file and returns its name. The file it was made from is
+     * left untouched, so undo can always return to it.
+     */
+    fun saveEdited(context: Context, bitmap: Bitmap, png: Boolean): String {
+        val root = File(context.filesDir, "note_images").also { it.mkdirs() }
+        val name = UUID.randomUUID().toString()
+        val file = File(root, name)
+        try {
+            file.outputStream().use { out ->
+                require(bitmap.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG,
+                    if (png) 100 else 92, out)) { "Could not save the edited image" }
+            }
+            require(file.length() in 1..MAX_BYTES) { "The edited image is too large to save" }
+            return name
+        } catch (error: Exception) {
+            file.delete()
+            throw error
+        }
+    }
+
+    /** Whether the stored picture keeps transparency (PNG, WebP or GIF), so edits should too. */
+    fun keepsTransparency(file: File): Boolean {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        return bounds.outMimeType in setOf("image/png", "image/webp", "image/gif")
     }
 
     /** Saves a clipboard-embedded bitmap to the same private store as picker images. */

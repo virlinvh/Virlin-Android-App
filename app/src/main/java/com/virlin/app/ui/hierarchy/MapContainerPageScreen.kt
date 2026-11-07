@@ -138,8 +138,7 @@ fun MapContainerPageScreen(
     }
     LaunchedEffect(allPageBlocks, resumeVersion) {
         allPageBlocks.filter { it.block.typeKey == TaskPageTypeKeys.NOTE }.forEach { entry ->
-            noteDocs[entry.block.taskId] = VirlinGraph.repository.getNoteDoc(
-                TaskPageTypeKeys.noteOwner(entry.block.taskId))
+            noteDocs[entry.block.contentId] = VirlinGraph.repository.getNoteDoc(entry.block.contentId)
         }
     }
     val captureEntries = remember(entries) { entries.associateBy { it.capture.id } }
@@ -238,7 +237,7 @@ fun MapContainerPageScreen(
                             }
                         }
                         if (expanded[key] != false) items(section.entries, key = { "document-${it.id}" }) { entry ->
-                            MasterDocumentItem(entry, ink, accent) { nav.navigate(entry.route) }
+                            MasterDocumentItem(entry, ink, accent, palette) { nav.navigate(entry.route) }
                         }
                     }
                     item { Spacer(Modifier.size(20.dp)) }
@@ -253,7 +252,7 @@ fun MapContainerPageScreen(
 
 @Composable
 internal fun MasterDocumentItem(entry: MasterDocumentEntry, ink: Color,
-    accent: Color, onOpen: () -> Unit) {
+    accent: Color, notePalette: ProjectPalette? = null, onOpen: () -> Unit) {
     var isExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
     val kind = entry.kind.lowercase()
     val icon = when {
@@ -297,7 +296,10 @@ internal fun MasterDocumentItem(entry: MasterDocumentEntry, ink: Color,
                         }
                         Spacer(Modifier.size(10.dp))
                     }
-                    MasterEntryBody(entry, ink)
+                    val noteBlocks = entry.noteBlocks
+                    if (noteBlocks != null) com.virlin.app.ui.notes.NoteDocumentPreview(noteBlocks, notePalette,
+                        Modifier.testTag("map_page_note_preview_${entry.id}"))
+                    else MasterEntryBody(entry, ink)
                     Row(Modifier.fillMaxWidth().padding(top = 10.dp),
                         horizontalArrangement = Arrangement.End) {
                         Surface(onClick = onOpen, color = accent.copy(alpha = .1f),
@@ -380,10 +382,16 @@ private fun masterSections(sections: List<MapPageSection>, pageBlocks: List<MapT
         }))
     }
     pageBlocks.groupBy { it.taskPath }.forEach { (path, blocks) ->
-        add(MasterDocumentSection("Task · $path", blocks.map { entry ->
-            MasterDocumentEntry(entry.block.id, entry.label, entry.label,
-                taskPageBody(entry.block.typeKey, entry.block.taskId, steps,
-                    notes[entry.block.taskId]), entry.route)
+        add(MasterDocumentSection("Task · $path", blocks.mapNotNull { entry ->
+            val isNote = entry.block.typeKey == TaskPageTypeKeys.NOTE
+            val note = if (isNote) notes[entry.block.contentId] else null
+            // A new note that was never written has nothing to show.
+            if (isNote && note == null && TaskPageTypeKeys.isExtraNoteOwner(entry.block.contentId)) return@mapNotNull null
+            MasterDocumentEntry(entry.block.id,
+                if (isNote) noteCardTitle(note, entry.label) else entry.label,
+                entry.label,
+                taskPageBody(entry.block.typeKey, entry.block.taskId, steps, note), entry.route,
+                noteBlocks = if (isNote) previewableNoteBlocks(note) else null)
         }))
     }
 }
@@ -407,7 +415,7 @@ internal fun mapTaskPageEntries(blocks: List<TaskPageBlock>, tasks: List<Task>, 
                 if (block.typeKey == TaskPageTypeKeys.TODO) "To-do" else "Note",
                 names.asReversed().joinToString(" › "),
                 if (block.typeKey == TaskPageTypeKeys.TODO) com.virlin.app.ui.todo.taskTodo(task.id)
-                else com.virlin.app.ui.notes.notesForTask(task.id, task.title))
+                else com.virlin.app.ui.notes.notesRoute(block.contentId, task.title))
         }.sortedWith(compareBy({ it.taskPath }, { it.block.order }, { it.block.id }))
 }
 

@@ -228,6 +228,10 @@ class RoomWorkStreamRepository private constructor(
                 delete("map_node_previews", "ownerKey", id)
             }
             report.noteOwners.forEach { delete("virlin_notes", "ownerKey", it) }
+            report.extraNotePrefixes.forEach { prefix ->
+                sql.execSQL("DELETE FROM virlin_note_chunks WHERE substr(ownerKey, 1, ?) = ?", arrayOf<Any>(prefix.length, prefix))
+                sql.execSQL("DELETE FROM virlin_notes WHERE substr(ownerKey, 1, ?) = ?", arrayOf<Any>(prefix.length, prefix))
+            }
             val taskEventIds = sql.query("SELECT id, type, detail FROM events WHERE type IN ('TASK_CREATED','TASK_UPDATED','TASK_COMPLETED','ACTIVE_TASK_SET','ACTIVE_TASK_CLEARED')").use { rows ->
                 buildList { while (rows.moveToNext()) if (report.ownsTaskEvent(rows.getString(1), rows.getString(2))) add(rows.getString(0)) }
             }
@@ -294,7 +298,8 @@ class RoomWorkStreamRepository private constructor(
         // for them; the editor re-reads through the repository when it reopens.
         override suspend fun noteDocOf(ownerKey: String) = readNoteDoc(ownerKey)
         override suspend fun saveNoteDoc(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc) {
-            check(doc.ownerKey !in deletedNoteOwners && deletedProjects.none { doc.ownerKey in it.noteOwners }) { "Note owner was deleted." }
+            val owner = com.virlin.app.domain.model.TaskPageTypeKeys.canonicalNoteOwner(doc.ownerKey)
+            check(owner !in deletedNoteOwners && deletedProjects.none { it.ownsNote(doc.ownerKey) }) { "Note owner was deleted." }
             val row = doc.toEntity()
             val json = row.documentJson
             // A small inline row remains compatible with every existing note. Larger documents
