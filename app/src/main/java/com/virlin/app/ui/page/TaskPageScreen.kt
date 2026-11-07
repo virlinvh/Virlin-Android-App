@@ -37,6 +37,9 @@ import com.virlin.app.domain.model.*
 import com.virlin.app.ui.hierarchy.MasterDocumentEntry
 import com.virlin.app.ui.hierarchy.MasterDocumentItem
 import com.virlin.app.ui.hierarchy.taskPageBody
+import com.virlin.app.ui.hierarchy.previewableNoteBlocks
+import com.virlin.app.ui.hierarchy.noteCardTitle
+import com.virlin.app.domain.notedoc.NoteDocBlock
 import com.virlin.app.ui.hierarchy.rememberProjectPalette
 import kotlinx.coroutines.launch
 
@@ -51,6 +54,7 @@ data class TaskPageRow(
     val attachmentKind: AttachmentKind? = null,
     val fullBody: String = preview,
     val mediaPath: String? = null,
+    val noteBlocks: List<NoteDocBlock>? = null,
 )
 data class TaskPageState(
     val task: Task? = null,
@@ -104,7 +108,10 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
         suspend fun rowsFor(ownerId: String): List<TaskPageRow> {
           val ownerBlocks = if (ownerId == taskId) blocks else repository.getTaskPageBlocks(ownerId)
           val steps = repository.getTaskSteps(ownerId)
-          return ownerBlocks.map { block ->
+          return ownerBlocks.filterNot { block ->
+            block.typeKey == TaskPageTypeKeys.NOTE && TaskPageTypeKeys.isExtraNoteOwner(block.contentId) &&
+                repository.getNoteDoc(block.contentId) == null
+          }.map { block ->
             val capture = captures[block.contentId]
             when (block.typeKey) {
                 TaskPageTypeKeys.TODO -> {
@@ -112,9 +119,10 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
                     TaskPageRow(block, "To-do", "Checklist", body.lineSequence().first(), fullBody = body)
                 }
                 TaskPageTypeKeys.NOTE -> {
-                    val body = taskPageBody(block.typeKey, ownerId, steps,
-                        repository.getNoteDoc(TaskPageTypeKeys.noteOwner(ownerId)))
-                    TaskPageRow(block, "Note", "Notes", body.lineSequence().first(), fullBody = body)
+                    val doc = repository.getNoteDoc(block.contentId)
+                    val body = taskPageBody(block.typeKey, ownerId, steps, doc)
+                    TaskPageRow(block, "Note", noteCardTitle(doc), body.lineSequence().first(), fullBody = body,
+                        noteBlocks = previewableNoteBlocks(doc))
                 }
                 else -> {
                     val label = TaskPageBlockRegistry.label(block.typeKey)
@@ -256,8 +264,8 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
                         MasterDocumentItem(
                             MasterDocumentEntry(row.block.id, row.title, row.label, row.fullBody,
                                 row.block.contentId, row.mediaPath,
-                                row.attachmentKind == AttachmentKind.IMAGE),
-                            ink, green) { openBlock(navController, row, vm::notify) }
+                                row.attachmentKind == AttachmentKind.IMAGE, noteBlocks = row.noteBlocks),
+                            ink, green, palette) { openBlock(navController, row, vm::notify) }
                         if (organize && row.block.taskId == taskId) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp),
                                 horizontalArrangement = Arrangement.End) {
@@ -296,7 +304,7 @@ private fun iconFor(key: String) = when (key) { TaskPageTypeKeys.TODO -> Icons.D
 private fun openBlock(nav: NavController, row: TaskPageRow, onUnsupported: (String) -> Unit) {
     when (row.block.typeKey) {
         TaskPageTypeKeys.TODO -> nav.navigate(com.virlin.app.ui.todo.taskTodo(row.block.taskId))
-        TaskPageTypeKeys.NOTE -> nav.navigate(com.virlin.app.ui.notes.notesForTask(row.block.taskId, row.title))
+        TaskPageTypeKeys.NOTE -> nav.navigate(com.virlin.app.ui.notes.notesRoute(row.block.contentId, row.title))
         TaskPageTypeKeys.capture(CaptureType.PROMPT) -> nav.navigate(com.virlin.app.ui.prompt.promptEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.LINK) -> nav.navigate(com.virlin.app.ui.link.linkEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.VOICE) -> nav.navigate(com.virlin.app.ui.voice.voiceEditorRoute(row.block.contentId))

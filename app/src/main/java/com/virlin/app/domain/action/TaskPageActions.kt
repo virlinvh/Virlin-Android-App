@@ -24,8 +24,34 @@ class TaskPageActions(
             captures.sortedBy { it.createdAt }.forEach {
                 ensurePageBlock(taskId, TaskPageTypeKeys.capture(it.type), it.id)
             }
+            // A new note that was opened and left without a word was never saved: drop its card.
+            val abandoned = pageBlocksOf(taskId).filter {
+                it.typeKey == TaskPageTypeKeys.NOTE && TaskPageTypeKeys.isExtraNoteOwner(it.contentId) &&
+                    noteDocOf(it.contentId) == null
+            }
+            if (abandoned.isNotEmpty()) {
+                abandoned.forEach { deletePageBlock(it.id) }
+                denseOrder(taskId, clock.now())
+            }
         }
         return repository.getTaskPageBlocks(taskId)
+    }
+
+    /**
+     * Where Add → Note writes: the task's own note while it has never been written, otherwise a
+     * brand-new note of the same task. Its Page card exists from the start. Null if the task is gone.
+     */
+    suspend fun newNote(taskId: String): NewTaskNote? = repository.transaction {
+        val task = getTask(taskId) ?: return@transaction null
+        val canonical = TaskPageTypeKeys.noteOwner(taskId)
+        if (noteDocOf(canonical) == null) {
+            ensurePageBlock(taskId, TaskPageTypeKeys.NOTE, canonical)
+            return@transaction NewTaskNote(canonical, task.title)
+        }
+        val owner = TaskPageTypeKeys.extraNoteOwner(taskId, ids.newId("note"))
+        ensurePageBlock(taskId, TaskPageTypeKeys.NOTE, owner)
+        val number = pageBlocksOf(taskId).count { it.typeKey == TaskPageTypeKeys.NOTE }
+        NewTaskNote(owner, "${task.title} $number")
     }
 
     suspend fun ensure(taskId: String, typeKey: String, contentId: String): TaskPageBlock? =
@@ -33,6 +59,31 @@ class TaskPageActions(
             if (getTask(taskId) == null) return@transaction null
             ensurePageBlock(taskId, typeKey, contentId)
         }
+
+    /**
+     * Copies the stored task note [sourceOwner] - blocks, rich tree, title - into a new note of the
+     * same task, listed right after the original on its Page. Null when the source is not a task
+     * note, has never been saved, cannot be read, or its task is gone; nothing is written then.
+     */
+    suspend fun duplicateNote(sourceOwner: String): NewTaskNote? = repository.transaction {
+        val taskId = TaskPageTypeKeys.noteTaskId(sourceOwner) ?: return@transaction null
+        val task = getTask(taskId) ?: return@transaction null
+        val source = noteDocOf(sourceOwner) ?: return@transaction null
+        if (source.loadError != null) return@transaction null
+        ensurePageBlock(taskId, TaskPageTypeKeys.NOTE, sourceOwner)
+        val now = clock.now()
+        val owner = TaskPageTypeKeys.extraNoteOwner(taskId, ids.newId("note"))
+        val title = "${source.title?.takeIf { it.isNotBlank() } ?: task.title} (copy)".take(MAX_NOTE_TITLE)
+        saveNoteDoc(source.copy(ownerKey = owner, title = title, createdAt = now, updatedAt = now, revision = 0))
+        val copy = ensurePageBlock(taskId, TaskPageTypeKeys.NOTE, owner)
+        val ordered = pageBlocksOf(taskId).sortedBy { it.order }.filter { it.id != copy.id }.toMutableList()
+        val after = ordered.indexOfFirst { it.typeKey == TaskPageTypeKeys.NOTE && it.contentId == sourceOwner }
+        ordered.add(if (after >= 0) after + 1 else ordered.size, copy)
+        ordered.forEachIndexed { index, block ->
+            if (block.order != index) savePageBlock(block.copy(order = index, updatedAt = now))
+        }
+        NewTaskNote(owner, title)
+    }
 
     suspend fun reorder(taskId: String, orderedIds: List<String>): Boolean = repository.transaction {
         val current = pageBlocksOf(taskId)
@@ -101,6 +152,11 @@ class TaskPageActions(
             pageBlocksOf(taskId).size, now, now).also { savePageBlock(it) }
     }
 }
+
+/** The note Add → Note opens: its document key and the title it starts with. */
+data class NewTaskNote(val ownerKey: String, val title: String)
+
+private const val MAX_NOTE_TITLE = 120
 
 /** Used inside canonical creation transactions, including every task-scoped capture type. */
 internal suspend fun WorkStreamWriter.ensureTaskPageBlock(

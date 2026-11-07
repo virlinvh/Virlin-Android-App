@@ -33,6 +33,7 @@ import com.virlin.app.domain.notedoc.NoteDocAlign
 import com.virlin.app.domain.notedoc.NoteDocRun
 import com.virlin.app.domain.notedoc.NoteDocMark
 import com.virlin.app.domain.notedoc.NoteDocTable
+import com.virlin.app.domain.notedoc.NoteListStyles
 import com.virlin.app.domain.model.ProjectIconCatalog
 import com.virlin.app.ui.hierarchy.ProjectPalette
 import com.virlin.app.domain.model.ExecutionPreference
@@ -799,6 +800,8 @@ class DesktopWorkspaceProtocol(
                     .put("promptTitle", block.promptTitle ?: JSONObject.NULL)
                     .put("imagePath", block.imagePath ?: JSONObject.NULL)
                     .put("isCollapsed", block.isCollapsed)
+                    .put("toggleHeading", block.toggleHeading)
+                    .put("listStyle", block.listStyle ?: JSONObject.NULL)
                     .put("table", block.table?.let { table -> JSONObject().put("rows", table.rows)
                         .put("cols", table.cols).put("cells", JSONArray(table.cells)) } ?: JSONObject.NULL)
                     .put("runs", JSONArray().apply { block.runs.forEach { run ->
@@ -1115,7 +1118,10 @@ class DesktopWorkspaceProtocol(
                 indent = payload.optInt("indent", basis.indent).coerceIn(0, 6),
                 imagePath = if (type == NoteDocBlockType.IMAGE) imagePath else basis.imagePath,
                 checked = if (type == NoteDocBlockType.CHECKLIST) payload.optBoolean("checked", basis.checked) else basis.checked,
-                isCollapsed = payload.optBoolean("isCollapsed", basis.isCollapsed))
+                isCollapsed = payload.optBoolean("isCollapsed", basis.isCollapsed),
+                toggleHeading = payload.optBoolean("toggleHeading", basis.toggleHeading) && type.headingLevel > 0,
+                listStyle = NoteListStyles.storedKey(type,
+                    if (payload.has("listStyle")) optionalString(payload, "listStyle") else basis.listStyle))
         }
         val outcome = runBlocking { action.saveNoteDoc(CaptureNoteBridge.owner(captureId), title, blocks, expectedRevision) }
         val receipt = when (outcome) {

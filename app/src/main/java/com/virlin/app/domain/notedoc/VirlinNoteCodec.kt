@@ -41,65 +41,113 @@ object VirlinNoteCodec {
         if (b.indent != 0) sb.append(",\"indent\":").append(b.indent)
         if (b.checked) sb.append(",\"checked\":true")
         if (b.isCollapsed) sb.append(",\"collapsed\":true")
+        if (b.toggleHeading) sb.append(",\"toggleHeading\":true")
+        b.listStyle?.let { sb.append(",\"listStyle\":").append(quote(it)) }
         b.mathMode?.let { sb.append(",\"mathMode\":").append(it) }
         if (b.lineSpacing != 1f) sb.append(",\"spacing\":").append(b.lineSpacing)
         b.promptTitle?.let { sb.append(",\"promptTitle\":").append(quote(it)) }
         b.imagePath?.let { sb.append(",\"imagePath\":").append(quote(it)) }
+        b.video?.let { v ->
+            sb.append(",\"video\":{\"id\":").append(quote(v.videoId)).append(",\"start\":").append(v.startSeconds)
+            v.endSeconds?.let { sb.append(",\"end\":").append(it) }
+            v.title?.let { sb.append(",\"title\":").append(quote(it)) }
+            v.channel?.let { sb.append(",\"channel\":").append(quote(it)) }
+            sb.append('}')
+        }
+        b.audio?.let { a ->
+            sb.append(",\"audio\":{\"file\":").append(quote(a.file)).append(",\"ms\":").append(a.durationMs)
+            if (a.peaks.isNotEmpty()) sb.append(",\"peaks\":").append(quote(a.peaks))
+            a.title?.let { sb.append(",\"title\":").append(quote(it)) }
+            sb.append('}')
+        }
         b.table?.let { t ->
             sb.append(",\"table\":{\"rows\":").append(t.rows)
                 .append(",\"cols\":").append(t.cols).append(",\"cells\":[")
             t.cells.forEachIndexed { i, c -> if (i > 0) sb.append(','); sb.append(quote(c)) }
-            sb.append("]}")
+            sb.append(']')
+            if (t.cellRuns.isNotEmpty()) {
+                sb.append(",\"cellRuns\":[")
+                t.cellRuns.forEachIndexed { i, runs -> if (i > 0) sb.append(','); encodeRuns(sb, runs) }
+                sb.append(']')
+            }
+            if (t.cellFills.isNotEmpty()) sb.append(",\"fills\":[")
+                .append(t.cellFills.joinToString(",") { it?.toString() ?: "null" }).append(']')
+            if (t.colWidths.isNotEmpty()) sb.append(",\"widths\":[")
+                .append(t.colWidths.joinToString(",") { it?.toString() ?: "null" }).append(']')
+            if (t.headerRow) sb.append(",\"headerRow\":true")
+            if (t.headerColumn) sb.append(",\"headerColumn\":true")
+            if (!t.gridLines) sb.append(",\"gridLines\":false")
+            sb.append('}')
         }
         if (b.runs.isNotEmpty()) {
-            sb.append(",\"runs\":[")
-            b.runs.forEachIndexed { i, r ->
-                if (i > 0) sb.append(',')
-                sb.append("{\"s\":").append(r.start).append(",\"e\":").append(r.end)
-                if (r.marks.isNotEmpty()) {
-                    sb.append(",\"m\":[")
-                    r.marks.sortedBy { it.name }.forEachIndexed { j, m ->
-                        if (j > 0) sb.append(',')
-                        sb.append(quote(m.name))
-                    }
-                    sb.append(']')
-                }
-                r.color?.let { sb.append(",\"fg\":").append(it) }
-                r.highlight?.let { sb.append(",\"bg\":").append(it) }
-                r.fontFamily?.let { sb.append(",\"ff\":").append(quote(it)) }
-                r.fontSizeSp?.let { sb.append(",\"fs\":").append(it) }
-                r.linkUrl?.let { sb.append(",\"href\":").append(quote(it)) }
-                sb.append('}')
-            }
-            sb.append(']')
+            sb.append(",\"runs\":")
+            encodeRuns(sb, b.runs)
         }
         sb.append('}')
     }
 
+    private fun encodeRuns(sb: StringBuilder, runs: List<NoteDocRun>) {
+        sb.append('[')
+        runs.forEachIndexed { i, r ->
+            if (i > 0) sb.append(',')
+            sb.append("{\"s\":").append(r.start).append(",\"e\":").append(r.end)
+            if (r.marks.isNotEmpty()) {
+                sb.append(",\"m\":[")
+                r.marks.sortedBy { it.name }.forEachIndexed { j, m ->
+                    if (j > 0) sb.append(',')
+                    sb.append(quote(m.name))
+                }
+                sb.append(']')
+            }
+            r.color?.let { sb.append(",\"fg\":").append(it) }
+            r.highlight?.let { sb.append(",\"bg\":").append(it) }
+            r.fontFamily?.let { sb.append(",\"ff\":").append(quote(it)) }
+            r.fontSizeSp?.let { sb.append(",\"fs\":").append(it) }
+            r.linkUrl?.let { sb.append(",\"href\":").append(quote(it)) }
+            sb.append('}')
+        }
+        sb.append(']')
+    }
+
+    private fun decodeRuns(raw: Any?): List<NoteDocRun> = (raw as? List<*>).orEmpty().mapNotNull { item ->
+        val r = item as? Map<*, *> ?: return@mapNotNull null
+        val s = num(r["s"])?.toInt() ?: return@mapNotNull null
+        val e = num(r["e"])?.toInt() ?: return@mapNotNull null
+        NoteDocRun(
+            start = s,
+            end = e,
+            marks = (r["m"] as? List<*>).orEmpty()
+                .mapNotNull { m -> enumOrNull<NoteDocMark>(m as? String) }.toSet(),
+            color = num(r["fg"])?.toLong(),
+            highlight = num(r["bg"])?.toLong(),
+            fontFamily = r["ff"] as? String,
+            fontSizeSp = num(r["fs"])?.toInt(),
+            linkUrl = r["href"] as? String,
+        )
+    }
+
     private fun decodeBlock(o: Map<*, *>, index: Int): NoteDocBlock {
         val text = o["text"] as? String ?: ""
-        val runs = (o["runs"] as? List<*>).orEmpty().mapNotNull { raw ->
-            val r = raw as? Map<*, *> ?: return@mapNotNull null
-            val s = num(r["s"])?.toInt() ?: return@mapNotNull null
-            val e = num(r["e"])?.toInt() ?: return@mapNotNull null
-            NoteDocRun(
-                start = s,
-                end = e,
-                marks = (r["m"] as? List<*>).orEmpty()
-                    .mapNotNull { m -> enumOrNull<NoteDocMark>(m as? String) }.toSet(),
-                color = num(r["fg"])?.toLong(),
-                highlight = num(r["bg"])?.toLong(),
-                fontFamily = r["ff"] as? String,
-                fontSizeSp = num(r["fs"])?.toInt(),
-                linkUrl = r["href"] as? String,
-            )
-        }
+        val runs = decodeRuns(o["runs"])
         val table = (o["table"] as? Map<*, *>)?.let { t ->
             val rows = num(t["rows"])?.toInt() ?: 0
             val cols = num(t["cols"])?.toInt() ?: 0
             val cells = (t["cells"] as? List<*>).orEmpty().map { it as? String ?: "" }
-            if (rows <= 0 || cols <= 0) null
-            else NoteDocTable(rows, cols, List(rows * cols) { i -> cells.getOrElse(i) { "" } })
+            if (rows <= 0 || cols <= 0) return@let null
+            val texts = List(rows * cols) { i -> cells.getOrElse(i) { "" } }
+            val cellRuns = (t["cellRuns"] as? List<*>).orEmpty()
+            val fills = (t["fills"] as? List<*>).orEmpty()
+            val widths = (t["widths"] as? List<*>).orEmpty()
+            NoteDocTable(
+                rows, cols, texts,
+                cellRuns = if (cellRuns.isEmpty()) emptyList()
+                    else List(rows * cols) { i -> NoteRuns.normalize(decodeRuns(cellRuns.getOrNull(i)), texts[i].length) },
+                cellFills = if (fills.isEmpty()) emptyList() else List(rows * cols) { i -> num(fills.getOrNull(i))?.toLong() },
+                colWidths = if (widths.isEmpty()) emptyList() else List(cols) { i -> num(widths.getOrNull(i))?.toInt() },
+                headerRow = t["headerRow"] == true,
+                headerColumn = t["headerColumn"] == true,
+                gridLines = t["gridLines"] != false,
+            ).compact()
         }
         return NoteDocBlock(
             id = o["id"] as? String ?: "b$index",
@@ -110,11 +158,30 @@ object VirlinNoteCodec {
             indent = num(o["indent"])?.toInt() ?: 0,
             checked = o["checked"] == true,
             isCollapsed = o["collapsed"] == true,
+            toggleHeading = o["toggleHeading"] == true,
+            listStyle = o["listStyle"] as? String,
             mathMode = o["mathMode"] as? Boolean,
             lineSpacing = num(o["spacing"])?.toFloat() ?: 1f,
             promptTitle = o["promptTitle"] as? String,
             table = table,
             imagePath = o["imagePath"] as? String,
+            video = (o["video"] as? Map<*, *>)?.let { v ->
+                NoteDocVideo(
+                    videoId = v["id"] as? String ?: "",
+                    startSeconds = num(v["start"])?.toInt() ?: 0,
+                    endSeconds = num(v["end"])?.toInt(),
+                    title = (v["title"] as? String)?.take(NoteDocVideo.MAX_TEXT),
+                    channel = (v["channel"] as? String)?.take(NoteDocVideo.MAX_TEXT),
+                ).takeIf { it.isValid }
+            },
+            audio = (o["audio"] as? Map<*, *>)?.let { a ->
+                NoteDocAudio(
+                    file = a["file"] as? String ?: "",
+                    durationMs = num(a["ms"])?.toLong() ?: 0L,
+                    peaks = a["peaks"] as? String ?: "",
+                    title = (a["title"] as? String)?.take(NoteDocAudio.MAX_TITLE),
+                ).takeIf { it.isValid }
+            },
         )
     }
 

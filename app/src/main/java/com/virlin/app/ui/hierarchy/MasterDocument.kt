@@ -15,7 +15,17 @@ import java.io.OutputStream
 /** One read-only document assembled from the same owners and routes used by the editors. */
 internal data class MasterDocumentSection(val heading: String, val entries: List<MasterDocumentEntry>)
 internal data class MasterDocumentEntry(val id: String, val title: String, val kind: String,
-    val body: String, val route: String, val mediaPath: String? = null, val isImage: Boolean = false)
+    val body: String, val route: String, val mediaPath: String? = null, val isImage: Boolean = false,
+    /** A note's own blocks, so its card can preview it as the note itself; [body] stays the text form. */
+    val noteBlocks: List<com.virlin.app.domain.notedoc.NoteDocBlock>? = null)
+
+/** A task note's card title: the note's own name, or [fallback] while it has none. */
+internal fun noteCardTitle(doc: VirlinNoteDoc?, fallback: String = "Notes"): String =
+    doc?.title?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() } ?: fallback
+
+/** [doc]'s blocks when the note can be previewed as itself: readable and not empty. */
+internal fun previewableNoteBlocks(doc: VirlinNoteDoc?): List<com.virlin.app.domain.notedoc.NoteDocBlock>? =
+    doc?.takeIf { it.loadError == null }?.blocks?.takeIf { it.isNotEmpty() }
 
 internal fun taskPageBody(typeKey: String, taskId: String, steps: List<TaskStep>,
     note: VirlinNoteDoc?): String = when (typeKey) {
@@ -27,6 +37,8 @@ internal fun taskPageBody(typeKey: String, taskId: String, steps: List<TaskStep>
             NoteDocBlockType.HEADING_1 -> "# ${block.text}"
             NoteDocBlockType.HEADING_2 -> "## ${block.text}"
             NoteDocBlockType.HEADING_3 -> "### ${block.text}"
+            NoteDocBlockType.HEADING_4 -> "#### ${block.text}"
+            NoteDocBlockType.HEADING_5 -> "##### ${block.text}"
             NoteDocBlockType.BULLET -> "• ${block.text}"
             NoteDocBlockType.NUMBERED -> "${block.text}"
             NoteDocBlockType.CHECKLIST -> "${if (block.checked) "☑" else "☐"} ${block.text}"
@@ -34,6 +46,8 @@ internal fun taskPageBody(typeKey: String, taskId: String, steps: List<TaskStep>
             NoteDocBlockType.CODE -> block.text
             NoteDocBlockType.DIVIDER -> "────"
             NoteDocBlockType.TABLE -> block.table?.cells?.joinToString(" · ").orEmpty()
+            NoteDocBlockType.VIDEO -> com.virlin.app.domain.notedoc.NoteYouTube.plainText(block.video)
+            NoteDocBlockType.AUDIO -> com.virlin.app.domain.notedoc.NoteDocAudio.plainText(block.audio)
             else -> block.text
         }
     }.ifBlank { "No note content yet" }

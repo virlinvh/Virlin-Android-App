@@ -33,6 +33,10 @@ class ProjectDuplicator(private val repository: WorkStreamRepository) {
         val ownerMap = mutableMapOf("project-${source.project.id}" to "project-$projectId")
         source.tasks.forEach { ownerMap[TaskPageTypeKeys.noteOwner(it.id)] = TaskPageTypeKeys.noteOwner(id(it.id)) }
         source.captures.forEach { ownerMap[CaptureNoteBridge.owner(it.id)] = CaptureNoteBridge.owner(id(it.id)) }
+        source.pageBlocks.filter { it.typeKey == TaskPageTypeKeys.NOTE && TaskPageTypeKeys.isExtraNoteOwner(it.contentId) &&
+            it.taskId in sourceTaskIds }.forEach {
+            ownerMap.getOrPut(it.contentId) { TaskPageTypeKeys.extraNoteOwner(id(it.taskId), newId()) }
+        }
         source.richNotes.forEach { if (it.ownerKey !in ownerMap) ownerMap[it.ownerKey] = "copy-${newId()}" }
         source.pageBlocks.filter { it.typeKey == TaskPageTypeKeys.NOTE }.forEach {
             if (it.contentId !in ownerMap) ownerMap[it.contentId] = "copy-${newId()}"
