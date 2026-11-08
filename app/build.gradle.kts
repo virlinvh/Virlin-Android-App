@@ -22,7 +22,7 @@ android {
     }
     buildTypes {
         debug {
-            versionNameSuffix = "-flashcard-deck-20261108-1715"
+            versionNameSuffix = "-multiformat2-20261108-2122"
         }
         release {
             isMinifyEnabled = false

@@ -16,8 +16,15 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import com.virlin.app.data.flashcard.FlashcardColorMode
+import com.virlin.app.data.flashcard.FlashcardDeckStyle
+import com.virlin.app.data.flashcard.FlashcardDesign
 import com.virlin.app.data.flashcard.FlashcardRating
+import com.virlin.app.data.flashcard.FlashcardTypeface
 import com.virlin.app.data.flashcard.SavedFlashcard
 import androidx.compose.ui.test.onNodeWithText
 import com.virlin.app.domain.notedoc.NoteDocBlock
@@ -76,6 +83,32 @@ class FlashcardStudyScreenTest {
         compose.waitForIdle()
         compose.onNodeWithTag("flashcard_question").assertTextContains("Second question?")
         compose.onNodeWithTag("flashcard_study_card").performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("flashcard_question").assertTextContains("First question?")
+    }
+
+    @Test fun aShortQuickFlickIsEnoughToMoveACard() {
+        val now = System.currentTimeMillis()
+        val first = SavedFlashcard("one", "task-one", "Notes",
+            NoteDocBlock("answer-one", text = "First answer"), now, 5, recallPrompt = "First question?")
+        val second = SavedFlashcard("two", "task-one", "Notes",
+            NoteDocBlock("answer-two", text = "Second answer"), now + 1, 6, recallPrompt = "Second question?")
+        compose.setContent {
+            MaterialTheme {
+                FlashcardStudyScreen("Deck", listOf(first, second), null, false,
+                    onBack = {}, onReview = { _, _, saved -> saved() })
+            }
+        }
+        compose.onNodeWithTag("flashcard_group_new").performClick()
+        compose.onNodeWithTag("flashcard_start").performClick()
+        compose.onNodeWithTag("flashcard_study_card").performTouchInput {
+            swipeLeft(startX = centerX + width * .1f, endX = centerX - width * .1f, durationMillis = 90)
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("flashcard_question").assertTextContains("Second question?")
+        compose.onNodeWithTag("flashcard_study_card").performTouchInput {
+            swipeRight(startX = centerX - width * .1f, endX = centerX + width * .1f, durationMillis = 90)
+        }
         compose.waitForIdle()
         compose.onNodeWithTag("flashcard_question").assertTextContains("First question?")
     }
@@ -179,7 +212,61 @@ class FlashcardStudyScreenTest {
         compose.onNodeWithTag("flashcard_rate_easy").performClick()
         compose.waitForIdle()
         assertEquals("c3" to FlashcardRating.EASY, rated)
-        compose.onNodeWithTag("flashcard_feedback").assertExists()
+        compose.onNodeWithTag("flashcard_feedback").assertDoesNotExist()
+    }
+
+    @Test fun cardOptionsStripEditsOpensAndSortsTheCardShowing() {
+        val now = System.currentTimeMillis()
+        var edited: String? = null
+        var opened: String? = null
+        val cards = (1..2).map { n ->
+            SavedFlashcard("c$n", "task-one", "Notes", NoteDocBlock("a$n", text = "Answer $n"),
+                now + n, n, recallPrompt = "Question $n?")
+        }
+        compose.setContent {
+            MaterialTheme {
+                FlashcardStudyScreen("Deck", cards, null, false, onBack = {},
+                    onOpenNote = { opened = it.id }, onEdit = { edited = it.id },
+                    onReview = { _, _, saved -> saved() })
+            }
+        }
+        compose.onNodeWithTag("flashcard_group_new").performClick()
+        compose.onNodeWithTag("flashcard_start").performClick()
+        compose.onNodeWithTag("flashcard_options_strip").assertDoesNotExist()
+        compose.onNodeWithTag("flashcard_options").performClick()
+        compose.onNodeWithTag("flashcard_options_strip").assertExists()
+        compose.onNodeWithTag("flashcard_option_copy_question").performClick()
+        compose.onNodeWithTag("flashcard_option_copy_question").assertTextContains("Copied")
+        compose.onNodeWithTag("flashcard_option_sort_newest").performScrollTo().performClick()
+        compose.onNodeWithTag("flashcard_option_sort_newest").assertIsSelected()
+        compose.onNodeWithTag("flashcard_question").assertTextContains("Question 2?")
+        compose.onNodeWithTag("flashcard_option_edit").performScrollTo().performClick()
+        assertEquals("c2", edited)
+        compose.onNodeWithTag("flashcard_options_strip").assertDoesNotExist()
+        compose.onNodeWithTag("flashcard_options").performClick()
+        compose.onNodeWithTag("flashcard_option_open_note").performScrollTo().performClick()
+        assertEquals("c2", opened)
+    }
+
+    @Test fun deckSortOpensAsAStripAndSelects() {
+        val now = System.currentTimeMillis()
+        val cards = (1..2).map { n ->
+            SavedFlashcard("c$n", "task-one", "Notes", NoteDocBlock("a$n", text = "Answer $n"),
+                now + n, n, recallPrompt = "Question $n?")
+        }
+        compose.setContent {
+            MaterialTheme {
+                FlashcardStudyScreen("Deck", cards, null, false, onBack = {}, onReview = { _, _, saved -> saved() })
+            }
+        }
+        compose.onNodeWithTag("flashcard_sort_strip").assertDoesNotExist()
+        compose.onNodeWithTag("flashcard_sort").performClick()
+        compose.onNodeWithTag("flashcard_sort_strip").assertExists()
+        compose.onNodeWithTag("flashcard_option_sort_scheduled").assertIsSelected()
+        compose.onNodeWithTag("flashcard_option_sort_newest").performScrollTo().performClick()
+        compose.onNodeWithTag("flashcard_option_sort_newest").assertIsSelected()
+        compose.onNodeWithTag("flashcard_options_close").performClick()
+        compose.onNodeWithTag("flashcard_sort_strip").assertDoesNotExist()
     }
 
     @Test fun deckSearchStarAndShuffleWorkFromTheGallery() {
@@ -248,5 +335,42 @@ class FlashcardStudyScreenTest {
         compose.onNodeWithTag("flashcard_start").performClick()
         compose.onNodeWithTag("flashcard_reveal").performClick()
         compose.onNodeWithTag("flashcard_answer_scroll").assert(hasScrollAction())
+    }
+
+    @Test fun cardDesignSheetChangesTheDeckStyleAndPracticeStillFlips() {
+        val card = SavedFlashcard("one", "task-one", "Notes",
+            NoteDocBlock("answer", text = "Saved answer"),
+            System.currentTimeMillis(), 5, recallPrompt = "What is the answer?")
+        var style by mutableStateOf(FlashcardDeckStyle())
+        compose.setContent {
+            MaterialTheme {
+                FlashcardStudyScreen("Biology", listOf(card), null, false, onBack = {},
+                    style = style, onStyle = { style = it }, onReview = { _, _, saved -> saved() })
+            }
+        }
+        compose.onNodeWithTag("flashcard_style_button").performClick()
+        compose.onNodeWithTag("flashcard_style_sheet").assertExists()
+        // The sheet may still be sliding up, so options are chosen through their click action.
+        fun choose(tag: String) = compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.OnClick)
+        choose("flashcard_design_chalkboard")
+        compose.onNodeWithTag("flashcard_design_chalkboard").assertIsSelected()
+        choose("flashcard_colormode_gradient")
+        choose("flashcard_swatch2_3")
+        choose("flashcard_typeface_handwritten")
+        choose("flashcard_align_center")
+        assertEquals(FlashcardDesign.CHALKBOARD, style.design)
+        assertEquals(FlashcardColorMode.GRADIENT, style.colorMode)
+        assertEquals(FlashcardTypeface.HANDWRITTEN, style.typeface)
+        assertEquals(true, style.centered)
+        choose("flashcard_style_reset")
+        assertEquals(FlashcardDeckStyle(), style)
+        style = style.copy(design = FlashcardDesign.CHALKBOARD)
+        choose("flashcard_style_close")
+        compose.waitForIdle()
+        compose.onNodeWithTag("flashcard_group_new").performClick()
+        compose.onNodeWithTag("flashcard_start").performClick()
+        compose.onNodeWithTag("flashcard_question").assertTextContains("What is the answer?")
+        compose.onNodeWithTag("flashcard_reveal").performClick()
+        compose.onNodeWithTag("flashcard_answer").assertExists()
     }
 }

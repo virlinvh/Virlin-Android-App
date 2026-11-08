@@ -11,6 +11,19 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.material.icons.automirrored.outlined.TrendingDown
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.NewReleases
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.selected
+import com.virlin.app.domain.notedoc.NoteDocBlock
+import com.virlin.app.domain.notedoc.NoteDocBlockType
+import com.virlin.app.domain.notedoc.visibleNoteBlocks
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.ScrollState
@@ -26,6 +39,9 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -38,6 +54,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.animation.core.spring
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -71,6 +88,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.SwapVert
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -105,6 +123,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.virlin.app.R
+import com.virlin.app.data.flashcard.FlashcardDeckStyle
+import com.virlin.app.data.flashcard.FlashcardDeckStyleStore
 import com.virlin.app.data.flashcard.FlashcardRating
 import com.virlin.app.data.flashcard.FlashcardStore
 import com.virlin.app.data.flashcard.SavedFlashcard
@@ -126,12 +146,45 @@ private val StudyMuted = Color(0xFF69796E)
 private val StudyGreen = Color(0xFF087454)
 private val StudyLine = Color(0xFFDCE8DC)
 private val StudyPaper = Color(0xFFFCFDFB)
-private val CardSerif = FontFamily(
+internal val CardSerif = FontFamily(
     Font(R.font.fraunces_variable, weight = FontWeight.Medium),
     Font(R.font.fraunces_italic_variable, weight = FontWeight.Medium,
         style = FontStyle.Italic),
 )
-private val CardSans = FontFamily(
+
+private val CardStyleTypes = setOf(NoteDocBlockType.PARAGRAPH, NoteDocBlockType.HEADING_1,
+    NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3, NoteDocBlockType.HEADING_4,
+    NoteDocBlockType.HEADING_5, NoteDocBlockType.BULLET, NoteDocBlockType.NUMBERED,
+    NoteDocBlockType.CHECKLIST, NoteDocBlockType.QUOTE, NoteDocBlockType.TOGGLE, NoteDocBlockType.DIVIDER)
+
+/**
+ * Whether a front can be drawn in the card typeface without losing anything. Code, equations,
+ * prompts, tables and media keep the note's formatting whatever the card's setting.
+ */
+internal fun flashcardFrontFitsCardStyle(blocks: List<NoteDocBlock>?): Boolean =
+    blocks == null || blocks.all { it.type in CardStyleTypes }
+
+/** A front in the deck's card typeface, sized so a single word reads as a title. */
+@Composable
+internal fun CardStyleFront(text: String, color: Color, modifier: Modifier = Modifier, scale: Float = 1f,
+                            family: FontFamily = CardSerif, weight: FontWeight = FontWeight.Medium,
+                            centered: Boolean = false) {
+    val size = when {
+        text.length <= 18 -> 36f
+        text.length <= 60 -> 30f
+        text.length <= 140 -> 25f
+        else -> 21f
+    } * scale
+    Text(text, color = color, fontFamily = family, fontWeight = weight,
+        fontSize = size.sp, lineHeight = (size * 1.18f).sp,
+        textAlign = if (centered) TextAlign.Center else null,
+        modifier = if (centered) modifier.fillMaxWidth() else modifier)
+}
+
+/** The front as plain text for the card typeface. */
+internal fun flashcardFrontText(blocks: List<NoteDocBlock>): String =
+    selectableNoteText(blocks).text.trim()
+internal val CardSans = FontFamily(
     Font(R.font.dm_sans_variable, weight = FontWeight.Medium),
     Font(R.font.dm_sans_variable, weight = FontWeight.SemiBold),
     Font(R.font.dm_sans_variable, weight = FontWeight.Bold),
@@ -249,11 +302,46 @@ fun FlashcardsRoute(navController: NavController, kind: String, id: String) {
     }
     val palette = rememberProjectPalette(projectId)
     val accent = palette?.let { Color(it.secondary) } ?: DefaultDeckAccent
+    var editingCard by remember { mutableStateOf<SavedFlashcard?>(null) }
+    var editSaving by remember { mutableStateOf(false) }
+    var editError by remember { mutableStateOf<String?>(null) }
+    var openingNote by remember { mutableStateOf(false) }
+    val deckKey = FlashcardDeckStyleStore.deckKey(kind, id)
+    var deckStyle by remember(deckKey) { mutableStateOf(FlashcardDeckStyle()) }
+    var styleTouched by remember(deckKey) { mutableStateOf(false) }
+    LaunchedEffect(deckKey) {
+        runCatching { FlashcardDeckStyleStore.get(context, deckKey) }
+            .onSuccess { if (!styleTouched) deckStyle = it }
+    }
     BackHandler { navController.popBackStack() }
     CompositionLocalProvider(LocalProjectPalette provides palette) {
     FlashcardStudyScreen(title, cards, error, reviewing, onBack = { navController.popBackStack() },
         accent = accent,
-        onOpenNote = { card -> navController.navigate(notesRoute(card.ownerKey, card.noteTitle)) },
+        style = deckStyle,
+        onStyle = { next ->
+            styleTouched = true
+            deckStyle = next
+            scope.launch {
+                runCatching { FlashcardDeckStyleStore.save(context, deckKey, next) }
+                    .onFailure { error = "Could not save card design: ${it.message}" }
+            }
+        },
+        // The note opens at the card's own block: the editor restores a saved reading position
+        // on open, so that position is pointed at the block first.
+        onOpenNote = { card ->
+            if (!openingNote) scope.launch {
+                openingNote = true
+                try {
+                    val blocks = runCatching { VirlinGraph.actions.loadNoteDoc(card.ownerKey) }.getOrNull()
+                        ?.takeIf { it.loadError == null }?.blocks.orEmpty()
+                    flashcardSourceBlockId(card, blocks)?.let { NotePositionStore(context).save(card.ownerKey, it, 0) }
+                    navController.navigate(notesRoute(card.ownerKey, card.noteTitle))
+                } finally {
+                    openingNote = false
+                }
+            }
+        },
+        onEdit = { card -> editError = null; editingCard = card },
         onStar = { card ->
             if (!starSaving) scope.launch {
                 starSaving = true
@@ -289,8 +377,65 @@ fun FlashcardsRoute(navController: NavController, kind: String, id: String) {
                 reviewing = false
             }
         })
+    editingCard?.let { card ->
+        val start = remember(card.id) { flashcardEditStart(card) }
+        FlashcardCreateDialog(emptyList(), editSaving, editError,
+            onDismiss = { if (!editSaving) { editingCard = null; editError = null } }, edit = start,
+            onSave = { front, back, difficulty, _, frontCardStyle ->
+                if (!editSaving) scope.launch {
+                    editSaving = true
+                    runCatching {
+                        val question = flashcardSummaryBlock(front)
+                        val prompt = question.text.trim().take(300)
+                        FlashcardStore.update(context, card.id, flashcardSummaryBlock(back), prompt,
+                            difficulty, question.takeIf { it.text.trim() == prompt }, front, back,
+                            frontCardStyle)
+                    }
+                        .onSuccess { updated ->
+                            cards = cards.map { if (it.id == updated.id) updated else it }
+                            editingCard = null; editError = null
+                        }
+                        .onFailure { editError = "Could not save changes: ${it.message}" }
+                    editSaving = false
+                }
+            })
+    }
     }
 }
+
+/**
+ * The note block a card should open at: the block it was made from, or for older cards the
+ * first block holding one of its lines. A block folded away under a collapsed heading or
+ * toggle opens at that heading instead.
+ */
+internal fun flashcardSourceBlockId(card: SavedFlashcard, blocks: List<NoteDocBlock>): String? {
+    if (blocks.isEmpty()) return null
+    val lines = flashcardSourceLines(card)
+    val target = card.sourceBlockId?.takeIf { id -> blocks.any { it.id == id } }
+        ?: lines.firstNotNullOfOrNull { line ->
+            blocks.firstOrNull { it.text.contains(line, ignoreCase = true) }?.id
+        }
+        // A card line edited after it was made still holds its whole source line.
+        ?: lines.firstNotNullOfOrNull { line ->
+            blocks.firstOrNull { block ->
+                val text = block.text.trim()
+                text.length >= 12 && line.contains(text, ignoreCase = true)
+            }?.id
+        } ?: return null
+    val shown = visibleNoteBlocks(blocks, foldHeadings = false).mapTo(HashSet()) { it.id }
+    val at = blocks.indexOfFirst { it.id == target }
+    return (at downTo 0).firstOrNull { blocks[it].id in shown }?.let { blocks[it].id }
+}
+
+private fun flashcardSourceLines(card: SavedFlashcard): List<String> =
+    (card.backBlocks.orEmpty() + card.content + card.frontBlocks.orEmpty() + listOfNotNull(card.frontContent))
+        .asSequence()
+        .flatMap { it.text.lineSequence() }
+        .map { it.trim().take(80) }
+        .filter { it.length >= 4 }
+        .distinct()
+        .take(8)
+        .toList()
 
 /**
  * Two pages over one deck: the deck page (groups, sort, every card as a coloured tile) and the
@@ -302,6 +447,23 @@ internal fun FlashcardStudyScreen(title: String, cards: List<SavedFlashcard>, er
     onArchive: (SavedFlashcard, Boolean) -> Unit = { _, _ -> },
     accent: Color = DefaultDeckAccent,
     onOpenNote: ((SavedFlashcard) -> Unit)? = null,
+    onEdit: ((SavedFlashcard) -> Unit)? = null,
+    style: FlashcardDeckStyle = FlashcardDeckStyle(),
+    onStyle: ((FlashcardDeckStyle) -> Unit)? = null,
+    onReview: (SavedFlashcard, FlashcardRating, () -> Unit) -> Unit) {
+    val look = remember(style, accent) { DeckLook(style, accent) }
+    CompositionLocalProvider(LocalDeckLook provides look) {
+        FlashcardStudyContent(title, cards, error, reviewing, onBack, onStar, onArchive, accent, onOpenNote,
+            onEdit, style, onStyle, onReview)
+    }
+}
+
+@Composable
+private fun FlashcardStudyContent(title: String, cards: List<SavedFlashcard>, error: String?,
+    reviewing: Boolean, onBack: () -> Unit, onStar: (SavedFlashcard) -> Unit,
+    onArchive: (SavedFlashcard, Boolean) -> Unit, accent: Color,
+    onOpenNote: ((SavedFlashcard) -> Unit)?, onEdit: ((SavedFlashcard) -> Unit)?,
+    style: FlashcardDeckStyle, onStyle: ((FlashcardDeckStyle) -> Unit)?,
     onReview: (SavedFlashcard, FlashcardRating, () -> Unit) -> Unit) {
     // Saveable so a trip to the source note returns to the same group, card and page.
     var group by rememberSaveable { mutableStateOf(FlashcardGroup.DUE) }
@@ -340,13 +502,14 @@ internal fun FlashcardStudyScreen(title: String, cards: List<SavedFlashcard>, er
         if (practicing) FlashcardPracticePage(title, group, counts, filtered, sort, index, error, reviewing, accent,
             onIndex = { index = it }, onGroup = chooseGroup, onSort = chooseSort,
             onClose = { practicing = false }, onStar = onStar, onArchive = archive, onOpenNote = onOpenNote,
+            onEdit = onEdit,
             onReview = { card, rating, saved -> onReview(card, rating) { now = System.currentTimeMillis(); saved() } })
         else FlashcardDeckPage(title, cards, group, counts, filtered, sort, error, now, accent,
             query = query, onQuery = { query = it; index = 0 },
             onBack = onBack, onGroup = chooseGroup, onSort = chooseSort,
             onPractice = { start -> index = start; practicing = true },
             onShuffle = { chooseSort(FlashcardSort.SHUFFLED); practicing = true },
-            onStar = onStar, onArchive = archive)
+            onStar = onStar, onArchive = archive, style = style, onStyle = onStyle)
         AnimatedVisibility(archivedNotice != null, Modifier.align(Alignment.BottomCenter).padding(16.dp),
             enter = fadeIn() + slideInVertically { it }, exit = fadeOut() + slideOutVertically { it }) {
             Row(Modifier.clip(RoundedCornerShape(14.dp)).background(StudyInk)
@@ -363,25 +526,24 @@ internal fun FlashcardStudyScreen(title: String, cards: List<SavedFlashcard>, er
     }
 }
 
-/** New / Due / Future / All / Archived on one line each, scrolling sideways when narrow. */
+/** The sort button; it lights up in the accent while its strip is open. */
 @Composable
-private fun SortMenu(sort: FlashcardSort, accent: Color, onSort: (FlashcardSort) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { open = true }, modifier = Modifier.testTag("flashcard_sort")) {
-            Icon(Icons.Outlined.SwapVert, contentDescription = "Sort cards", tint = StudyInk)
-        }
-        DropdownMenu(open, onDismissRequest = { open = false }) {
-            SortLabels.forEach { (value, label) ->
-                DropdownMenuItem(text = {
-                    Text(label, fontFamily = CardSans,
-                        fontWeight = if (value == sort) FontWeight.Bold else FontWeight.Medium,
-                        color = if (value == sort) accent else StudyInk)
-                }, onClick = { onSort(value); open = false })
-            }
+private fun SortToggle(open: Boolean, accent: Color, onToggle: () -> Unit) {
+    IconButton(onClick = onToggle, modifier = Modifier.testTag("flashcard_sort")) {
+        Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp))
+            .background(if (open) accent.copy(alpha = .14f) else Color.Transparent),
+            contentAlignment = Alignment.Center) {
+            Icon(Icons.Outlined.SwapVert, contentDescription = if (open) "Hide sort options" else "Sort cards",
+                tint = if (open) accent else StudyInk)
         }
     }
 }
+
+private fun sortOptions(sort: FlashcardSort, onSort: (FlashcardSort) -> Unit): List<PracticeOption> =
+    SortLabels.map { (value, label) ->
+        PracticeOption("flashcard_option_sort_${value.name.lowercase()}", label, sortIcon(value),
+            selected = value == sort) { onSort(value) }
+    }
 
 private fun frontPreview(card: SavedFlashcard): String =
     card.frontBlocks?.let { selectableNoteText(it).text.trim() }?.takeIf { it.isNotEmpty() }
@@ -412,8 +574,14 @@ private fun FlashcardDeckPage(title: String, cards: List<SavedFlashcard>, group:
     now: Long, accent: Color, query: String, onQuery: (String) -> Unit,
     onBack: () -> Unit, onGroup: (FlashcardGroup) -> Unit, onSort: (FlashcardSort) -> Unit,
     onPractice: (Int) -> Unit, onShuffle: () -> Unit, onStar: (SavedFlashcard) -> Unit,
-    onArchive: (SavedFlashcard) -> Unit) {
+    onArchive: (SavedFlashcard) -> Unit, style: FlashcardDeckStyle = FlashcardDeckStyle(),
+    onStyle: ((FlashcardDeckStyle) -> Unit)? = null) {
     var searching by remember { mutableStateOf(query.isNotEmpty()) }
+    var sorting by rememberSaveable { mutableStateOf(false) }
+    var styling by rememberSaveable { mutableStateOf(false) }
+    if (styling && onStyle != null) FlashcardDeckStyleSheet(style, accent, title,
+        samples = cards.filterNot { it.isArchived }.take(2).map { frontPreview(it) to it.colorIndex },
+        onChange = onStyle, onDismiss = { styling = false })
     Column(Modifier.fillMaxSize().background(lerp(DeckPaper, accent, .035f))) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 6.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -426,7 +594,16 @@ private fun FlashcardDeckPage(title: String, cards: List<SavedFlashcard>, group:
                 Icon(if (searching) Icons.Outlined.Close else Icons.Outlined.Search,
                     contentDescription = if (searching) "Close search" else "Search cards", tint = StudyInk)
             }
-            SortMenu(sort, accent, onSort)
+            SortToggle(sorting, accent) { sorting = !sorting }
+            if (onStyle != null) IconButton(onClick = { styling = true },
+                modifier = Modifier.testTag("flashcard_style_button")) {
+                Icon(Icons.Outlined.Tune, contentDescription = "Card design for this branch", tint = StudyInk)
+            }
+        }
+        AnimatedVisibility(sorting, enter = expandVertically(tween(220)) + fadeIn(tween(220)),
+            exit = shrinkVertically(tween(180)) + fadeOut(tween(140))) {
+            PracticeOptionsStrip(listOf(sortOptions(sort, onSort)), accent, onClose = { sorting = false },
+                tag = "flashcard_sort_strip", modifier = Modifier.padding(bottom = 8.dp))
         }
         LazyVerticalStaggeredGrid(StaggeredGridCells.Adaptive(132.dp),
             Modifier.weight(1f).fillMaxWidth().testTag("flashcard_deck_grid"),
@@ -652,27 +829,34 @@ private fun DeckTile(card: SavedFlashcard, position: Int, status: String, onOpen
     onStar: () -> Unit, onArchive: () -> Unit) {
     var menu by remember(card.id) { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
-    val color = flashcardColor(card.colorIndex)
-    val ink = lerp(color, Color.Black, .80f)
+    val look = LocalDeckLook.current
+    val style = look.style
+    val paint = remember(style, card.colorIndex, look.accent) {
+        cardPaint(style, card.colorIndex, look.accent, large = false)
+    }
+    val color = paint.bottom
+    val ink = paint.ink
     val preview = frontPreview(card)
-    val shape = RoundedCornerShape(24.dp)
+    val shape = style.corners.tileShape()
+    val scale = style.frontScale()
     val minHeight = when {
         preview.length < 28 -> 156.dp
         preview.length < 70 -> 190.dp
         else -> 226.dp
     }
-    Box {
+    Box(if (style.scattered) Modifier.graphicsLayer { rotationZ = scatterTurn(card.id) } else Modifier) {
         Box(Modifier.fillMaxWidth().heightIn(min = minHeight)
             .shadow(6.dp, shape, ambientColor = lerp(color, Color.Black, .35f),
                 spotColor = lerp(color, Color.Black, .35f))
             .clip(shape)
-            .background(Brush.verticalGradient(listOf(lerp(color, Color.White, .5f), color)))
+            .cardSurface(paint, shape, large = false, seed = card.colorIndex)
             .combinedClickable(onClickLabel = "Practise from this card", onLongClickLabel = "Card options",
                 onLongClick = { menu = true }, onClick = onOpen)
             .testTag("flashcard_deck_tile_${card.id}")) {
             Column(Modifier.fillMaxWidth().padding(start = 16.dp, top = 6.dp, end = 6.dp, bottom = 40.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.clip(CircleShape).background(Color.White.copy(alpha = .58f))
+                    Box(Modifier.clip(CircleShape)
+                        .background(Color.White.copy(alpha = if (paint.design.dark) .18f else .58f))
                         .padding(horizontal = 9.dp, vertical = 3.dp)) {
                         Text(status.uppercase(), color = ink.copy(alpha = .78f), fontFamily = CardSans,
                             fontWeight = FontWeight.Bold, fontSize = 9.sp, letterSpacing = 1.2.sp, maxLines = 1)
@@ -687,11 +871,15 @@ private fun DeckTile(card: SavedFlashcard, position: Int, status: String, onOpen
                     }
                 }
                 Spacer(Modifier.height(6.dp))
-                Text(preview, color = ink, fontFamily = CardSerif, fontWeight = FontWeight.Medium,
-                    fontSize = 17.sp, lineHeight = 23.sp, maxLines = 7, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(end = 10.dp))
+                Text(preview, color = ink, fontFamily = style.typeface.family(), fontWeight = style.typeface.weight,
+                    fontSize = (17f * scale).sp, lineHeight = (23f * scale).sp, maxLines = 7,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = if (style.centered) TextAlign.Center else null,
+                    modifier = Modifier.padding(end = 10.dp)
+                        .then(if (style.centered) Modifier.fillMaxWidth() else Modifier))
             }
-            Row(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            if (style.showDetails) Row(Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Text("No. ${(position + 1).toString().padStart(2, '0')}", color = ink.copy(alpha = .5f),
                     fontFamily = CardSans, fontWeight = FontWeight.SemiBold, fontSize = 10.sp,
@@ -713,12 +901,8 @@ private fun DeckTile(card: SavedFlashcard, position: Int, status: String, onOpen
 
 private val DeckLift = 10.dp
 private const val DeckScaleStep = .045f
-private val CardShape = RoundedCornerShape(26.dp)
-
 private enum class LayerRole { STACK, PREVIOUS }
 private class DeckLayer(val card: SavedFlashcard, val role: LayerRole, val slot: Int)
-private class RatingFeedback(val rating: FlashcardRating, val message: String, val color: Color)
-
 /**
  * A physical deck. Every visible card keeps its own composition (keyed by id) while it moves
  * between roles, so nothing is rebuilt mid-gesture: the top card follows the finger and flies
@@ -732,6 +916,7 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
     onIndex: (Int) -> Unit, onGroup: (FlashcardGroup) -> Unit, onSort: (FlashcardSort) -> Unit,
     onClose: () -> Unit, onStar: (SavedFlashcard) -> Unit, onArchive: (SavedFlashcard) -> Unit,
     onOpenNote: ((SavedFlashcard) -> Unit)?,
+    onEdit: ((SavedFlashcard) -> Unit)?,
     onReview: (SavedFlashcard, FlashcardRating, () -> Unit) -> Unit) {
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -751,16 +936,22 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
     var flipped by remember { mutableStateOf(emptySet<String>()) }
     var leaving by remember { mutableStateOf<SavedFlashcard?>(null) }
     var moving by remember { mutableStateOf(false) }
-    var feedback by remember { mutableStateOf<RatingFeedback?>(null) }
-    var shownFeedback by remember { mutableStateOf<RatingFeedback?>(null) }
-    var menuOpen by remember { mutableStateOf(false) }
+    var optionsOpen by rememberSaveable { mutableStateOf(false) }
+    var copied by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(copied) { if (copied != null) { delay(1_600); copied = null } }
     val offset = remember { Animatable(0f) }
+    // How firmly the top card is held (0..1) and which half it was grabbed by (1 top, -1 bottom);
+    // both are read only inside graphics layers.
+    val press = remember { Animatable(0f) }
+    var grip by remember { mutableFloatStateOf(1f) }
+    val flingSpeed = with(LocalDensity.current) { 420.dp.toPx() }
     var deckWidth by remember { mutableFloatStateOf(1f) }
     val canMove = count > 1
     val backward by remember { derivedStateOf { offset.value > .5f } }
-    LaunchedEffect(group, sort) { offset.snapTo(0f); leaving = null; moving = false; flipped = emptySet() }
-    LaunchedEffect(feedback) {
-        if (feedback != null) { shownFeedback = feedback; delay(2_400); feedback = null }
+    // A Previous / Next tap that lands while a card is still moving runs as soon as it settles.
+    var queuedStep by remember { mutableIntStateOf(0) }
+    LaunchedEffect(group, sort) {
+        offset.snapTo(0f); leaving = null; moving = false; flipped = emptySet(); queuedStep = 0
     }
     val cardFlipped = card != null && card.id in flipped
 
@@ -773,12 +964,14 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
         currentId = targetId
         scope.launch {
             try {
-                offset.animateTo(-deckWidth * 1.3f, spring(dampingRatio = 1f, stiffness = 240f),
-                    velocity.coerceAtMost(0f))
+                // Ends once the card is well off screen instead of creeping the last pixels.
+                offset.animateTo(-deckWidth * 1.3f, spring(dampingRatio = 1f, stiffness = 340f,
+                    visibilityThreshold = deckWidth * .02f), velocity.coerceAtMost(0f))
             } finally {
                 flipped = flipped - from.id
                 leaving = null
                 offset.snapTo(0f)
+                grip = 1f
                 moving = false
             }
         }
@@ -786,6 +979,7 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
     val idle = canMove && !moving && leaving == null
     val next: (Float) -> Unit = { velocity ->
         if (idle && card != null) flyOut(card, filtered[wrappedIndex(pos, 1, count)].id, velocity)
+        else if (canMove) queuedStep = 1
     }
     val previous: (Float) -> Unit = { velocity ->
         if (idle && card != null) {
@@ -794,8 +988,8 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
             moving = true
             scope.launch {
                 try {
-                    offset.animateTo(deckWidth, spring(dampingRatio = 1f, stiffness = 300f),
-                        velocity.coerceAtLeast(0f))
+                    offset.animateTo(deckWidth, spring(dampingRatio = 1f, stiffness = 380f,
+                        visibilityThreshold = 1.5f), velocity.coerceAtLeast(0f))
                     flipped = flipped - leavingTop.id
                     currentId = target.id
                 } finally {
@@ -803,24 +997,43 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
                     moving = false
                 }
             }
+        } else if (canMove) queuedStep = -1
+    }
+    val latestNext by rememberUpdatedState(next)
+    val latestPrevious by rememberUpdatedState(previous)
+    LaunchedEffect(moving, leaving, queuedStep) {
+        if (!moving && leaving == null && queuedStep != 0) {
+            val step = queuedStep
+            queuedStep = 0
+            if (step > 0) latestNext(0f) else latestPrevious(0f)
         }
     }
+    // A release commits when the card is far enough along, or would be once its momentum carries
+    // it, or on a quick flick; flicking back against the drag cancels.
     val settle: (Float) -> Unit = { velocity ->
         val o = offset.value
+        val projected = o + velocity * .18f
+        val reach = deckWidth * .26f
         when {
-            o < 0f && (o < -deckWidth * .22f || velocity < -900f) -> next(velocity)
-            o > 0f && (o > deckWidth * .22f || velocity > 900f) -> previous(velocity)
-            else -> scope.launch { offset.animateTo(0f, spring(dampingRatio = .62f, stiffness = 420f), velocity) }
+            o < 0f && velocity < flingSpeed * .4f && (projected < -reach || velocity < -flingSpeed) -> next(velocity)
+            o > 0f && velocity > -flingSpeed * .4f && (projected > reach || velocity > flingSpeed) -> previous(velocity)
+            else -> scope.launch {
+                offset.animateTo(0f, spring(dampingRatio = .7f, stiffness = 480f), velocity)
+                grip = 1f
+            }
         }
+    }
+    // A swipe that starts while a card is still moving is remembered and runs right after it.
+    val queueSwipe: (Float, Float) -> Unit = { distance, velocity ->
+        val travel = distance + velocity * .18f
+        if (canMove && (abs(distance) > flingSpeed * .06f || abs(velocity) > flingSpeed))
+            queuedStep = if (travel < 0f) 1 else -1
     }
     val rate: (FlashcardRating) -> Unit = { rating ->
         val c = card
         if (c != null && !reviewing && !moving && leaving == null) {
             val nextId = if (canMove) filtered[wrappedIndex(pos, 1, count)].id else null
-            val outcome = RatingFeedback(rating, ratingMessage(c, rating),
-                RatingSpecs.first { it.rating == rating }.foreground)
             onReview(c, rating) {
-                feedback = outcome
                 val leavesGroup = group == FlashcardGroup.NEW || group == FlashcardGroup.DUE
                 if (nextId == null && !leavesGroup) flipped = flipped - c.id else flyOut(c, nextId, 0f)
             }
@@ -866,38 +1079,48 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
                         tint = StudyInk.copy(alpha = .8f))
                 }
             }
-            Box {
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(Icons.Outlined.MoreVert, contentDescription = "Card options", tint = StudyInk)
-                }
-                DropdownMenu(menuOpen, onDismissRequest = { menuOpen = false }) {
-                    if (card != null) {
-                        DropdownMenuItem(text = { Text("Copy question") }, onClick = {
-                            clipboard.setText(card.frontBlocks?.let(::selectableNoteText)
-                                ?: AnnotatedString(card.recallPrompt.ifBlank { "What do you remember from this passage?" }))
-                            menuOpen = false
-                        })
-                        DropdownMenuItem(text = { Text("Copy answer") }, onClick = {
-                            clipboard.setText(card.backBlocks?.let(::selectableNoteText) ?: AnnotatedString(card.content.text))
-                            menuOpen = false
-                        })
-                        if (onOpenNote != null) DropdownMenuItem(text = { Text("Open source note") }, onClick = {
-                            menuOpen = false; onOpenNote(card)
-                        })
-                        HorizontalDivider()
-                    }
-                    SortLabels.forEach { (value, label) ->
-                        DropdownMenuItem(text = {
-                            Text("Sort: $label", fontWeight = if (value == sort) FontWeight.Bold else FontWeight.Normal,
-                                color = if (value == sort) accent else StudyInk)
-                        }, onClick = { onSort(value); menuOpen = false })
-                    }
-                }
+            IconButton(onClick = { optionsOpen = !optionsOpen },
+                modifier = Modifier.testTag("flashcard_options")) {
+                OptionsGlyph(optionsOpen, accent,
+                    Modifier.semantics {
+                        contentDescription = if (optionsOpen) "Hide card options" else "Card options"
+                    })
             }
         }
         Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(3.dp).clip(CircleShape)
             .background(accent.copy(alpha = .12f))) {
             Box(Modifier.fillMaxHeight().fillMaxWidth(progress).clip(CircleShape).background(accent))
+        }
+        AnimatedVisibility(optionsOpen, enter = expandVertically(tween(220)) + fadeIn(tween(220)),
+            exit = shrinkVertically(tween(180)) + fadeOut(tween(140))) {
+            val options = buildList {
+                if (card != null) add(listOfNotNull(
+                    onEdit?.let { edit ->
+                        PracticeOption("flashcard_option_edit", "Edit", Icons.Outlined.Edit) {
+                            optionsOpen = false; edit(card)
+                        }
+                    },
+                    PracticeOption("flashcard_option_copy_question",
+                        if (copied == "question") "Copied" else "Copy question",
+                        if (copied == "question") Icons.Outlined.Check else Icons.Outlined.ContentCopy) {
+                        clipboard.setText(card.frontBlocks?.let(::selectableNoteText)
+                            ?: AnnotatedString(card.recallPrompt.ifBlank { "What do you remember from this passage?" }))
+                        copied = "question"
+                    },
+                    PracticeOption("flashcard_option_copy_answer",
+                        if (copied == "answer") "Copied" else "Copy answer",
+                        if (copied == "answer") Icons.Outlined.Check else Icons.Outlined.ContentCopy) {
+                        clipboard.setText(card.backBlocks?.let(::selectableNoteText) ?: AnnotatedString(card.content.text))
+                        copied = "answer"
+                    },
+                    onOpenNote?.let { open ->
+                        PracticeOption("flashcard_option_open_note", "Open in note",
+                            Icons.AutoMirrored.Outlined.OpenInNew) { optionsOpen = false; open(card) }
+                    },
+                ))
+                add(sortOptions(sort, onSort))
+            }
+            PracticeOptionsStrip(options, accent, onClose = { optionsOpen = false })
         }
         Spacer(Modifier.height(10.dp))
         DeckGroupStrip(group, counts, accent, compact = true, onGroup = onGroup)
@@ -930,6 +1153,7 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
             val lift = with(LocalDensity.current) { DeckLift.toPx() }
             val dragEnabled by rememberUpdatedState(canMove && !moving && leaving == null)
             val settleLatest by rememberUpdatedState(settle)
+            val queueLatest by rememberUpdatedState(queueSwipe)
             Box(Modifier.weight(1f).fillMaxWidth()
                 .drawBehind {
                     drawRect(Brush.radialGradient(listOf(glow.value.copy(alpha = .55f), Color.Transparent),
@@ -940,17 +1164,42 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
                 .pointerInput(Unit) {
                     val tracker = VelocityTracker()
                     var dragging = false
+                    var queued = false
+                    var travel = 0f
+                    val release: () -> Unit = {
+                        if (press.value > 0f || press.isRunning)
+                            scope.launch { press.animateTo(0f, spring(dampingRatio = .8f, stiffness = 520f)) }
+                    }
                     detectHorizontalDragGestures(
-                        onDragStart = { tracker.resetTracking(); dragging = dragEnabled },
-                        onDragEnd = { if (dragging) settleLatest(tracker.calculateVelocity().x); dragging = false },
-                        onDragCancel = { if (dragging) settleLatest(0f); dragging = false },
-                        onHorizontalDrag = { change, amount ->
+                        onDragStart = { at ->
+                            tracker.resetTracking()
+                            travel = 0f
+                            dragging = dragEnabled
+                            queued = !dragging
                             if (dragging) {
+                                grip = if (at.y < size.height * .55f) 1f else -1f
+                                scope.launch { press.animateTo(1f, spring(dampingRatio = .8f, stiffness = 700f)) }
+                            }
+                        },
+                        onDragEnd = {
+                            val velocity = tracker.calculateVelocity().x
+                            if (dragging) settleLatest(velocity) else if (queued) queueLatest(travel, velocity)
+                            release()
+                            dragging = false; queued = false
+                        },
+                        onDragCancel = {
+                            if (dragging) settleLatest(0f)
+                            release()
+                            dragging = false; queued = false
+                        },
+                        onHorizontalDrag = { change, amount ->
+                            if (dragging || queued) {
                                 change.consume()
                                 tracker.addPosition(change.uptimeMillis, change.position)
-                                scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                                    offset.snapTo((offset.value + amount).coerceIn(-deckWidth * 1.2f, deckWidth))
-                                }
+                                travel += amount
+                            }
+                            if (dragging) scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                offset.snapTo((offset.value + amount).coerceIn(-deckWidth * 1.2f, deckWidth))
                             }
                         },
                     )
@@ -972,14 +1221,20 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
                                     rotationZ = -10f * (1f - b)
                                     translationY = -lift * 1.5f * (1f - b)
                                 } else if (layer.slot == 0 && (hasLeaving || o < 0f)) {
+                                    // Pivots on the edge opposite the finger, as a held card does.
+                                    transformOrigin = TransformOrigin(.5f, if (grip > 0f) 1f else 0f)
                                     translationX = o
-                                    rotationZ = o / w * 10f
+                                    rotationZ = o / w * 12f * grip
                                     translationY = -abs(o) / w * lift * 1.5f
+                                    val s = 1f + .03f * press.value
+                                    scaleX = s
+                                    scaleY = s
                                 } else {
                                     val p = if (hasLeaving || o < 0f) (abs(o) / w).coerceAtMost(1f) else 0f
                                     val b = if (!hasLeaving && o > 0f) (o / w).coerceAtMost(1f) else 0f
                                     val d = (layer.slot - p + b).coerceIn(0f, 3f)
-                                    val s = 1f - DeckScaleStep * d
+                                    val held = if (layer.slot == 0 && !hasLeaving) .03f * press.value * (1f - b) else 0f
+                                    val s = (1f - DeckScaleStep * d) * (1f + held)
                                     scaleX = s
                                     scaleY = s
                                     translationY = lift * d
@@ -996,21 +1251,6 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
                                 onOpenNote = if (active && onOpenNote != null) ({ onOpenNote(c) }) else null,
                                 modifier = layerModifier)
                         } else DeckBackCard(c, layerModifier)
-                    }
-                }
-                androidx.compose.animation.AnimatedVisibility(feedback != null,
-                    Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).zIndex(40f),
-                    enter = fadeIn(tween(160)) + slideInVertically(tween(260)) { it / 2 },
-                    exit = fadeOut(tween(260))) {
-                    shownFeedback?.let { note ->
-                        Row(Modifier.shadow(8.dp, CircleShape).clip(CircleShape).background(StudyInk.copy(alpha = .92f))
-                            .padding(horizontal = 14.dp, vertical = 9.dp)
-                            .testTag("flashcard_feedback"), verticalAlignment = Alignment.CenterVertically) {
-                            ReviewRatingMark(note.rating, lerp(note.color, Color.White, .35f))
-                            Spacer(Modifier.width(8.dp))
-                            Text(note.message, color = Color.White, fontFamily = CardSans,
-                                fontWeight = FontWeight.Medium, fontSize = 12.sp, maxLines = 1)
-                        }
                     }
                 }
             }
@@ -1040,6 +1280,40 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
     }
 }
 
+/**
+ * Card options button: three slider tracks whose knobs glide to new stops one after another as
+ * the options strip opens, and glide back as it closes. Progress is read only while drawing.
+ */
+@Composable
+private fun OptionsGlyph(open: Boolean, accent: Color, modifier: Modifier = Modifier) {
+    val target = if (open) 1f else 0f
+    val knobs = listOf(
+        animateFloatAsState(target, spring(dampingRatio = .58f, stiffness = 520f), label = "knob 1"),
+        animateFloatAsState(target, spring(dampingRatio = .58f, stiffness = 380f), label = "knob 2"),
+        animateFloatAsState(target, spring(dampingRatio = .58f, stiffness = 270f), label = "knob 3"),
+    )
+    val tone = animateFloatAsState(target, tween(240), label = "options tone")
+    Canvas(modifier.size(36.dp)) {
+        val t = tone.value.coerceIn(0f, 1f)
+        drawRoundRect(accent.copy(alpha = .14f * t), cornerRadius = CornerRadius(12.dp.toPx()))
+        val ink = lerp(StudyInk, accent, t)
+        val stroke = 1.8.dp.toPx()
+        val knob = 2.7.dp.toPx()
+        val left = size.width * .26f
+        val right = size.width * .74f
+        val stops = arrayOf(.22f to .78f, .72f to .28f, .38f to .64f)
+        for (i in 0..2) {
+            val y = size.height * (.32f + .18f * i)
+            val (from, to) = stops[i]
+            val x = left + (right - left) * (from + (to - from) * knobs[i].value)
+            val gap = knob + stroke * .9f
+            if (x - gap > left) drawLine(ink.copy(alpha = .55f), Offset(left, y), Offset(x - gap, y), stroke, StrokeCap.Round)
+            if (x + gap < right) drawLine(ink.copy(alpha = .55f), Offset(x + gap, y), Offset(right, y), stroke, StrokeCap.Round)
+            drawCircle(ink, knob, Offset(x, y))
+        }
+    }
+}
+
 @Composable
 private fun NavPill(label: String, enabled: Boolean, color: Color, modifier: Modifier, onClick: () -> Unit) {
     Box(modifier.height(46.dp).clip(RoundedCornerShape(23.dp)).background(Color.White.copy(alpha = .92f))
@@ -1054,10 +1328,12 @@ private fun NavPill(label: String, enabled: Boolean, color: Color, modifier: Mod
 /** A card further down the deck: only its edge shows, so it carries no content. */
 @Composable
 private fun DeckBackCard(card: SavedFlashcard, modifier: Modifier) {
-    val color = flashcardColor(card.colorIndex)
+    val look = LocalDeckLook.current
+    val paint = remember(look, card.colorIndex) { cardPaint(look.style, card.colorIndex, look.accent, large = true) }
+    val shape = look.style.corners.cardShape()
     Box(modifier
-        .graphicsLayer { shadowElevation = 6f * density; shape = CardShape; clip = true }
-        .background(Brush.linearGradient(listOf(lerp(color, Color.White, .5f), color)))
+        .graphicsLayer { shadowElevation = 6f * density; this.shape = shape; clip = true }
+        .cardSurface(paint, shape, large = true, seed = card.colorIndex)
         .clearAndSetSemantics { })
 }
 
@@ -1092,11 +1368,36 @@ private fun StudyCard(card: SavedFlashcard, flipped: Boolean, active: Boolean, p
         }
     } }
     val palette = LocalProjectPalette.current
-    val cardColor = flashcardColor(card.colorIndex)
-    val light = lerp(cardColor, Color.White, .5f)
-    val ink = lerp(cardColor, Color.Black, .82f)
+    val look = LocalDeckLook.current
+    val style = look.style
+    // Dark designs keep note formatting readable: the answer, and a front that keeps its note
+    // formatting, sit on the design's light partner.
+    val frontPlain = card.frontBlocks == null ||
+        (card.frontCardStyle && flashcardFrontFitsCardStyle(card.frontBlocks))
+    val faceDesign = if (style.design.dark && (showingAnswer || !frontPlain)) style.design.readable() else style.design
+    val paint = remember(style, card.colorIndex, look.accent, faceDesign) {
+        cardPaint(style, card.colorIndex, look.accent, large = true, design = faceDesign)
+    }
+    val cardColor = paint.bottom
+    val light = paint.top
+    val ink = paint.ink
+    val shape = style.corners.cardShape()
     val currentFlip by rememberUpdatedState(onFlip)
-    Box(modifier
+    Box(modifier) {
+    // The shadow lies flat under the card and narrows as the card turns edge-on. A shadow cast
+    // by the turning layer itself is projected by the renderer as a large grey slab.
+    Box(Modifier.matchParentSize().graphicsLayer {
+        val radians = angle.value * PI / 180.0
+        val turn = abs(sin(radians)).toFloat()
+        val lift = 1f + .04f * turn
+        // Kept just inside the far edge, which perspective draws slightly narrower.
+        scaleX = (abs(cos(radians)).toFloat() * lift * (1f - .1f * turn)).coerceAtLeast(.02f)
+        scaleY = lift * (1f - .03f * turn)
+        translationY = 6f * density * turn
+        shadowElevation = (8f + 6f * turn) * density
+        this.shape = shape
+    })
+    Box(Modifier.fillMaxSize()
         .graphicsLayer {
             val a = angle.value
             rotationY = if (a > 90f) a - 180f else a
@@ -1104,17 +1405,23 @@ private fun StudyCard(card: SavedFlashcard, flipped: Boolean, active: Boolean, p
             val turn = abs(sin(a * PI / 180.0)).toFloat()
             scaleX = 1f + .04f * turn
             scaleY = scaleX
-            shadowElevation = (8f + 16f * turn) * density
-            shape = CardShape
+            this.shape = shape
             clip = true
         }
-        .background(Brush.linearGradient(listOf(light, cardColor)))
-        .border(1.dp, Color.White.copy(alpha = .7f), CardShape)
-        .drawBehind {
-            val inset = 7.dp.toPx()
-            drawRoundRect(Color.White.copy(alpha = .45f), topLeft = Offset(inset, inset),
-                size = Size(size.width - inset * 2, size.height - inset * 2),
-                cornerRadius = CornerRadius(20.dp.toPx()), style = Stroke(1.dp.toPx()))
+        .cardSurface(paint, shape, large = true, seed = card.colorIndex)
+        // While turning, the face dims a little and a soft sheen crosses it, as light does on
+        // a real card; at rest nothing is drawn.
+        .drawWithContent {
+            drawContent()
+            val a = angle.value
+            val tilt = ((if (a > 90f) a - 180f else a) / 90f).coerceIn(-1f, 1f)
+            val turn = abs(sin(a * PI / 180.0)).toFloat()
+            if (turn > .01f) {
+                drawRect(Color.Black.copy(alpha = .09f * turn))
+                val x = size.width * (.5f - tilt * .65f)
+                drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = .2f * turn),
+                    Color.Transparent), x - size.width * .38f, x + size.width * .38f))
+            }
         }
         .then(if (active) Modifier
             // The question side sees the tap before its rich text fields can take it; on the
@@ -1153,12 +1460,21 @@ private fun StudyCard(card: SavedFlashcard, flipped: Boolean, active: Boolean, p
                     val richFace = if (showingAnswer) card.backBlocks else card.frontBlocks
                     val faceTag = if (!active) Modifier else Modifier.testTag(
                         if (showingAnswer) "flashcard_answer" else "flashcard_question")
-                    if (richFace != null) NoteDocumentPreview(richFace, palette, faceTag)
+                    val cardStyled = !showingAnswer && richFace != null && card.frontCardStyle &&
+                        flashcardFrontFitsCardStyle(richFace)
+                    val frontScale = style.frontScale()
+                    if (cardStyled && richFace != null) CardStyleFront(flashcardFrontText(richFace), ink, faceTag,
+                        scale = frontScale, family = style.typeface.family(), weight = style.typeface.weight,
+                        centered = style.centered)
+                    else if (richFace != null) NoteDocumentPreview(richFace, palette, faceTag)
                     else if (showingAnswer) SelectionContainer {
                         Text(styled, color = ink, fontSize = 19.sp, lineHeight = 28.sp,
                             fontFamily = CardSans, fontWeight = FontWeight.Medium, modifier = faceTag)
-                    } else Text(styledFront, color = ink, fontSize = 26.sp, lineHeight = 33.sp,
-                        fontWeight = FontWeight.Medium, fontFamily = CardSerif, modifier = faceTag)
+                    } else Text(styledFront, color = ink, fontSize = (26f * frontScale).sp,
+                        lineHeight = (33f * frontScale).sp, fontWeight = style.typeface.weight,
+                        fontFamily = style.typeface.family(),
+                        textAlign = if (style.centered) TextAlign.Center else null,
+                        modifier = if (style.centered) faceTag.fillMaxWidth() else faceTag)
                 }
             }
             Box(Modifier.fillMaxWidth().height(64.dp).align(Alignment.TopCenter)
@@ -1198,6 +1514,7 @@ private fun StudyCard(card: SavedFlashcard, flipped: Boolean, active: Boolean, p
             }
         }
     }
+    }
 }
 
 /** Interval a rating gives [card], matching [FlashcardStore.review]. */
@@ -1211,13 +1528,6 @@ internal fun ratingInterval(card: SavedFlashcard, rating: FlashcardRating, long:
         FlashcardRating.GOOD -> days(if (fresh) 1 else (card.intervalDays * 2).coerceAtMost(365))
         FlashcardRating.EASY -> days(if (fresh) 3 else (card.intervalDays * 3).coerceAtMost(365))
     }
-}
-
-/** Every rating schedules the card ahead, so it lands in Future (or stays in the archive). */
-internal fun ratingMessage(card: SavedFlashcard, rating: FlashcardRating): String {
-    val label = rating.name.lowercase().replaceFirstChar { it.uppercase() }
-    val where = if (card.isArchived) "kept in Archive" else "moved to Future"
-    return "$label \u00B7 back in ${ratingInterval(card, rating, long = true)} \u00B7 $where"
 }
 
 private val RatingSpecs = listOf(
@@ -1235,29 +1545,96 @@ private fun ReviewRatings(card: SavedFlashcard, enabled: Boolean, onRating: (Fla
         val showMark = maxWidth >= 330.dp
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             RatingSpecs.forEach { spec ->
-                val shape = RoundedCornerShape(14.dp)
-                Row(Modifier.weight(1f).height(42.dp).clip(shape)
-                    .background(spec.background)
-                    .border(1.dp, spec.foreground.copy(alpha = .18f), shape)
-                    .clickable(enabled = enabled, role = Role.Button) { onRating(spec.rating) }
-                    .semantics {
-                        contentDescription = "${spec.label}, next review in ${ratingInterval(card, spec.rating, long = true)}"
-                    }
-                    .testTag("flashcard_rate_${spec.rating.name.lowercase()}")
-                    .padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    if (showMark) {
-                        ReviewRatingMark(spec.rating, spec.foreground)
-                        Spacer(Modifier.width(4.dp))
-                    }
-                    Text(spec.label, color = if (showMark) StudyInk else spec.foreground, fontFamily = CardSans,
-                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
-                    Spacer(Modifier.width(3.dp))
-                    Text(ratingInterval(card, spec.rating, long = false), color = spec.foreground.copy(alpha = .7f),
-                        fontFamily = CardSans, fontSize = 10.sp, maxLines = 1, softWrap = false)
-                }
+                RatingButton(spec, card, enabled, showMark, Modifier.weight(1f)) { onRating(spec.rating) }
             }
         }
+    }
+}
+
+/**
+ * One rating button. It squeezes under the finger, springs back with a small overshoot on
+ * release while a wash of its colour spreads from the touch point, the outline brightens and the
+ * mark nods. All motion is read inside layers and draw calls, so a tap never recomposes the row.
+ */
+@Composable
+private fun RatingButton(spec: RatingSpec, card: SavedFlashcard, enabled: Boolean, showMark: Boolean,
+    modifier: Modifier, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(14.dp)
+    val source = remember { MutableInteractionSource() }
+    val squeeze = remember { Animatable(1f) }
+    val wash = remember { Animatable(0f) }
+    val origin = remember { floatArrayOf(Float.NaN, Float.NaN) }
+    val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(source) {
+        source.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> {
+                    origin[0] = interaction.pressPosition.x
+                    origin[1] = interaction.pressPosition.y
+                    scope.launch { squeeze.animateTo(.92f, spring(dampingRatio = 1f, stiffness = 1500f)) }
+                }
+                is PressInteraction.Release -> {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    scope.launch {
+                        squeeze.animateTo(1f, spring(dampingRatio = .36f, stiffness = 650f), initialVelocity = 3f)
+                    }
+                    scope.launch {
+                        wash.snapTo(0f)
+                        wash.animateTo(1f, tween(560, easing = FastOutSlowInEasing))
+                    }
+                }
+                is PressInteraction.Cancel ->
+                    scope.launch { squeeze.animateTo(1f, spring(dampingRatio = .7f, stiffness = 650f)) }
+            }
+        }
+    }
+    Row(modifier.height(42.dp)
+        .graphicsLayer { scaleX = squeeze.value; scaleY = squeeze.value }
+        .clip(shape)
+        .background(spec.background)
+        .drawBehind {
+            val w = wash.value
+            if (w > 0f && w < 1f) {
+                val center = if (origin[0].isNaN()) Offset(size.width / 2f, size.height / 2f)
+                    else Offset(origin[0], origin[1])
+                drawCircle(spec.foreground.copy(alpha = .26f * (1f - w)),
+                    radius = size.maxDimension * (.15f + 1.05f * w), center = center)
+            }
+        }
+        .drawWithContent {
+            drawContent()
+            val w = wash.value
+            val glow = if (w > 0f && w < 1f) (1f - w) else 0f
+            val stroke = (1f + 1.2f * glow) * density
+            drawRoundRect(spec.foreground.copy(alpha = .18f + .5f * glow),
+                topLeft = Offset(stroke / 2f, stroke / 2f),
+                size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+                cornerRadius = CornerRadius(14.dp.toPx() - stroke / 2f), style = Stroke(stroke))
+        }
+        .clickable(interactionSource = source, indication = null, enabled = enabled, role = Role.Button,
+            onClick = onClick)
+        .semantics {
+            contentDescription = "${spec.label}, next review in ${ratingInterval(card, spec.rating, long = true)}"
+        }
+        .testTag("flashcard_rate_${spec.rating.name.lowercase()}")
+        .padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        if (showMark) {
+            Box(Modifier.graphicsLayer {
+                val w = wash.value
+                val nod = if (w > 0f && w < 1f) sin(w * PI).toFloat() else 0f
+                scaleX = 1f + .3f * nod
+                scaleY = 1f + .3f * nod
+                rotationZ = -12f * nod
+            }) { ReviewRatingMark(spec.rating, spec.foreground) }
+            Spacer(Modifier.width(4.dp))
+        }
+        Text(spec.label, color = if (showMark) StudyInk else spec.foreground, fontFamily = CardSans,
+            fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+        Spacer(Modifier.width(3.dp))
+        Text(ratingInterval(card, spec.rating, long = false), color = spec.foreground.copy(alpha = .7f),
+            fontFamily = CardSans, fontSize = 10.sp, maxLines = 1, softWrap = false)
     }
 }
 
@@ -1285,6 +1662,66 @@ private fun ReviewRatingMark(rating: FlashcardRating, color: Color) {
                 line(.39f, .76f, .84f, .23f)
             }
         }
+    }
+}
+
+private class PracticeOption(val tag: String, val label: String, val icon: ImageVector,
+                             val selected: Boolean = false, val onClick: () -> Unit)
+
+private fun sortIcon(sort: FlashcardSort): ImageVector = when (sort) {
+    FlashcardSort.SCHEDULED -> Icons.Outlined.Schedule
+    FlashcardSort.WEAKEST -> Icons.AutoMirrored.Outlined.TrendingDown
+    FlashcardSort.NEWEST -> Icons.Outlined.NewReleases
+    FlashcardSort.STARRED -> Icons.Outlined.StarBorder
+    FlashcardSort.SHUFFLED -> Icons.Outlined.Shuffle
+}
+
+/**
+ * The card options under the three-dot button, made like the app's other tool strips: bordered
+ * rounded buttons in groups, scrolling sideways under feathered edges, with Close at the right.
+ */
+@Composable
+private fun PracticeOptionsStrip(groups: List<List<PracticeOption>>, accent: Color, onClose: () -> Unit,
+                                 tag: String = "flashcard_options_strip", modifier: Modifier = Modifier) {
+    BackHandler(onBack = onClose)
+    val shape = RoundedCornerShape(16.dp)
+    Row(modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp).height(52.dp)
+        .clip(shape).background(Color.White).border(1.dp, StudyInk.copy(alpha = .08f), shape)
+        .testTag(tag), verticalAlignment = Alignment.CenterVertically) {
+        NoteFeatheredRow(Modifier.weight(1f).fillMaxHeight(), peek = true) {
+            groups.filter { it.isNotEmpty() }.forEachIndexed { index, group ->
+                if (index > 0) Box(Modifier.padding(horizontal = 8.dp).width(1.dp).height(24.dp)
+                    .background(StudyInk.copy(alpha = .12f)))
+                group.forEachIndexed { i, option ->
+                    if (i > 0) Spacer(Modifier.width(7.dp))
+                    PracticeOptionChip(option, accent)
+                }
+            }
+        }
+        Box(Modifier.padding(end = 4.dp).size(40.dp).clip(RoundedCornerShape(12.dp))
+            .clickable(role = Role.Button, onClick = onClose)
+            .semantics { contentDescription = "Close card options" }
+            .testTag("flashcard_options_close"), contentAlignment = Alignment.Center) {
+            Icon(Icons.Outlined.Close, contentDescription = null, tint = StudyMuted, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun PracticeOptionChip(option: PracticeOption, accent: Color) {
+    val shape = RoundedCornerShape(12.dp)
+    Row(Modifier.height(38.dp).clip(shape)
+        .background(if (option.selected) accent.copy(alpha = .12f) else Color.White)
+        .border(1.dp, if (option.selected) accent.copy(alpha = .4f) else StudyInk.copy(alpha = .1f), shape)
+        .clickable(role = Role.Button, onClick = option.onClick)
+        .semantics { selected = option.selected }
+        .testTag(option.tag)
+        .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(option.icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(option.label, color = if (option.selected) accent else StudyInk, fontFamily = CardSans,
+            fontSize = 13.sp, fontWeight = if (option.selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1)
     }
 }
 

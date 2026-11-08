@@ -40,6 +40,10 @@ data class SavedFlashcard(
     val backBlocks: List<NoteDocBlock>? = null,
     /** Kept but out of every study queue until restored. */
     val isArchived: Boolean = false,
+    /** The note block the card was made from; null on older cards, which are found by text. */
+    val sourceBlockId: String? = null,
+    /** The front is drawn in the deck's card typeface; off keeps the note's own formatting. */
+    val frontCardStyle: Boolean = true,
 )
 
 enum class FlashcardRating { AGAIN, HARD, GOOD, EASY }
@@ -68,25 +72,56 @@ object FlashcardStore {
                     difficulty: String = "NORMAL", intervalDays: Int = 1,
                     frontContent: NoteDocBlock? = null,
                     frontBlocks: List<NoteDocBlock>? = null,
-                    backBlocks: List<NoteDocBlock>? = null): SavedFlashcard = mutex.withLock {
+                    backBlocks: List<NoteDocBlock>? = null,
+                    sourceBlockId: String? = null,
+                    frontCardStyle: Boolean = true): SavedFlashcard = mutex.withLock {
         require(ownerKey.isNotBlank() && ownerKey.length <= 256)
-        require(content.text.isNotBlank() && content.text.length <= 20_000)
-        require(recallPrompt.length <= 300)
-        require(difficulty in setOf("EASY", "NORMAL", "HARD"))
         require(intervalDays in 1..365)
-        require(frontContent == null || frontContent.text.trim() == recallPrompt.trim())
-        require(frontBlocks == null || frontBlocks.size in 1..MAX_SIDE_BLOCKS)
-        require(backBlocks == null || backBlocks.size in 1..MAX_SIDE_BLOCKS)
+        requireFaces(content, recallPrompt, difficulty, frontContent, frontBlocks, backBlocks)
+        require(sourceBlockId == null || sourceBlockId.length in 1..256)
         withContext(Dispatchers.IO) {
             val existing = read(context)
             val now = System.currentTimeMillis()
             val card = SavedFlashcard(UUID.randomUUID().toString(), ownerKey, noteTitle.take(200),
                 content, now, (existing.maxOfOrNull { it.colorIndex } ?: -1) + 1,
                 recallPrompt.trim(), difficulty, intervalDays, now + intervalDays * 86_400_000L,
-                frontContent = frontContent, frontBlocks = frontBlocks, backBlocks = backBlocks)
+                frontContent = frontContent, frontBlocks = frontBlocks, backBlocks = backBlocks,
+                sourceBlockId = sourceBlockId, frontCardStyle = frontCardStyle)
             write(context, existing + card)
             card
         }
+    }
+
+    /**
+     * Replaces a card's faces and difficulty. Its schedule, reviews, star, archive state, colour
+     * and source stay as they were, so editing never resets learning progress.
+     */
+    suspend fun update(context: Context, cardId: String, content: NoteDocBlock,
+                       recallPrompt: String, difficulty: String,
+                       frontContent: NoteDocBlock?, frontBlocks: List<NoteDocBlock>?,
+                       backBlocks: List<NoteDocBlock>?,
+                       frontCardStyle: Boolean = true): SavedFlashcard = mutex.withLock {
+        requireFaces(content, recallPrompt, difficulty, frontContent, frontBlocks, backBlocks)
+        withContext(Dispatchers.IO) {
+            val existing = read(context)
+            val card = existing.firstOrNull { it.id == cardId } ?: error("Flashcard no longer exists")
+            val updated = card.copy(content = content, recallPrompt = recallPrompt.trim(),
+                difficulty = difficulty, frontContent = frontContent,
+                frontBlocks = frontBlocks, backBlocks = backBlocks, frontCardStyle = frontCardStyle)
+            write(context, existing.map { if (it.id == cardId) updated else it })
+            updated
+        }
+    }
+
+    private fun requireFaces(content: NoteDocBlock, recallPrompt: String, difficulty: String,
+                             frontContent: NoteDocBlock?, frontBlocks: List<NoteDocBlock>?,
+                             backBlocks: List<NoteDocBlock>?) {
+        require(content.text.isNotBlank() && content.text.length <= 20_000)
+        require(recallPrompt.length <= 300)
+        require(difficulty in setOf("EASY", "NORMAL", "HARD"))
+        require(frontContent == null || frontContent.text.trim() == recallPrompt.trim())
+        require(frontBlocks == null || frontBlocks.size in 1..MAX_SIDE_BLOCKS)
+        require(backBlocks == null || backBlocks.size in 1..MAX_SIDE_BLOCKS)
     }
 
     /** Updates only the reviewed card. A failed write leaves its previous schedule recoverable. */
@@ -173,7 +208,9 @@ object FlashcardStore {
                 row.optString("frontContent").takeIf { it.isNotBlank() }
                     ?.let { VirlinNoteCodec.decode(it).singleOrNull() },
                 row.richSide("frontBlocks"), row.richSide("backBlocks"),
-                isArchived = row.optBoolean("isArchived", false))
+                isArchived = row.optBoolean("isArchived", false),
+                sourceBlockId = row.optString("sourceBlockId").takeIf { it.isNotBlank() },
+                frontCardStyle = row.optBoolean("frontCardStyle", true))
         }
     }
 
@@ -195,6 +232,7 @@ object FlashcardStore {
                 .put("lastReviewedAt", card.lastReviewedAt ?: 0L)
                 .put("isStarred", card.isStarred)
                 .put("isArchived", card.isArchived)
+                .put("frontCardStyle", card.frontCardStyle)
                 .put("content", VirlinNoteCodec.encode(listOf(card.content)))
                 .also { json -> card.frontContent?.let {
                     json.put("frontContent", VirlinNoteCodec.encode(listOf(it)))
@@ -202,6 +240,7 @@ object FlashcardStore {
                 .also { json ->
                     card.frontBlocks?.let { json.put("frontBlocks", VirlinNoteCodec.encode(it)) }
                     card.backBlocks?.let { json.put("backBlocks", VirlinNoteCodec.encode(it)) }
+                    card.sourceBlockId?.let { json.put("sourceBlockId", it) }
                 }) }
         })
         val atomic = file(context)

@@ -1747,3 +1747,62 @@ Done - extend that table column-wise and row-wise - I don't want to see the popu
 - Group/sort/index/practicing state survives process death (rememberSaveable).
 - Test: flipButtonAndRatingsActOnTheCardNowShowing. 21/21 flashcard tests pass.
 - APK: releases\Virlin-flashcard-deck-20261108-1715.apk
+
+## 2026-11-08 - Flashcard practice: options strip, Edit, open note at the card's block
+- Practice page three-dot button now toggles a horizontal, feathered options strip directly above the New/Due/Future chips (white rounded surface, bordered icon+label buttons, divider between groups, Close at right, Back closes it). Replaces the dropdown menu.
+- Strip: Edit, Copy question, Copy answer (button shows 'Copied' briefly), Open in note | Sort: Scheduled, Weakest first, Newest first, Starred first, Shuffled (selected sort tinted with the project accent).
+- Edit: FlashcardCreateDialog gains an edit mode (FlashcardEditStart / flashcardEditStart; older plain cards become one block per face). Passage picker and REVIEW AGAIN are hidden; saves via new FlashcardStore.update, which keeps schedule, reviews, star, archive, colour and source.
+- Open in note lands on the card's own block: new optional SavedFlashcard.sourceBlockId (JSON field, store stays v1, older cards unaffected) recorded by NotesRoute when a card is made; older cards are matched by text (flashcardSourceBlockId). A block hidden in a collapsed toggle opens at the toggle. Works by pointing the note's existing NotePositionStore reading position at that block before navigating; the editor is unchanged.
+- Tests: cardOptionsStripEditsOpensAndSortsTheCardShowing, sourceNoteOpensAtTheCardsOwnBlock, editStartKeepsRichFacesAndTurnsOlderCardsIntoBlocks, editingKeepsScheduleStarAndSourceBlock. 37/37 flashcard + notes-route tests pass.
+- Verified on emulator-5556 (temp cards, restored afterwards): strip, edit+save, text-matched jump (block 245 of 352) and saved-block jump (heading at block 308).
+- APK: releases\Virlin-flashcard-options-20261108-1950.apk
+
+## 2026-11-08 - Flashcard practice: rating message removed
+- Removed the dark pill shown after Again/Hard/Good/Easy ('Good - back in 1 day - moved to Future') with its state, RatingFeedback and ratingMessage. Ratings, scheduling and the move to the next card are unchanged; each button still shows its interval.
+- Test updated to assert the pill no longer appears. 35/35 flashcard tests pass. Verified on emulator-5556 (card file backed up and restored).
+- APK: releases\Virlin-flashcard-nomessage-20261108-1940.apk
+
+## 2026-11-08 - Flashcard deck page: sort as a strip
+- Deck page sort button (SwapVert) now toggles the same feathered options strip as the practice page, under the top bar: Scheduled, Weakest first, Newest first, Starred first, Shuffled, selected one tinted with the project accent; Close / Back / the button close it. Replaces the dropdown (SortMenu -> SortToggle + shared sortOptions; PracticeOptionsStrip gains tag/modifier params).
+- Test: deckSortOpensAsAStripAndSelects. 36/36 flashcard tests pass. Verified on emulator-5556 (no data changed).
+- APK: releases\Virlin-flashcard-sortstrip-20261108-1950.apk
+
+## Flashcards - front card style switch (2026-11-08)
+- FlashcardStore: optional per-card frontCardStyle flag (missing = on, so older cards read as on); add() and update() take it; store stays v1.
+- FlashcardCreateDialog: 'Aa' switch in the FRONT header next to the edit pencil (tag flashcard_front_style, Role.Switch). On = front previews and practises in the deck serif (CardSerif, sized by length); off = the note's own formatting. Back side untouched.
+- Fronts with code, equations, prompts, tables or media always keep note formatting; the switch rests (disabled) for them so nothing is lost.
+- FlashcardsRoute: practice front uses CardStyleFront when on and the front fits; Edit carries the flag through. NotesRoute passes it on create.
+- Tests: dialog toggle default/off + code-front rest; store default/round-trip. 41/41 flashcard + notes route tests pass. Verified on emulator-5556 (data restored, hash matched).
+
+## Flashcards - per-branch card design room (2026-11-08)
+- New data/flashcard/FlashcardDeckStyleStore.kt: FlashcardDeckStyle (design, colour mode, two colours, gradient direction, typeface, text size, alignment, corners, scattered, details) saved per branch in files/flashcard-deck-styles-v1.json keyed 'kind:id'. Default style = the original look; saving the default removes the entry. Unknown names fall back per setting. Cards file untouched.
+- New ui/notes/FlashcardDeckDesign.kt: 14 card styles (Classic, Natural paper, Hand-drawn, Sticky note, Index card, Kraft, Watercolour, Dotted, Polaroid, Outline, Vintage, Bold, Chalkboard, Blueprint) drawn in one cached cardSurface modifier; colour modes Mixed/Fill/Gradient/Project with 18 swatches and 3 directions; 8 typefaces (Fraunces, DM Sans, and Caveat/Permanent Marker/Playfair/Abril Fatface/Nunito/Courier Prime via the existing notes Google Fonts provider with built-in fallbacks); bottom sheet with live preview and strips.
+- FlashcardsRoute: Tune button (tag flashcard_style_button) after sort on the deck page; deck tiles, back-of-deck cards and practice cards read LocalDeckLook. Dark styles put the answer (and fronts that keep note formatting) on a light partner design so note content stays readable.
+- Tests: FlashcardDeckStyleStoreTest (per-branch isolation, default removes entry, unknown values), sheet + practice UI test. 44/44 flashcard + notes route tests pass. Verified on emulator-5556; test style file removed and cards hash matched.
+
+## Flashcards - Previous / Next answer every tap (2026-11-08)
+- Cause: after a move the buttons stayed locked until the spring fully settled (~1.3 s), long after the card had visibly moved, so a quick second tap was dropped.
+- Fix (FlashcardsRoute practice page): fly-out spring ends once the card is well off screen (visibilityThreshold 2% of deck width; previous 1.5 px so the swap has no jump), and a Previous/Next tap during a move is queued (one step) and runs as soon as the move settles. Cleared on group/sort change.
+- Verified on emulator-5556 with 4 temporary cards: single tap 1->2, two taps 0.3 s apart 2->4, two quick previous 4->2, single previous 2->1. Cards file restored (hash matched). 42/42 flashcard tests pass.
+
+## 2026-11-08 - Flashcard flip: no grey slab, smoother turn
+- FlashcardsRoute.kt StudyCard: elevation shadow moved off the 3D-rotated layer (Android drew it as a large grey rectangle mid-flip) onto a flat sibling layer that narrows with |cos| of the angle, lifts slightly and softens. The rotating card keeps its clip and adds a light shade + moving sheen while turning. Face content, semantics and gestures unchanged.
+- Build: releases\Virlin-flipshadow-20261108-2017.apk (emulator-5556 only). Flashcard tests 42/42.
+
+## 2026-11-08 - Flashcard swipe: one swipe is enough, more physical motion
+- FlashcardsRoute.kt FlashcardPracticePage: release decision now uses momentum projection (offset + velocity*0.18s vs 26% width) or a density-aware flick (420dp/s); flicking back against the drag cancels. A swipe made while a card is still moving is queued and runs right after (reuses queuedStep). Fly-out/slide-in springs faster (340/380), snap-back less bouncy. Top card lifts 3% when grabbed and pivots on the edge opposite the finger (top or bottom grip). No recomposition per frame; states read only in graphics layers.
+- Test: FlashcardStudyScreenTest.aShortQuickFlickIsEnoughToMoveACard. Flashcard tests 43/43.
+- Verified on emulator-5556 (releases\Virlin-swipe-20261108-2026.apk) with temporary deck copies; user card file restored byte-exact (SHA256 05489C6A...).
+
+## 2026-11-08 - Practice options button: animated sliders glyph
+- FlashcardsRoute.kt: the practice header MoreVert icon is replaced by OptionsGlyph, a Canvas-drawn three-slider glyph. Opening the options strip glides each knob to a new stop (staggered springs) and tints it to the deck accent with a soft rounded backdrop; closing reverses it. Same testTag (flashcard_options) and labels (Card options / Hide card options). Progress read only in the draw lambda.
+- Flashcard tests 43/43. Verified on emulator-5556 (releases\Virlin-optionsicon-20261108-2032.apk).
+
+## 2026-11-08 - Rating buttons: responsive tap animation
+- FlashcardsRoute.kt: ReviewRatings buttons extracted to RatingButton. Press squeezes to 92%; release springs back with overshoot, a wash of the button colour spreads from the touch point, the outline brightens then fades, the mark nods; light haptic tick. No popup, no recomposition per frame (Animatables read in graphicsLayer/draw). Rest look, labels, semantics, testTags and rating logic unchanged.
+- Flashcard tests 43/43. Verified on emulator-5556 (releases\Virlin-ratepop-20261108-2038.apk) with temporary deck copies; user card file restored byte-exact (SHA256 05489C6A...).
+
+## 2026-11-08 - Notes multi-select: format all picked blocks
+- NotesViewModel.kt: NotesUiState.blockSelection (never stored), set by NotesRoute from the multi-select. While non-empty, toolbar tools act on every picked block as one undo step: font, size (stepper moves each block from its own size; typed size sets one size), bold/italic/underline/strike, text colour, highlight, alignment, line spacing, paragraph style (Normal/Headings), bullets/numbering (+ list style strip, None), checklist, quote. Code keeps its own look; prompts/toggles/tables/media are skipped; type changes are proved against the rich document first (refused with a message, nothing changed). Toolbar shows shared state (e.g. Mixed styles). Empty selection = unchanged single-block behaviour. paragraphLabelFor extracted (same labels).
+- NotesRoute.kt: LaunchedEffect passes the multi-select to the VM.
+- Test: NotesMultiSelectFormattingTest (4). Notes suites 248/248. Verified on emulator-5556 (releases\Virlin-multiformat2-20261108-2122.apk); emulator DB backed up and restored byte-exact.

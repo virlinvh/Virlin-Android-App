@@ -153,12 +153,16 @@ fun NotesRoute(
     var replaceImageTarget by remember { mutableStateOf<String?>(null) }
     var imageBusy by remember { mutableStateOf(false) }
     var pendingFlashcard by remember { mutableStateOf<List<NoteDocBlock>?>(null) }
+    var pendingFlashcardSource by remember { mutableStateOf<String?>(null) }
     var flashcardSaving by remember { mutableStateOf(false) }
     var flashcardError by remember { mutableStateOf<String?>(null) }
     var documentSelectionMode by remember { mutableStateOf(false) }
     var arrangeMode by remember { mutableStateOf(false) }
     var headingFoldRequest by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     var selectedBlockIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(documentSelectionMode, selectedBlockIds) {
+        vm.setBlockSelection(if (documentSelectionMode) selectedBlockIds else emptySet())
+    }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val replacing = replaceImageTarget
         replaceImageTarget = null
@@ -255,7 +259,12 @@ fun NotesRoute(
                 } else vm.selectedFlashcardContent()?.let(::listOf)
                 if (selected == null) vm.openDialog(NoteDialog.Message(
                     if (documentSelectionMode) "Select blocks first." else "Select note text first."))
-                else { pendingFlashcard = selected; flashcardError = null }
+                else {
+                    pendingFlashcard = selected; flashcardError = null
+                    pendingFlashcardSource = if (documentSelectionMode)
+                        state.blocks.firstOrNull { it.id in selectedBlockIds }?.id
+                    else state.focusedBlockId
+                }
             }
             NoteTool.HEADING_FOLD -> headingFoldRequest++
             NoteTool.TOGGLE -> if (documentSelectionMode && state.blocks.any { it.id in selectedBlockIds }) {
@@ -694,7 +703,7 @@ fun NotesRoute(
     pendingFlashcard?.let { content ->
         FlashcardCreateDialog(content, flashcardSaving, flashcardError,
             onDismiss = { pendingFlashcard = null; flashcardError = null },
-            onSave = { front, back, difficulty, days ->
+            onSave = { front, back, difficulty, days, frontCardStyle ->
                 if (!flashcardSaving) scope.launch {
                     flashcardSaving = true
                     runCatching {
@@ -704,7 +713,9 @@ fun NotesRoute(
                             state.title.ifBlank { title }, flashcardSummaryBlock(back), prompt,
                             difficulty, days,
                             frontContent = question.takeIf { it.text.trim() == prompt },
-                            frontBlocks = front, backBlocks = back)
+                            frontBlocks = front, backBlocks = back,
+                            sourceBlockId = pendingFlashcardSource?.takeIf { it.length <= 256 },
+                            frontCardStyle = frontCardStyle)
                     }
                         .onSuccess {
                             pendingFlashcard = null; flashcardError = null

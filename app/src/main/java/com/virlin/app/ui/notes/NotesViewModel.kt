@@ -115,6 +115,8 @@ data class NotesUiState(
     val selectedImageId: String? = null,
     /** The video block whose player is open; one plays at a time. Never stored. */
     val playingVideoId: String? = null,
+    /** Blocks picked in multi-select; while any are picked, formatting tools act on all of them. Never stored. */
+    val blockSelection: Set<String> = emptySet(),
 ) {
     val focusedBlock: NoteDocBlock? get() = blocks.firstOrNull { it.id == focusedBlockId }
 
@@ -934,6 +936,144 @@ class NotesViewModel(
 
     private fun caseEditable(block: NoteDocBlock) = block.type.isTextual && block.type != NoteDocBlockType.CODE
 
+    // ---------------------------------------------------------------- multi-select formatting
+
+    /** The route's multi-select. While it holds blocks, formatting tools act on all of them. */
+    fun setBlockSelection(ids: Set<String>) {
+        val s = _state.value
+        if (s.blockSelection != ids) ui = s.copy(blockSelection = ids)
+    }
+
+    private fun NotesUiState.picked(): List<NoteDocBlock> =
+        if (blockSelection.isEmpty()) emptyList() else blocks.filter { it.id in blockSelection }
+
+    /** Font, size, marks and colours go on whole blocks of real text; code keeps its own look. */
+    private fun inlineStyleable(block: NoteDocBlock) =
+        block.type.isTextual && block.type != NoteDocBlockType.CODE && block.text.isNotEmpty()
+
+    /** Lines that can switch between plain text, headings, lists and quotes without moving anything. */
+    private fun shapeChangeable(block: NoteDocBlock) = !block.toggleHeading && block.type in MultiShapeTypes
+
+    /**
+     * Rewrites every picked block [transform] changes, as one undo step. With [checkShape] the
+     * result is first proved storable in the rich document; otherwise nothing changes and
+     * [refusal] is shown.
+     */
+    private fun mutatePicked(coalesceWith: String? = null, checkShape: Boolean = false,
+        refusal: String = "These blocks can't take that style here. Nothing was changed.",
+        transform: (NoteDocBlock) -> NoteDocBlock?): Boolean {
+        val s = _state.value
+        if (s.pasting || s.loading || s.damaged) return false
+        val next = s.blocks.map { b -> if (b.id in s.blockSelection) transform(b) ?: b else b }
+        if (next == s.blocks) return false
+        if (checkShape && !richDocumentAccepts(next)) {
+            ui = s.copy(dialog = NoteDialog.Message(refusal))
+            return false
+        }
+        pushUndo(coalesceWith)
+        ui = s.copy(blocks = next, save = NoteSaveState.EDITED)
+        scheduleSave()
+        return true
+    }
+
+    private fun togglePickedMark(mark: NoteDocMark) {
+        val text = _state.value.picked().filter(::inlineStyleable)
+        if (text.isEmpty()) return
+        val add = text.any { !NoteRuns.rangeHasMark(it.runs, 0, it.text.length, mark) }
+        mutatePicked {
+            if (!inlineStyleable(it)) null
+            else it.copy(runs = NoteRuns.applyMark(it.runs, it.text.length, 0, it.text.length, mark, add))
+        }
+    }
+
+    /**
+     * Gives every picked line [type], or returns them all to Normal text when they all have it
+     * already. Lines that can't change shape (code, prompts, toggles, tables, media) are left alone.
+     */
+    private fun setPickedType(type: NoteDocBlockType): Boolean {
+        val s = _state.value
+        val lines = s.picked().filter(::shapeChangeable)
+        if (lines.isEmpty() || type !in MultiShapeTypes) {
+            ui = s.copy(dialog = NoteDialog.Message(
+                if (type in MultiShapeTypes) "None of the selected blocks can take that style."
+                else "Pick one block at a time for that style."))
+            return false
+        }
+        return setPickedTo(if (lines.all { it.type == type }) NoteDocBlockType.PARAGRAPH else type) { true }
+    }
+
+    /** Makes the picked changeable lines that pass [which] into [next], as one undo step. */
+    private fun setPickedTo(next: NoteDocBlockType, which: (NoteDocBlock) -> Boolean): Boolean {
+        val s = _state.value
+        val first = s.picked().firstOrNull { shapeChangeable(it) && which(it) } ?: return false
+        // Lines joining a neighbouring list take that list's style, so the list stays one list.
+        val inherited = neighbourListStyle(s.blocks, s.blocks.indexOf(first), next)
+        return mutatePicked(checkShape = true,
+            refusal = "These blocks can't change to that style here (part of them sits inside a nested part of this note). Nothing was changed.") {
+            if (!shapeChangeable(it) || !which(it)) null
+            else it.copy(type = next, checked = if (next == NoteDocBlockType.CHECKLIST) it.checked else false,
+                listStyle = inherited)
+        }
+    }
+
+    /** The toolbar for a multi-select: what every picked block shares is shown as active. */
+    private fun pickedToolState(s: NotesUiState, picked: List<NoteDocBlock>): NoteToolState {
+        val text = picked.filter(::inlineStyleable)
+        val lines = picked.filter(::shapeChangeable)
+        val textual = picked.filter { it.type.isTextual }
+        fun all(mark: NoteDocMark) = text.isNotEmpty() && text.all { NoteRuns.rangeHasMark(it.runs, 0, it.text.length, mark) }
+        val first = text.firstOrNull()
+        val run = first?.let { NoteRuns.styleAt(it.runs, 0) }
+        val sharedType = lines.map { it.type }.distinct().singleOrNull()
+        val active = buildSet {
+            if (all(NoteDocMark.BOLD)) add(NoteTool.BOLD)
+            if (all(NoteDocMark.ITALIC)) add(NoteTool.ITALIC)
+            if (all(NoteDocMark.UNDERLINE)) add(NoteTool.UNDERLINE)
+            if (all(NoteDocMark.STRIKE)) add(NoteTool.STRIKE)
+            when (textual.map { it.align }.distinct().singleOrNull()) {
+                NoteDocAlign.CENTER -> add(NoteTool.ALIGN_CENTER)
+                NoteDocAlign.RIGHT -> add(NoteTool.ALIGN_RIGHT)
+                NoteDocAlign.LEFT -> add(NoteTool.ALIGN_LEFT)
+                null -> Unit
+            }
+            when (sharedType) {
+                NoteDocBlockType.BULLET -> add(NoteTool.BULLETS)
+                NoteDocBlockType.NUMBERED -> add(NoteTool.NUMBERING)
+                NoteDocBlockType.CHECKLIST -> add(NoteTool.CHECKLIST)
+                NoteDocBlockType.QUOTE -> add(NoteTool.QUOTE)
+                else -> Unit
+            }
+        }
+        val enabled = buildSet {
+            if (s.canUndo) add(NoteTool.UNDO)
+            if (s.canRedo) add(NoteTool.REDO)
+            // The route wraps the picked blocks in a toggle.
+            addAll(listOf(NoteTool.TOGGLE, NoteTool.HEADING_FOLD, NoteTool.RENAME, NoteTool.PRINT,
+                NoteTool.EXPORT, NoteTool.WORD_COUNT))
+            if (canDuplicate) add(NoteTool.DUPLICATE)
+            if (lines.isNotEmpty()) addAll(listOf(NoteTool.PARAGRAPH, NoteTool.BULLETS, NoteTool.NUMBERING,
+                NoteTool.CHECKLIST, NoteTool.QUOTE))
+            if (textual.isNotEmpty()) addAll(listOf(NoteTool.ALIGN_LEFT, NoteTool.ALIGN_CENTER,
+                NoteTool.ALIGN_RIGHT, NoteTool.LINE_SPACING))
+            if (text.isNotEmpty()) addAll(listOf(NoteTool.BOLD, NoteTool.ITALIC, NoteTool.UNDERLINE,
+                NoteTool.STRIKE, NoteTool.FONT, NoteTool.SIZE, NoteTool.TEXT_COLOR, NoteTool.HIGHLIGHT))
+        }
+        val spacing = textual.map { it.lineSpacing }.distinct().singleOrNull() ?: 1f
+        return NoteToolState(
+            paragraphLabel = when {
+                lines.isEmpty() -> "Normal text"
+                sharedType == null -> "Mixed styles"
+                else -> paragraphLabelFor(lines.first())
+            },
+            fontLabel = text.map { NoteRuns.styleAt(it.runs, 0)?.fontFamily }.distinct().singleOrNull() ?: run?.fontFamily ?: "Inter",
+            sizeLabel = (run?.fontSizeSp ?: defaultSizeFor(first?.type)).toString(),
+            spacingLabel = SPACINGS.firstOrNull { it.first == spacing }?.second
+                ?: "%.2f".format(java.util.Locale.US, spacing).trimEnd('0').trimEnd('.'),
+            active = active,
+            enabled = enabled,
+        )
+    }
+
     private fun applyTextCase(targets: List<Pair<Int, IntRange>>): Boolean {
         val s = _state.value
         val segments = targets.map { (i, r) -> NoteTextCases.Segment(s.blocks[i].text, r.first, r.last + 1) }
@@ -1097,6 +1237,7 @@ class NotesViewModel(
      */
     private fun toggleMark(mark: NoteDocMark) {
         val s = _state.value
+        if (s.blockSelection.isNotEmpty()) { togglePickedMark(mark); return }
         val block = s.styleBlock() ?: return
         if (!block.type.isTextual) return
         if (s.selection.collapsed) {
@@ -1147,13 +1288,25 @@ class NotesViewModel(
 
     private fun currentRun(): NoteDocRun? {
         val s = _state.value
+        if (s.blockSelection.isNotEmpty())
+            return s.picked().firstOrNull(::inlineStyleable)?.let { NoteRuns.styleAt(it.runs, 0) }
         val block = s.styleBlock() ?: return null
         return NoteRuns.styleAt(block.runs, s.selection.start)
     }
 
-    /** Applies a scalar attribute to the selection, or to the whole block when nothing is selected. */
+    /**
+     * Applies a scalar attribute to the selection, or to the whole block when nothing is selected;
+     * in multi-select, to the whole text of every picked block.
+     */
     private fun applyAttribute(coalesceWith: String? = null, transform: (NoteDocRun) -> NoteDocRun) {
         val s = _state.value
+        if (s.blockSelection.isNotEmpty()) {
+            mutatePicked(coalesceWith) {
+                if (!inlineStyleable(it)) null
+                else it.copy(runs = NoteRuns.applyAttribute(it.runs, it.text.length, 0, it.text.length, transform))
+            }
+            return
+        }
         val block = s.styleBlock() ?: return
         if (!block.type.isTextual || block.text.isEmpty()) return
         pushUndo(coalesceWith)
@@ -1189,6 +1342,17 @@ class NotesViewModel(
 
     /** Toolbar stepper: one step up or down from the current size. A run of steps is one undo step. */
     fun stepFontSize(delta: Int) {
+        // In multi-select each piece of text moves from its own size, so headings stay larger.
+        pickedKey()?.let { key ->
+            mutatePicked(coalesceWith = "size:$key") { b ->
+                if (!inlineStyleable(b)) return@mutatePicked null
+                val base = defaultSizeFor(b.type)
+                b.copy(runs = NoteRuns.applyAttribute(b.runs, b.text.length, 0, b.text.length) { r ->
+                    r.copy(fontSizeSp = ((r.fontSizeSp ?: base) + delta).coerceIn(NOTE_MIN_TEXT_SIZE, NOTE_MAX_TEXT_SIZE))
+                })
+            }
+            return
+        }
         val current = toolState().sizeLabel.toIntOrNull() ?: return
         applyFontSize(current + delta)
     }
@@ -1197,7 +1361,7 @@ class NotesViewModel(
     fun applyFontSize(sp: Int, target: StyleTarget? = null) {
         if (target != null) restoreStyleTarget(target)
         val size = sp.coerceIn(NOTE_MIN_TEXT_SIZE, NOTE_MAX_TEXT_SIZE)
-        val blockId = _state.value.focusedBlockId ?: return
+        val blockId = pickedKey() ?: _state.value.focusedBlockId ?: return
         applyAttribute(coalesceWith = "size:$blockId") { it.copy(fontSizeSp = size) }
     }
 
@@ -1212,7 +1376,7 @@ class NotesViewModel(
      */
     fun pickColor(argb: Long?, highlight: Boolean, target: StyleTarget? = null) {
         if (target != null) restoreStyleTarget(target)
-        val blockId = _state.value.focusedBlockId ?: return
+        val blockId = pickedKey() ?: _state.value.focusedBlockId ?: return
         applyAttribute(coalesceWith = (if (highlight) "highlight:" else "color:") + blockId) {
             if (highlight) it.copy(highlight = argb) else it.copy(color = argb)
         }
@@ -1244,13 +1408,26 @@ class NotesViewModel(
         closeDialog()
     }
 
+    /** Undo-coalescing key for a run of edits on the current multi-select, or null outside one. */
+    private fun pickedKey(): String? = _state.value.blockSelection.takeIf { it.isNotEmpty() }
+        ?.let { "picked:${it.sorted().hashCode()}" }
+
     private fun setAlign(align: NoteDocAlign) {
+        if (_state.value.blockSelection.isNotEmpty()) {
+            mutatePicked { if (it.type.isTextual) it.copy(align = align) else null }
+            return
+        }
         val id = _state.value.focusedBlockId ?: return
         pushUndo()
         mutateBlock(id) { it.copy(align = align) }
     }
 
     fun setLineSpacing(multiplier: Float, keepOpen: Boolean = false) {
+        if (_state.value.blockSelection.isNotEmpty()) {
+            mutatePicked { if (it.type.isTextual) it.copy(lineSpacing = multiplier) else null }
+            if (!keepOpen) closeDialog()
+            return
+        }
         val id = _state.value.focusedBlockId ?: return
         pushUndo()
         mutateBlock(id) { it.copy(lineSpacing = multiplier) }
@@ -1266,6 +1443,7 @@ class NotesViewModel(
     /** False, with a message shown, when the note could not store the new style. */
     private fun toggleBlockType(type: NoteDocBlockType): Boolean {
         val s = _state.value
+        if (s.blockSelection.isNotEmpty()) return setPickedType(type)
         val block = s.focusedBlock ?: run {
             insertBlock(type)
             return true
@@ -1305,6 +1483,12 @@ class NotesViewModel(
             closeDialog()
             return
         }
+        if (s.blockSelection.isNotEmpty()) {
+            val lines = s.picked().filter(::shapeChangeable)
+            if (lines.any { it.type != type } && !setPickedType(type)) return
+            openDialog(NoteDialog.ListStyle(type))
+            return
+        }
         if (s.focusedBlock?.type != type && !toggleBlockType(type)) return
         openDialog(NoteDialog.ListStyle(type))
     }
@@ -1318,6 +1502,23 @@ class NotesViewModel(
         val s = _state.value
         if (s.pasting || s.loading || s.damaged) return false
         if (type != NoteDocBlockType.BULLET && type != NoteDocBlockType.NUMBERED) return false
+        if (s.blockSelection.isNotEmpty()) {
+            // Every list a picked line of this kind belongs to takes the style.
+            val stored = NoteListStyles.storedKey(type, key)
+            val group = s.blocks.indices.filter { s.blocks[it].id in s.blockSelection && s.blocks[it].type == type }
+                .flatMap { NoteListStyles.listGroup(s.blocks, it) }.toSet()
+            if (group.isEmpty()) return false
+            val next = s.blocks.mapIndexed { i, b -> if (i in group) b.copy(listStyle = stored) else b }
+            if (next == s.blocks) return true
+            if (!richDocumentAccepts(next)) {
+                ui = s.copy(dialog = NoteDialog.Message("This list can't change style here. Nothing was changed."))
+                return false
+            }
+            pushUndo()
+            ui = s.copy(blocks = next, save = NoteSaveState.EDITED)
+            scheduleSave()
+            return true
+        }
         val index = s.blocks.indexOfFirst { it.id == s.focusedBlockId }
         if (index < 0) return false
         val block = s.blocks[index]
@@ -1341,6 +1542,14 @@ class NotesViewModel(
 
     /** The strip's "None": the focused list line goes back to Normal text. */
     fun removeListFromFocused() {
+        val s = _state.value
+        if (s.blockSelection.isNotEmpty()) {
+            val type = (s.dialog as? NoteDialog.ListStyle)?.type
+            val lists = s.picked().filter { shapeChangeable(it) && it.type == type }
+            if (lists.isNotEmpty() && !setPickedTo(NoteDocBlockType.PARAGRAPH) { it.type == type }) return
+            closeDialog()
+            return
+        }
         val block = _state.value.focusedBlock ?: return
         if ((block.type == NoteDocBlockType.BULLET || block.type == NoteDocBlockType.NUMBERED) &&
             !toggleBlockType(block.type)) return
@@ -1354,6 +1563,11 @@ class NotesViewModel(
      * under it and only removes the collapsing.
      */
     fun setParagraphStyle(type: NoteDocBlockType, toggle: Boolean, keepOpen: Boolean = false) {
+        if (_state.value.blockSelection.isNotEmpty()) {
+            if (toggle) openDialog(NoteDialog.Message("Toggles are made from one block at a time."))
+            else if (setPickedType(type) && !keepOpen) closeDialog()
+            return
+        }
         val targetType = if (toggle && type == NoteDocBlockType.PARAGRAPH) NoteDocBlockType.TOGGLE else type
         val targetToggleHeading = toggle && targetType.headingLevel > 0
         val block = _state.value.focusedBlock
@@ -2012,6 +2226,7 @@ class NotesViewModel(
     /** What the frozen toolbar shows. Derived from the document, never stored separately. */
     fun toolState(): NoteToolState {
         val s = _state.value
+        s.picked().takeIf { it.isNotEmpty() }?.let { return pickedToolState(s, it) }
         if (s.activeCell != null) return cellToolState(s)
         val block = s.focusedBlock
         val textual = block?.type?.isTextual == true
@@ -2091,19 +2306,7 @@ class NotesViewModel(
             }
         }
         return NoteToolState(
-            paragraphLabel = if (block?.toggleHeading == true && block.type.headingLevel > 0)
-                "Toggle heading ${block.type.headingLevel}" else when (block?.type) {
-                NoteDocBlockType.HEADING_1 -> "Heading 1"
-                NoteDocBlockType.HEADING_2 -> "Heading 2"
-                NoteDocBlockType.HEADING_3 -> "Heading 3"
-                NoteDocBlockType.HEADING_4 -> "Heading 4"
-                NoteDocBlockType.HEADING_5 -> "Heading 5"
-                NoteDocBlockType.CODE -> "Code"
-                NoteDocBlockType.QUOTE -> "Quote"
-                NoteDocBlockType.PROMPT -> "Prompt"
-                NoteDocBlockType.TOGGLE -> "Toggle"
-                else -> "Normal text"
-            },
+            paragraphLabel = paragraphLabelFor(block),
             fontLabel = run?.fontFamily ?: "Inter",
             sizeLabel = (run?.fontSizeSp ?: defaultSizeFor(block?.type)).toString(),
             spacingLabel = (block?.lineSpacing ?: 1f).let { spacing ->
@@ -2113,6 +2316,21 @@ class NotesViewModel(
             enabled = enabled,
         )
     }
+
+    private fun paragraphLabelFor(block: NoteDocBlock?): String =
+        if (block?.toggleHeading == true && block.type.headingLevel > 0)
+            "Toggle heading ${block.type.headingLevel}" else when (block?.type) {
+            NoteDocBlockType.HEADING_1 -> "Heading 1"
+            NoteDocBlockType.HEADING_2 -> "Heading 2"
+            NoteDocBlockType.HEADING_3 -> "Heading 3"
+            NoteDocBlockType.HEADING_4 -> "Heading 4"
+            NoteDocBlockType.HEADING_5 -> "Heading 5"
+            NoteDocBlockType.CODE -> "Code"
+            NoteDocBlockType.QUOTE -> "Quote"
+            NoteDocBlockType.PROMPT -> "Prompt"
+            NoteDocBlockType.TOGGLE -> "Toggle"
+            else -> "Normal text"
+        }
 
     /** The toolbar while a table cell holds the caret: text styles for the cell, line tools off. */
     private fun cellToolState(s: NotesUiState): NoteToolState {
@@ -2186,6 +2404,13 @@ class NotesViewModel(
         val FONTS = listOf("Inter", "Serif", "Mono")
         val SIZES = listOf(12, 14, 16, 18, 20, 24, 28, 32)
         val SPACINGS = listOf(1f to "Single", 1.25f to "1.25", 1.5f to "1.5", 2f to "Double")
+
+        /** Line kinds a multi-select can switch between. */
+        private val MultiShapeTypes = setOf(
+            NoteDocBlockType.PARAGRAPH, NoteDocBlockType.HEADING_1, NoteDocBlockType.HEADING_2,
+            NoteDocBlockType.HEADING_3, NoteDocBlockType.HEADING_4, NoteDocBlockType.HEADING_5,
+            NoteDocBlockType.BULLET, NoteDocBlockType.NUMBERED, NoteDocBlockType.CHECKLIST, NoteDocBlockType.QUOTE,
+        )
 
         /** Text colours, and highlights, offered by the pickers. */
         val TEXT_COLORS = listOf<Pair<Long?, String>>(

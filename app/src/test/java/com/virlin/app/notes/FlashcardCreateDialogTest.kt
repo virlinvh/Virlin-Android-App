@@ -4,6 +4,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -16,7 +18,10 @@ import com.virlin.app.domain.notedoc.NoteDocBlockType
 import com.virlin.app.domain.notedoc.NoteDocMark
 import com.virlin.app.domain.notedoc.NoteDocRun
 import com.virlin.app.ui.notes.FlashcardCreateDialog
+import com.virlin.app.ui.notes.flashcardFrontFitsCardStyle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,7 +46,7 @@ class FlashcardCreateDialogTest {
         compose.setContent {
             MaterialTheme {
                 FlashcardCreateDialog(source, saving = false, error = null, onDismiss = {},
-                    onSave = { front, back, _, _ -> submitted = front to back })
+                    onSave = { front, back, _, _, _ -> submitted = front to back })
             }
         }
         compose.onNodeWithTag("flashcard_save").assertIsNotEnabled()
@@ -60,7 +65,7 @@ class FlashcardCreateDialogTest {
         compose.setContent {
             MaterialTheme {
                 FlashcardCreateDialog(source, saving = false, error = null, onDismiss = {},
-                    onSave = { front, back, difficulty, days ->
+                    onSave = { front, back, difficulty, days, _ ->
                         submitted = front to back
                         plan = difficulty to days
                     })
@@ -84,7 +89,7 @@ class FlashcardCreateDialogTest {
         compose.setContent {
             MaterialTheme {
                 FlashcardCreateDialog(source, saving = false, error = null,
-                    onDismiss = {}, onSave = { _, _, _, _ -> })
+                    onDismiss = {}, onSave = { _, _, _, _, _ -> })
             }
         }
         compose.onNodeWithTag("flashcard_to_front").performClick()
@@ -92,5 +97,36 @@ class FlashcardCreateDialogTest {
         compose.onNodeWithTag("flashcard_answer_remove").performScrollTo().performClick()
         compose.onNodeWithTag("flashcard_save").assertIsNotEnabled()
         assertEquals("Answer text", source[1].text)
+    }
+
+    @Test fun frontCardStyleStartsOnAndCanBeTurnedOff() {
+        val saved = mutableListOf<Boolean>()
+        compose.setContent {
+            MaterialTheme {
+                FlashcardCreateDialog(source, saving = false, error = null, onDismiss = {},
+                    onSave = { _, _, _, _, cardStyle -> saved += cardStyle })
+            }
+        }
+        compose.onNodeWithTag("flashcard_source").performTextInputSelection(TextRange(0, 7))
+        compose.onNodeWithTag("flashcard_to_front").performClick()
+        compose.onNodeWithTag("flashcard_front_style").performScrollTo().assertIsOn()
+        compose.onNodeWithTag("flashcard_save").performClick()
+        compose.onNodeWithTag("flashcard_front_style").performScrollTo().performClick().assertIsOff()
+        compose.onNodeWithTag("flashcard_save").performClick()
+        assertEquals(listOf(true, false), saved)
+    }
+
+    @Test fun frontWithCodeKeepsItsFormattingAndRestsTheCardStyle() {
+        val code = listOf(NoteDocBlock("c", NoteDocBlockType.CODE, "val x = 1"))
+        compose.setContent {
+            MaterialTheme {
+                FlashcardCreateDialog(code, saving = false, error = null, onDismiss = {},
+                    onSave = { _, _, _, _, _ -> })
+            }
+        }
+        compose.onNodeWithTag("flashcard_to_front").performClick()
+        compose.onNodeWithTag("flashcard_front_style").performScrollTo().assertIsNotEnabled()
+        assertTrue(flashcardFrontFitsCardStyle(source))
+        assertFalse(flashcardFrontFitsCardStyle(code))
     }
 }

@@ -6,6 +6,9 @@ import com.virlin.app.ui.notes.FlashcardGroup
 import com.virlin.app.ui.notes.FlashcardSort
 import com.virlin.app.ui.notes.groupedFlashcards
 import com.virlin.app.ui.notes.flashcardColor
+import com.virlin.app.ui.notes.flashcardEditStart
+import com.virlin.app.ui.notes.flashcardSourceBlockId
+import com.virlin.app.domain.notedoc.NoteDocBlockType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,6 +18,41 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class FlashcardStudyGroupingTest {
+    @Test fun sourceNoteOpensAtTheCardsOwnBlock() {
+        val blocks = listOf(
+            NoteDocBlock("intro", text = "Introduction"),
+            NoteDocBlock("toggle", NoteDocBlockType.TOGGLE, "Details", isCollapsed = true),
+            NoteDocBlock("inside", text = "Mitochondria make energy", indent = 1),
+            NoteDocBlock("later", text = "Ribosomes build proteins"),
+        )
+        val base = SavedFlashcard("c", "task-a", "Notes", NoteDocBlock("a", text = "Ribosomes build proteins"), 0L, 0)
+        assertEquals("intro", flashcardSourceBlockId(base.copy(sourceBlockId = "intro"), blocks))
+        // Older cards without a recorded block are found by their text.
+        assertEquals("later", flashcardSourceBlockId(base, blocks))
+        // A block folded inside a collapsed toggle opens at the toggle.
+        assertEquals("toggle", flashcardSourceBlockId(base.copy(
+            content = NoteDocBlock("a", text = "Mitochondria make energy")), blocks))
+        // A line edited after its opening still finds its block.
+        assertEquals("later", flashcardSourceBlockId(base.copy(
+            content = NoteDocBlock("a", text = "Ribosomes build proteins in every cell")), blocks))
+        // A recorded block that was deleted falls back to the text.
+        assertEquals("later", flashcardSourceBlockId(base.copy(sourceBlockId = "gone"), blocks))
+        assertEquals(null, flashcardSourceBlockId(base.copy(content = NoteDocBlock("a", text = "Nothing here")), blocks))
+    }
+
+    @Test fun editStartKeepsRichFacesAndTurnsOlderCardsIntoBlocks() {
+        val legacy = SavedFlashcard("c", "task-a", "Notes", NoteDocBlock("a", text = "Answer"), 0L, 0,
+            recallPrompt = "Question?", difficulty = "HARD")
+        val start = flashcardEditStart(legacy)
+        assertEquals(listOf("Question?"), start.front.map { it.text })
+        assertEquals(listOf("Answer"), start.back.map { it.text })
+        assertEquals("HARD", start.difficulty)
+        val rich = legacy.copy(frontBlocks = listOf(NoteDocBlock("f", NoteDocBlockType.HEADING_2, "Q")),
+            backBlocks = listOf(NoteDocBlock("b", NoteDocBlockType.CODE, "x = 1")))
+        assertEquals(rich.frontBlocks, flashcardEditStart(rich).front)
+        assertEquals(rich.backBlocks, flashcardEditStart(rich).back)
+    }
+
     @Test fun newDueAndFutureAreDistinct() {
         val now = 1_800_000_000_000L
         val base = SavedFlashcard("new", "task-a", "Notes",
