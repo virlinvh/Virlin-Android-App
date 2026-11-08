@@ -67,6 +67,26 @@ class MasterDocumentItemUiTest {
         compose.runOnIdle { assertTrue(opened) }
     }
 
+    @Test fun headerOpenButtonOpensTheNoteWithoutExpandingTheCard() {
+        var opened = 0
+        compose.setContent {
+            MasterDocumentItem(
+                MasterDocumentEntry("note-2", "Prompt Checking", "Note", "Body", "note-route",
+                    noteBlocks = listOf(NoteDocBlock("p", NoteDocBlockType.PARAGRAPH, "Inside"))),
+                ink = Color.Black,
+                accent = Color(0xFF6033B1),
+                onOpen = { opened++ },
+            )
+        }
+        compose.onNodeWithTag("map_page_open_top_note-2").assertHasClickAction().performClick()
+        compose.runOnIdle { assertEquals(1, opened) }
+        compose.onNodeWithTag("map_page_note_preview_note-2").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Open Note Prompt Checking").assertExists()
+        compose.onNodeWithTag("map_page_item_note-2").performClick()
+        compose.onNodeWithTag("map_page_open_top_note-2").performClick()
+        compose.runOnIdle { assertEquals(2, opened) }
+    }
+
     @Test fun noteCardsAreTitledWithTheNotesOwnName() {
         assertEquals("Launch plan", noteCardTitle(VirlinNoteDoc("task:x", title = "  Launch \n plan ")))
         assertEquals("Notes", noteCardTitle(VirlinNoteDoc("task:x", title = "   ")))

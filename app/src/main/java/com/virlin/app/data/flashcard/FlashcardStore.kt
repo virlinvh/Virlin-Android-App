@@ -31,12 +31,23 @@ data class SavedFlashcard(
     val isStarred: Boolean = false,
     /** Optional rich front face; legacy cards continue to use recallPrompt. */
     val frontContent: NoteDocBlock? = null,
+    /**
+     * The exact note blocks on each face (headings, code, prompts, media, every run's font and
+     * colour). Null on cards made before rich sides existed; [content] and [recallPrompt] remain
+     * the plain summaries every card has.
+     */
+    val frontBlocks: List<NoteDocBlock>? = null,
+    val backBlocks: List<NoteDocBlock>? = null,
+    /** Kept but out of every study queue until restored. */
+    val isArchived: Boolean = false,
 )
 
 enum class FlashcardRating { AGAIN, HARD, GOOD, EASY }
 
 /** Independent, atomic card collection. Saving a card never edits its source note. */
 object FlashcardStore {
+    /** Most blocks one face may hold; a card is a passage, not a whole note. */
+    const val MAX_SIDE_BLOCKS = 200
     private val mutex = Mutex()
     private fun file(context: Context) = AtomicFile(File(context.filesDir, "flashcards-v1.json"))
 
@@ -44,27 +55,35 @@ object FlashcardStore {
         withContext(Dispatchers.IO) { read(context).filter { it.ownerKey == ownerKey }.sortedByDescending { it.createdAt } }
     }
 
+    /** Cards of [ownerKeys], including those of each owner's own notes (`task-1#note-…` under `task-1`). */
     suspend fun list(context: Context, ownerKeys: Set<String>): List<SavedFlashcard> = mutex.withLock {
-        withContext(Dispatchers.IO) { read(context).filter { it.ownerKey in ownerKeys }.sortedByDescending { it.createdAt } }
+        withContext(Dispatchers.IO) {
+            read(context).filter { it.ownerKey in ownerKeys || it.ownerKey.substringBefore('#') in ownerKeys }
+                .sortedByDescending { it.createdAt }
+        }
     }
 
     suspend fun add(context: Context, ownerKey: String, noteTitle: String,
                     content: NoteDocBlock, recallPrompt: String = "",
                     difficulty: String = "NORMAL", intervalDays: Int = 1,
-                    frontContent: NoteDocBlock? = null): SavedFlashcard = mutex.withLock {
+                    frontContent: NoteDocBlock? = null,
+                    frontBlocks: List<NoteDocBlock>? = null,
+                    backBlocks: List<NoteDocBlock>? = null): SavedFlashcard = mutex.withLock {
         require(ownerKey.isNotBlank() && ownerKey.length <= 256)
         require(content.text.isNotBlank() && content.text.length <= 20_000)
         require(recallPrompt.length <= 300)
         require(difficulty in setOf("EASY", "NORMAL", "HARD"))
         require(intervalDays in 1..365)
         require(frontContent == null || frontContent.text.trim() == recallPrompt.trim())
+        require(frontBlocks == null || frontBlocks.size in 1..MAX_SIDE_BLOCKS)
+        require(backBlocks == null || backBlocks.size in 1..MAX_SIDE_BLOCKS)
         withContext(Dispatchers.IO) {
             val existing = read(context)
             val now = System.currentTimeMillis()
             val card = SavedFlashcard(UUID.randomUUID().toString(), ownerKey, noteTitle.take(200),
                 content, now, (existing.maxOfOrNull { it.colorIndex } ?: -1) + 1,
                 recallPrompt.trim(), difficulty, intervalDays, now + intervalDays * 86_400_000L,
-                frontContent = frontContent)
+                frontContent = frontContent, frontBlocks = frontBlocks, backBlocks = backBlocks)
             write(context, existing + card)
             card
         }
@@ -97,6 +116,19 @@ object FlashcardStore {
         }
     }
 
+    /** Cards follow their note when it moves to a new owner key; nothing else on them changes. */
+    suspend fun rekey(context: Context, fromOwnerKey: String, toOwnerKey: String): Int = mutex.withLock {
+        require(toOwnerKey.isNotBlank() && toOwnerKey.length <= 256)
+        withContext(Dispatchers.IO) {
+            val existing = read(context)
+            val moved = existing.count { it.ownerKey == fromOwnerKey }
+            if (moved > 0) write(context, existing.map {
+                if (it.ownerKey == fromOwnerKey) it.copy(ownerKey = toOwnerKey) else it
+            })
+            moved
+        }
+    }
+
     suspend fun setStarred(context: Context, cardId: String, starred: Boolean): SavedFlashcard =
         mutex.withLock {
             withContext(Dispatchers.IO) {
@@ -104,6 +136,18 @@ object FlashcardStore {
                 val card = existing.firstOrNull { it.id == cardId }
                     ?: error("Flashcard no longer exists")
                 val updated = card.copy(isStarred = starred)
+                write(context, existing.map { if (it.id == cardId) updated else it })
+                updated
+            }
+        }
+
+    suspend fun setArchived(context: Context, cardId: String, archived: Boolean): SavedFlashcard =
+        mutex.withLock {
+            withContext(Dispatchers.IO) {
+                val existing = read(context)
+                val card = existing.firstOrNull { it.id == cardId }
+                    ?: error("Flashcard no longer exists")
+                val updated = card.copy(isArchived = archived)
                 write(context, existing.map { if (it.id == cardId) updated else it })
                 updated
             }
@@ -127,9 +171,17 @@ object FlashcardStore {
                 row.optLong("lastReviewedAt", 0L).takeIf { it > 0L },
                 row.optBoolean("isStarred", false),
                 row.optString("frontContent").takeIf { it.isNotBlank() }
-                    ?.let { VirlinNoteCodec.decode(it).singleOrNull() })
+                    ?.let { VirlinNoteCodec.decode(it).singleOrNull() },
+                row.richSide("frontBlocks"), row.richSide("backBlocks"),
+                isArchived = row.optBoolean("isArchived", false))
         }
     }
+
+    // A face that fails to decode falls back to the card's plain summary instead of hiding the card.
+    private fun JSONObject.richSide(field: String): List<NoteDocBlock>? =
+        optString(field).takeIf { it.isNotBlank() }
+            ?.let { runCatching { VirlinNoteCodec.decode(it) }.getOrNull() }
+            ?.takeIf { it.isNotEmpty() }
 
     private fun write(context: Context, cards: List<SavedFlashcard>) {
         val root = JSONObject().put("v", 1).put("cards", JSONArray().also { rows ->
@@ -142,10 +194,15 @@ object FlashcardStore {
                 .put("reviewCount", card.reviewCount)
                 .put("lastReviewedAt", card.lastReviewedAt ?: 0L)
                 .put("isStarred", card.isStarred)
+                .put("isArchived", card.isArchived)
                 .put("content", VirlinNoteCodec.encode(listOf(card.content)))
                 .also { json -> card.frontContent?.let {
                     json.put("frontContent", VirlinNoteCodec.encode(listOf(it)))
-                } }) }
+                } }
+                .also { json ->
+                    card.frontBlocks?.let { json.put("frontBlocks", VirlinNoteCodec.encode(it)) }
+                    card.backBlocks?.let { json.put("backBlocks", VirlinNoteCodec.encode(it)) }
+                }) }
         })
         val atomic = file(context)
         val output = atomic.startWrite()

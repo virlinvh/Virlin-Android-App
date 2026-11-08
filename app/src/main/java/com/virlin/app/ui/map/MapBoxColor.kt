@@ -5,6 +5,9 @@ internal fun toggleBoxColor(appearance: MapAppearance, nodeId: String, color: Lo
     appearance.copy(nodeColors = if (appearance.nodeColors[nodeId] == color)
         appearance.nodeColors - nodeId else appearance.nodeColors + (nodeId to color))
 
+internal fun setBoxColor(appearance: MapAppearance, nodeId: String, color: Long): MapAppearance =
+    appearance.copy(nodeColors = appearance.nodeColors + (nodeId to color))
+
 internal fun clearBoxColor(appearance: MapAppearance, nodeId: String): MapAppearance =
     appearance.copy(nodeColors = appearance.nodeColors - nodeId)
 

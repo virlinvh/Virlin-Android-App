@@ -30,6 +30,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.FormatAlignJustify
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -65,7 +67,7 @@ class NoteFormattingStripState(
 )
 
 /**
- * The formatting strip under the rail: paper, layout, margins, page numbers and title in one
+ * The formatting strip under the rail: auto-fit, paper, layout, margins, page numbers and title in one
  * small row that scrolls sideways. Every choice reshapes the pages in the editor at once, and
  * printing and exporting follow the same pages.
  */
@@ -90,6 +92,7 @@ internal fun NoteFormattingStrip(state: NoteFormattingStripState, modifier: Modi
             }
             Spacer(Modifier.width(4.dp))
             NoteFeatheredRow(Modifier.weight(1f).height(56.dp), peek = true) {
+                AutoFitToggle(s.autoFit) { state.onChange(s.copy(autoFit = it)) }
                 NoteStripChoice("Paper", NotePaper.offered, s.paper, { it.label }, "notes_format") {
                     state.onChange(s.copy(paper = it))
                 }
@@ -119,6 +122,30 @@ internal fun NoteFormattingStrip(state: NoteFormattingStripState, modifier: Modi
         }
         Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(1.dp).background(NotesBorder))
     }
+}
+
+/** Auto-fit on or off: content flows continuously across the pages instead of keeping blocks whole. */
+@Composable
+private fun AutoFitToggle(on: Boolean, onChange: (Boolean) -> Unit) {
+    val shape = RoundedCornerShape(10.dp)
+    val fill by animateColorAsState(if (on) NotesAccent.copy(alpha = .12f) else Color.White, tween(160),
+        label = "autoFit")
+    val tint = if (on) NotesAccent else NotesInk
+    Row(
+        Modifier.height(34.dp).clip(shape).border(1.dp, if (on) NotesAccent.copy(alpha = .5f) else NotesBorder, shape)
+            .background(fill)
+            .toggleable(value = on, role = Role.Switch, onValueChange = onChange)
+            .semantics { contentDescription = "Auto-fit pages" }
+            .testTag("notes_format_auto_fit")
+            .padding(horizontal = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.FormatAlignJustify, contentDescription = null, tint = tint, modifier = Modifier.size(17.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Auto-fit", color = tint, fontSize = 13.sp,
+            fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
+    }
+    Spacer(Modifier.width(14.dp))
 }
 
 /**

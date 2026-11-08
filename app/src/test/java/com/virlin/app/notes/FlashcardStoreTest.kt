@@ -22,6 +22,21 @@ import org.robolectric.RobolectricTestRunner
 class FlashcardStoreTest {
     @get:Rule val folder = TemporaryFolder()
 
+    @Test fun cardsFollowTheirNoteToANewOwnerKey() = runBlocking {
+        val base = ApplicationProvider.getApplicationContext<Context>()
+        val storage = folder.newFolder("rekey")
+        val context = object : ContextWrapper(base) {
+            override fun getFilesDir(): File = storage
+        }
+        val content = NoteDocBlock("c", text = "Remember this")
+        val moved = FlashcardStore.add(context, "task-a#note-1", "Plan", content)
+        val other = FlashcardStore.add(context, "task-a", "Other", content)
+        assertEquals(1, FlashcardStore.rekey(context, "task-a#note-1", "task-b#note-2"))
+        assertEquals(listOf(moved.copy(ownerKey = "task-b#note-2")), FlashcardStore.list(context, "task-b#note-2"))
+        assertEquals(emptyList<Any>(), FlashcardStore.list(context, "task-a#note-1"))
+        assertEquals(listOf(other), FlashcardStore.list(context, "task-a"))
+    }
+
     @Test fun savesFormattedCardsAtomicallyAndFiltersByOwner() = runBlocking {
         val base = ApplicationProvider.getApplicationContext<Context>()
         val storage = folder.newFolder("cards")

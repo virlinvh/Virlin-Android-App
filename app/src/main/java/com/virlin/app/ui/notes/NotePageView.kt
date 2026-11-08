@@ -1,6 +1,33 @@
 package com.virlin.app.ui.notes
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -87,6 +114,74 @@ internal fun NotePageItem(
             }
         }
     }
+}
+
+/**
+ * The auto-fit pages exactly as they print, read only: each page is drawn by the print renderer,
+ * so a block split across pages shows here just as it comes out. [pages] is null while laid out.
+ */
+@Composable
+internal fun NoteFlowPages(
+    pages: List<NotePrintRenderer.Page>?,
+    settings: NotePrintSettings,
+    colors: NotePrintColors,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier.fillMaxSize().testTag("notes_flow_pages")) {
+        if (pages == null) {
+            CircularProgressIndicator(Modifier.align(Alignment.Center).size(22.dp), color = NotesAccent, strokeWidth = 2.dp)
+            return@BoxWithConstraints
+        }
+        val gutter = 10.dp
+        val widthPx = with(LocalDensity.current) { (maxWidth - gutter * 2).roundToPx() }.coerceAtLeast(1)
+        // A block split across pages shares one text layout, which must not be drawn on two threads at once.
+        val drawing = remember { Mutex() }
+        LazyColumn(Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = gutter, end = gutter, top = 14.dp, bottom = 84.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            itemsIndexed(pages) { index, page ->
+                FlowPage(page, index, pages.size, settings, colors, widthPx, drawing, onTap)
+            }
+        }
+    }
+}
+
+@Composable
+private fun FlowPage(
+    page: NotePrintRenderer.Page, index: Int, total: Int, settings: NotePrintSettings, colors: NotePrintColors,
+    widthPx: Int, drawing: Mutex, onTap: () -> Unit,
+) {
+    val bitmap by produceState<ImageBitmap?>(null, page, index, total, settings, widthPx) {
+        value = drawing.withLock {
+            withContext(Dispatchers.Default) {
+                runCatching { renderFlowPage(page, index, total, settings, colors, widthPx) }.getOrNull()
+            }
+        }
+    }
+    val corner = with(LocalDensity.current) { (3f * widthPx / settings.pageWidthPt).toDp() }
+    Box(
+        Modifier.fillMaxWidth().aspectRatio(settings.pageWidthPt / settings.pageHeightPt)
+            .clip(RoundedCornerShape(corner)).background(Color.White)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onTap)
+            .semantics { contentDescription = "Page ${index + 1} of $total" }
+            .testTag("notes_flow_page_${index + 1}"),
+    ) {
+        bitmap?.let { Image(it, contentDescription = null, modifier = Modifier.fillMaxSize()) }
+    }
+}
+
+private fun renderFlowPage(page: NotePrintRenderer.Page, index: Int, total: Int, settings: NotePrintSettings,
+                           colors: NotePrintColors, widthPx: Int): ImageBitmap {
+    val scale = widthPx / settings.pageWidthPt
+    val bitmap = Bitmap.createBitmap(widthPx, (settings.pageHeightPt * scale).roundToInt().coerceAtLeast(1),
+        Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    canvas.drawColor(android.graphics.Color.WHITE)
+    canvas.scale(scale, scale)
+    page.ops.forEach { it(canvas) }
+    NotePrintRenderer.drawPageNumber(canvas, index, total, settings, colors, settings.pageWidthPt, settings.pageHeightPt)
+    return bitmap.asImageBitmap()
 }
 
 @Composable

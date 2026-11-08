@@ -152,13 +152,13 @@ fun NotesRoute(
     // The image block a picker result replaces; null inserts a new image instead.
     var replaceImageTarget by remember { mutableStateOf<String?>(null) }
     var imageBusy by remember { mutableStateOf(false) }
-    var pendingFlashcard by remember { mutableStateOf<NoteDocBlock?>(null) }
+    var pendingFlashcard by remember { mutableStateOf<List<NoteDocBlock>?>(null) }
     var flashcardSaving by remember { mutableStateOf(false) }
     var flashcardError by remember { mutableStateOf<String?>(null) }
     var documentSelectionMode by remember { mutableStateOf(false) }
     var arrangeMode by remember { mutableStateOf(false) }
     var headingFoldRequest by remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    var documentSelection by remember { mutableStateOf(TextRange.Zero) }
+    var selectedBlockIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val replacing = replaceImageTarget
         replaceImageTarget = null
@@ -241,6 +241,7 @@ fun NotesRoute(
             }
             NoteTool.SELECT_DOCUMENT -> {
                 documentSelectionMode = !documentSelectionMode
+                selectedBlockIds = emptySet()
                 focusManager.clearFocus(); keyboard?.hide()
             }
             NoteTool.IMAGE -> if (state.selectedImage != null) vm.toggleImageTools() else chooseImage()
@@ -250,28 +251,29 @@ fun NotesRoute(
             }
             NoteTool.FLASHCARD -> {
                 val selected = if (documentSelectionMode) {
-                    val text = selectableNoteText(state.blocks).text
-                    val start = documentSelection.min.coerceIn(0, text.length)
-                    val end = documentSelection.max.coerceIn(start, text.length)
-                    flashcardSourceFromCopiedText(state.blocks, text.substring(start, end), start)
-                } else vm.selectedFlashcardContent()
-                if (selected == null) vm.openDialog(NoteDialog.Message("Select note text first."))
+                    flashcardBlocks(state.blocks.filter { it.id in selectedBlockIds }).takeIf { it.isNotEmpty() }
+                } else vm.selectedFlashcardContent()?.let(::listOf)
+                if (selected == null) vm.openDialog(NoteDialog.Message(
+                    if (documentSelectionMode) "Select blocks first." else "Select note text first."))
                 else { pendingFlashcard = selected; flashcardError = null }
             }
             NoteTool.HEADING_FOLD -> headingFoldRequest++
-            NoteTool.TOGGLE -> if (documentSelectionMode && !documentSelection.collapsed) {
-                if (vm.wrapDocumentRangeInToggle(documentSelection.min, documentSelection.max)) {
-                    documentSelection = TextRange.Zero
+            NoteTool.TOGGLE -> if (documentSelectionMode && state.blocks.any { it.id in selectedBlockIds }) {
+                val range = contiguousBlockRange(state.blocks, selectedBlockIds)
+                if (range == null) vm.openDialog(NoteDialog.Message(
+                    "Select blocks that sit next to each other to put them in a toggle."))
+                else if (vm.wrapInToggle(range)) {
+                    selectedBlockIds = emptySet()
                     documentSelectionMode = false
                 }
             } else vm.onTool(tool)
-            // The selection keeps its offsets (case changes never change length), so taps cycle.
+            // Ids survive a case change, so repeated taps cycle the same blocks.
             NoteTool.CHANGE_CASE -> if (documentSelectionMode) {
-                if (!documentSelection.collapsed) vm.cycleDocumentRangeCase(documentSelection.min, documentSelection.max)
+                vm.cycleBlocksCase(selectedBlockIds)
             } else vm.onTool(tool)
             NoteTool.DELETE -> if (documentSelectionMode) {
-                if (vm.deleteDocumentRange(documentSelection.min, documentSelection.max)) {
-                    documentSelection = TextRange.Zero
+                if (vm.deleteBlocks(selectedBlockIds)) {
+                    selectedBlockIds = emptySet()
                     documentSelectionMode = false
                 }
             } else vm.onTool(tool)
@@ -400,9 +402,16 @@ fun NotesRoute(
     ) else null
     val printOpen = state.dialog == NoteDialog.Print
     val fontResolver = LocalFontFamilyResolver.current
-    // Output always keeps a block that fits on one page whole, as the page view shows it.
-    val outputSettings = ((if (formattingOn) pageSetup else null) ?: NotePrintSettings()).copy(keepBlocksWhole = true)
+    // Output keeps a block that fits on one page whole, as the editable page view shows it,
+    // unless auto-fit lets content flow on across pages.
+    val outputSettings = ((if (formattingOn) pageSetup else null) ?: NotePrintSettings()).let {
+        it.copy(keepBlocksWhole = !it.autoFit)
+    }
     val pageViewActive = formattingOn && !arrangeMode && !documentSelectionMode && !state.damaged
+    // Auto-fit pages are shown as they print, read only.
+    val autoFitView = pageViewActive && outputSettings.autoFit
+    var flowPages by remember { mutableStateOf<List<NotePrintRenderer.Page>?>(null) }
+    LaunchedEffect(autoFitView) { if (autoFitView) { focusManager.clearFocus(); keyboard?.hide() } }
     // An output action waiting on the "format the pages first" question.
     var formatFirst by remember { mutableStateOf<(() -> Unit)?>(null) }
     val whenFormatted: (() -> Unit) -> Unit = { action -> if (formattingOn) action() else formatFirst = action }
@@ -443,12 +452,25 @@ fun NotesRoute(
         }
     }
     LaunchedEffect(formattingOn, outputSettings, state.blocks, printFaces, noteTitle) {
-        if (!formattingOn || printFaces == null) { if (!formattingOn) pagination = null; return@LaunchedEffect }
-        delay(if (pagination == null) 0L else 250L)
-        val source = printSource()
+        if (!formattingOn || printFaces == null) {
+            if (!formattingOn) { pagination = null; flowPages = null }
+            return@LaunchedEffect
+        }
         val settings = outputSettings
-        withContext(Dispatchers.Default) { runCatching { NotePrintRenderer.paginate(source, settings) }.getOrNull() }
-            ?.let { pagination = it }
+        if (settings.autoFit) {
+            delay(if (flowPages == null) 0L else 250L)
+            val source = printSource().let {
+                NotePrintSource(it.title, it.blocks, it.colors, it.typefaces, it.imageFile, FLOW_VIEW_DPI, it.thumbnail)
+            }
+            withContext(Dispatchers.Default) { runCatching { NotePrintRenderer.layout(source, settings) }.getOrNull() }
+                ?.let { flowPages = it; pagination = null }
+        } else {
+            flowPages = null
+            delay(if (pagination == null) 0L else 250L)
+            val source = printSource()
+            withContext(Dispatchers.Default) { runCatching { NotePrintRenderer.paginate(source, settings) }.getOrNull() }
+                ?.let { pagination = it }
+        }
     }
     val pdfSaver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) scope.launch {
@@ -520,7 +542,7 @@ fun NotesRoute(
         NoteFormattingStripState(
             settings = setup,
             onChange = { next -> pageSetup = next; pageStore.save(ownerKey, next) },
-            pageCount = pagination?.pageCount,
+            pageCount = if (setup.autoFit) flowPages?.size else pagination?.pageCount,
             onClose = { setFormatting(false) },
         )
     } else null
@@ -548,7 +570,7 @@ fun NotesRoute(
         enabled = if (state.damaged) emptySet() else
             (if (documentSelectionMode) tools.enabled - NoteTool.DELETE - NoteTool.CHANGE_CASE else tools.enabled) +
             NoteTool.SELECT_DOCUMENT + NoteTool.ARRANGE_BLOCKS + NoteTool.FORMATTING +
-            if (documentSelectionMode && !documentSelection.collapsed)
+            if (documentSelectionMode && state.blocks.any { it.id in selectedBlockIds })
                 setOf(NoteTool.FLASHCARD, NoteTool.DELETE, NoteTool.CHANGE_CASE) else emptySet(),
     ) }
     VirlinNotesScreen(
@@ -582,6 +604,15 @@ fun NotesRoute(
                 onDone = { arrangeMode = false },
                 modifier = Modifier.fillMaxSize().padding(top = NoteDocumentTopSpace),
             ) { block, before -> PreviewBlock(block, before) }
+            else if (!state.loading && autoFitView) NoteFlowPages(
+                pages = flowPages,
+                settings = outputSettings,
+                colors = NotePrintColors.of(palette),
+                onTap = {
+                    android.widget.Toast.makeText(context, "Auto-fit pages are read only. Turn Auto-fit off to edit.",
+                        android.widget.Toast.LENGTH_SHORT).show()
+                },
+            )
             else if (!state.loading) androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
                 // The field keeps focus under a picker so its selection survives; its handle
                 // popup would otherwise draw on top of the picker.
@@ -600,8 +631,8 @@ fun NotesRoute(
                         state = state, vm = vm,
                         headingFoldMode = headingFoldMode,
                         documentSelectionMode = documentSelectionMode,
-                        documentSelection = documentSelection,
-                        onDocumentSelectionChange = { documentSelection = it },
+                        selectedBlockIds = selectedBlockIds,
+                        onSelectedBlockIdsChange = { selectedBlockIds = it },
                         modifier = Modifier.fillMaxSize(),
                         positionKey = ownerKey,
                         pageView = if (pageViewActive) pageSetup?.let {
@@ -666,9 +697,15 @@ fun NotesRoute(
             onSave = { front, back, difficulty, days ->
                 if (!flashcardSaving) scope.launch {
                     flashcardSaving = true
-                    runCatching { com.virlin.app.data.flashcard.FlashcardStore.add(context,
-                        ownerKey, state.title.ifBlank { title }, back, front.text,
-                        difficulty, days, frontContent = front) }
+                    runCatching {
+                        val question = flashcardSummaryBlock(front)
+                        val prompt = question.text.trim().take(300)
+                        com.virlin.app.data.flashcard.FlashcardStore.add(context, ownerKey,
+                            state.title.ifBlank { title }, flashcardSummaryBlock(back), prompt,
+                            difficulty, days,
+                            frontContent = question.takeIf { it.text.trim() == prompt },
+                            frontBlocks = front, backBlocks = back)
+                    }
                         .onSuccess {
                             pendingFlashcard = null; flashcardError = null
                             android.widget.Toast.makeText(context, "Flashcard saved", android.widget.Toast.LENGTH_SHORT).show()
@@ -1148,3 +1185,6 @@ internal fun PreviewBlock(block: NoteDocBlock, before: List<NoteDocBlock>) {
         }
     }
 }
+
+/** Image resolution for the on-screen auto-fit pages; printing and export use their own. */
+private const val FLOW_VIEW_DPI = 144

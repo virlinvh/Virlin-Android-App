@@ -3,7 +3,7 @@ package com.virlin.app.ui.notes
 import android.content.Context
 
 /**
- * Each note's page formatting (paper, layout, margins, page numbers, title), kept beside the note
+ * Each note's page formatting (auto-fit, paper, layout, margins, page numbers, title), kept beside the note
  * like [NotePositionStore]. It is never part of the document: a missing or unreadable entry means
  * the note has not been formatted yet, and the document itself is never touched.
  */
@@ -29,7 +29,7 @@ internal class NotePageSetupStore(context: Context) {
 
         internal fun encode(s: NotePrintSettings): String =
             listOf(s.paper.name, if (s.landscape) "L" else "P", s.margins.name, s.pageNumbers.name,
-                s.numberAlign.name, if (s.includeTitle) "T" else "-").joinToString("|")
+                s.numberAlign.name, if (s.includeTitle) "T" else "-", if (s.autoFit) "F" else "-").joinToString("|")
 
         internal fun decode(raw: String): NotePrintSettings? = runCatching {
             val p = raw.split('|')
@@ -41,6 +41,8 @@ internal class NotePageSetupStore(context: Context) {
                 pageNumbers = NotePageNumbers.valueOf(p[3]),
                 numberAlign = NoteNumberAlign.valueOf(p[4]),
                 includeTitle = p[5] == "T",
+                // Entries saved before auto-fit have six fields.
+                autoFit = p.getOrNull(6) == "F",
             )
         }.getOrNull()
     }

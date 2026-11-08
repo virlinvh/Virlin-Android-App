@@ -97,6 +97,12 @@ data class NotePrintSettings(
      * so the page view in the editor and the printed or exported pages break in the same places.
      */
     val keepBlocksWhole: Boolean = false,
+    /**
+     * Auto-fit: content runs on continuously and a block that reaches the end of a page carries on
+     * at the top of the next, split between lines, so pages have no empty space at the bottom.
+     * Only images, video, audio and table rows stay whole; a heading stays with what follows it.
+     */
+    val autoFit: Boolean = false,
 ) {
     val pageWidthPt: Float get() = (if (landscape) paper.heightPt else paper.widthPt).toFloat()
     val pageHeightPt: Float get() = (if (landscape) paper.widthPt else paper.heightPt).toFloat()
@@ -190,6 +196,9 @@ internal object NotePrintRenderer {
 
     private const val LONG_PAGE = 1_000_000f
 
+    /** With auto-fit, a heading moves to the next page unless about two lines of what follows fit under it. */
+    private const val KEEP_WITH_HEADING = 40f
+
     /** "Page 2 of 5" where the settings put it. */
     fun drawPageNumber(canvas: Canvas, index: Int, total: Int, settings: NotePrintSettings, colors: NotePrintColors,
                        widthPt: Float, heightPt: Float) {
@@ -227,10 +236,20 @@ internal object NotePrintRenderer {
         }
         source.blocks.forEachIndexed { i, block ->
             flow.gap(NoteDocumentLayout.beforeDp(block, i) * SP)
-            if (settings.keepBlocksWhole && !flow.atPageTop) {
+            fun height(b: NoteDocBlock): Float {
                 val probe = Flow(widthPt, LONG_PAGE, settings.margins.points)
-                block(probe, source, block, numbers[block.id] ?: 1)
-                val height = probe.y - probe.top
+                block(probe, source, b, numbers[b.id] ?: 1)
+                return probe.y - probe.top
+            }
+            if (settings.autoFit) {
+                val next = source.blocks.getOrNull(i + 1)
+                if (block.type.headingLevel > 0 && next != null && !flow.atPageTop) {
+                    val need = height(block) + (NoteDocumentLayout.afterDp(block, next) +
+                        NoteDocumentLayout.beforeDp(next, i + 1)) * SP + minOf(height(next), KEEP_WITH_HEADING)
+                    if (need <= flow.bottom - flow.top && flow.y + need > flow.bottom) flow.breakPage()
+                }
+            } else if (settings.keepBlocksWhole && !flow.atPageTop) {
+                val height = height(block)
                 if (height <= flow.bottom - flow.top && flow.y + height > flow.bottom) flow.breakPage()
             }
             val first = flow.pages.size - 1

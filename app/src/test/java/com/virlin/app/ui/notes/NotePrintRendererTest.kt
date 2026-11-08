@@ -97,6 +97,45 @@ class NotePrintRendererTest {
         assertEquals(null, NotePageSetupStore.decode("garbage"))
     }
 
+    @Test fun autoFitFlowsATallBlockOnFromTheFirstPage() {
+        val prompt = (1..24).joinToString("\n") { "Line $it of the prompt that is copied into the application." }
+        val blocks = listOf(
+            NoteDocBlock("intro", NoteDocBlockType.PARAGRAPH, paragraph),
+            NoteDocBlock("v", NoteDocBlockType.VIDEO, video = NoteDocVideo("M7lc1UVf-VE", 0, 0, "Clip", "Channel")),
+            NoteDocBlock("h", NoteDocBlockType.HEADING_3, "1. Main testing prompt"),
+            NoteDocBlock("p", NoteDocBlockType.PROMPT, prompt, promptTitle = "Copy this into your application"),
+        )
+        val source = NotePrintSource("Prompt Checking", blocks, colors)
+        val whole = NotePrintRenderer.paginate(source, NotePrintSettings(keepBlocksWhole = true))
+        assertEquals("kept whole, the prompt waits for page 2", 1, whole.startPage.getValue("p"))
+        val fit = NotePrintRenderer.paginate(source, NotePrintSettings(autoFit = true))
+        assertEquals("auto-fit starts the prompt on page 1", 0, fit.startPage.getValue("p"))
+        assertEquals("and carries it on to page 2", 1, fit.endPage.getValue("p"))
+        assertEquals(NotePrintRenderer.layout(source, NotePrintSettings(autoFit = true)).size, fit.pageCount)
+    }
+
+    @Test fun autoFitKeepsEveryHeadingWithWhatFollows() {
+        val blocks = (1..30).flatMap { i ->
+            listOf(NoteDocBlock("h$i", NoteDocBlockType.HEADING_2, "Section $i")) +
+                (1..3).map { NoteDocBlock("p$i-$it", NoteDocBlockType.PARAGRAPH, paragraph) }
+        }
+        val source = NotePrintSource("Sections", blocks, colors)
+        val fit = NotePrintRenderer.paginate(source, NotePrintSettings(autoFit = true))
+        assertTrue(fit.pageCount > 2)
+        (1..30).forEach { i ->
+            assertEquals("heading $i alone at a page end", fit.startPage.getValue("h$i"), fit.startPage.getValue("p$i-1"))
+        }
+        val whole = NotePrintRenderer.paginate(source, NotePrintSettings(keepBlocksWhole = true))
+        assertTrue("auto-fit ${fit.pageCount} vs whole ${whole.pageCount}", fit.pageCount <= whole.pageCount)
+    }
+
+    @Test fun autoFitIsSavedWithThePageSetup() {
+        val s = NotePrintSettings(NotePaper.A5, autoFit = true)
+        assertEquals(s, NotePageSetupStore.decode(NotePageSetupStore.encode(s)))
+        // A setup saved before auto-fit existed reads back with it off.
+        assertEquals(NotePrintSettings(), NotePageSetupStore.decode("A4|P|NORMAL|BOTTOM|CENTER|T"))
+    }
+
     @Test fun landscapeSwapsThePageSides() {
         val s = NotePrintSettings(paper = NotePaper.LETTER, landscape = true)
         assertEquals(792f, s.pageWidthPt)

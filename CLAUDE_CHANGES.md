@@ -1583,3 +1583,167 @@ Done - extend that table column-wise and row-wise - I don't want to see the popu
 ## 2026-11-07 - Notes: rounded YouTube player corners
 - NoteVideoBlock.kt NoteVideoPlayer: the WebView clips to a 10dp rounded outline (ViewOutlineProvider + clipToOutline, which also clips the hardware video layer); the black backdrop and load-error panel use the same shape. Matches the thumbnail's 10dp. Player, controls, clip script and fullscreen unchanged; nothing overlays YouTube's player.
 - APK: releases\Virlin-Android-1.0.9-notes-videocorners-20261107-1425-debug.apk (emulator-5556 only).
+
+## 2026-11-07 - Notes: Auto-fit pages
+- NotePrint.kt: NotePrintSettings.autoFit. With it, blocks flow across pages split between lines (renderer's existing line-slicing; boxes keep rounded corners only at their real ends); images, video, audio and table rows stay whole; a heading moves to the next page unless ~2 lines of what follows fit (KEEP_WITH_HEADING). Without it, unchanged keep-whole behaviour.
+- NotePageSetupStore: 7th field F/- ; six-field entries read back with auto-fit off.
+- NoteFormattingStrip: Auto-fit toggle chip first in the strip.
+- NotePageView.kt NoteFlowPages: read-only page view drawn by the print renderer (page bitmaps on Dispatchers.Default, one at a time via Mutex); tap shows 'Turn Auto-fit off to edit'.
+- NotesRoute: outputSettings.keepBlocksWhole = !autoFit; auto-fit view replaces the editor while on; page count from the flowed layout. No document or schema change.
+- Tests: NotePrintRendererTest +3. APK releases\Virlin-Android-1.0.9-notes-autofit-20261107-2310-debug.apk (emulator-5556 only).
+
+## 2026-11-07 - Mind map: long pasted names and resize lock
+- Cause: rename fields (MapRenameDialog, MapNodePreviewPopup name) were singleLine, so a pasted name with line breaks showed only its first line; the hidden lines were kept on save. The long hidden title also pushed minimumCardWidth to the 560 max, locking resize.
+- MapStructureEditor.kt / MapNodePreviewPopup.kt: name fields multi-line (maxLines 6); preview name text ellipsizes.
+- VirlinMindMap.kt: minimumCardWidth capped at 160 (was 560); compactCardSize counts typed line breaks for card height.
+- Test: ProjectMapTest.aBoxWithALongPastedNameCanStillBeResized. APK releases\Virlin-Android-1.0.9-map-namefix-20261107-2345-debug.apk (emulator-5556 only).
+
+## 2026-11-07 - Mind map organize strip (notes-style tools)
+- MapStructureEditor.kt: with Organize on, selecting a box shows a full-width white strip under the top bar (gentle fade/slide in). Tools are notes-style bordered 40dp rounded buttons in groups with 1x24dp dividers: Edit, Into, Add branch | Copy, Duplicate (or Open), Paste into | Resize, Box color, Hide box, Show hidden | Undo, Redo | Delete. Scrolls sideways inside NoteFeatheredRow (feathered edges + one-time peek). Clear selection stays pinned at the right under the three-dot menu. Same callbacks, labels and selected semantics; colour palette still opens below.
+- VirlinMindMap.kt: structure bar overlay is full width (inset moved into the bar) and zIndex 5 so branch bubbles/handles do not draw over the strip.
+- MapSelectionFlowUiTest: order assertion now Edit < Into < Add branch < Clear; delete test scrolls to Delete first.
+- APK: releases\Virlin-map-organizestrip2-*.apk (emulator-5556 only).
+
+## 2026-11-07 - Page Organize: working Duplicate + Delete with typed-name warning
+- TaskPageActions: duplicateHere(blockId) copies a note (existing duplicateNote) or a captured item (duplicate into the same task, title + ' (copy)') listed right after the original; checklist refused. delete(blockId) deletes a note document (refuses unreadable/loadError notes) or archives a captured item (restorable from the Inbox), removes the card and keeps a dense order; checklist refused. loadAndReconcile no longer re-adds ARCHIVED captures.
+- WorkStreamWriter.deleteNoteDoc(ownerKey) added (Room: deletes chunks + row via existing DAO queries; in-memory staged). No schema change.
+- TaskPageScreen: Duplicate copies in place (enabled for notes + captured items); new red Delete button opens DeleteByNameDialog (type the exact name). Clear reason for empty/unreadable notes. Result messages no longer wiped by the refresh (also fixes Move/Duplicate-to-task messages).
+- DeleteProjectDialog.kt: DeleteHierarchyDialog now delegates to DeleteByNameDialog(warning) - same text and behaviour for existing callers.
+- Tests: TaskPageActionsTest +2. Pre-existing failures confirmed on HEAD e455517 (temp worktree, removed): AttentionExitTest, BulkNamesTest, ExternalTimingTest, MasterResumeRoomTest.
+- APK: releases\Virlin-page-dup-delete2-20261107-2329.apk (emulator-5556 only).
+
+## 2026-11-07 - Page Move uses the guided destination sheet; notes can move
+- New ui/page/PageMoveDestinationSheet.kt: same look as the task/map 'Choose a destination' sheet (palette accent, path chip, Back one level, folder rows, explore arrows, DESTINATION footer + Move here). Browses project > workstreams > tasks > subtasks; only tasks are choosable; the item's own task shows 'Already here' (disabled, still explorable). Opens beside the current task.
+- TaskPageScreen: Move opens the sheet (old AlertDialog list removed); Move disabled for the checklist; page wrapped in a Box so the sheet overlays it. VM.moveTo: captured items via existing move(); notes via new moveNote(); message 'Moved to <task>' or a clear reason (empty note).
+- TaskPageActions.moveNote(blockId, destTaskId): same-project only; refuses empty/unreadable notes; saves the whole document under a new extra note owner of the destination, adds its card last, then deletes the source doc + card, in one transaction. Returns the new owner key.
+- FlashcardStore.rekey(from, to): flashcards follow a moved note; page setup (NotePageSetupStore) copied to the new key.
+- Tests: TaskPageActionsTest +1 (moving a note), FlashcardStoreTest +1 (rekey).
+- APK: releases\Virlin-page-move-sheet-20261107-2340.apk (emulator-5556 only).
+
+## 2026-11-08 - Mind map name editor standardized
+- MapStructureEditor.kt: MapRenameDialog restyled like the Preview details card (white 26dp card, 'Edit name' header with round close, accent label, filled 1-6 line field, Cancel + thick 48dp accent Save). Tags map_rename_dialog / map_rename_cancel added.
+- preview/MapNodePreviewPopup.kt: inline name field removed; the pencil opens the same MapRenameDialog (new nameLabel param). The edited name stays pending and is saved by the popup Save; popup Cancel discards it.
+- ProjectMapScreen.kt: passes nameLabel (Task name / Project name).
+- MapPreviewNameUiTest: pencil test updated to the shared dialog, cancel test added. map + mappreview unit tests: 148 passed.
+- APK: releases\Virlin-map-name-editor-20261108-0850.apk (verified on emulator-5556 only).
+
+## 2026-11-08 - Mind map box colour code (#)
+- MapStructureEditor.kt: box colour palette moved into MapBoxColorPalette; a pinned '#' button switches the strip to a colour-code field (# prefix, live preview dot, red border when invalid, green Done). Applied codes are set (not toggled) via new onSetBoxColor and kept as custom swatches at the front (last 8, SharedPreferences map_box_colors). Preset swatches and their tags unchanged.
+- MapBoxColor.kt: setBoxColor helper. ProjectMapScreen.kt: wires onSetBoxColor to saveMapAppearance. No storage format change (nodeColors already holds any ARGB).
+- Tests: MapBoxColorTest +1, MapSelectionFlowUiTest +1; map + mappreview 150 passed.
+- APK: releases\Virlin-map-box-hex-20261108-0857.apk (emulator-5556 only).
+
+## 2026-11-08 - Mind map header: no gap, feathered edge
+- VirlinMindMap.kt: header row drops its 4dp bottom padding so the organize strip sits directly under it; the map area (BoxWithConstraints) is clipToBounds so boxes slide under the header instead of painting over the title; a 20dp surface-to-transparent feather (tag mind_map_header_feather, zIndex 4) sits at the top of the map and is covered by the opaque organize strip (zIndex 5) when it is open. Not in focus mode.
+- map + mappreview tests: 150 passed. No golden covers the mind map.
+- APK: releases\Virlin-map-header-feather-20261108-0904.apk (emulator-5556 only).
+
+## 2026-11-08 - Mind map Organize button + Export strip
+- VirlinMindMap.kt: when the host supplies onToggleStructureMode, the header three-dot menu is replaced by MapOrganizeToggle (DesignServices icon; on = accent disc springs in, icon turns into a check; Role.Switch, 'Organize'/'Done organizing', tag mind_map_structure_toggle). Hosts without a toggle keep the old More menu (Export) unchanged.
+- MapStructureEditor.kt: Organize strip now shows whenever Organize is on, also with no box selected (box tools disabled, Clear selection hidden; colour palette and resize highlight only with a selected box). New Export tool (exportOptions param, MapExportOption) opens MapExportStrip under the strip: feathered horizontally scrolling chips XMind/VMap/PDF/PNG image/Markdown/JSON, close X, Back closes; choosing a format closes it and runs the same launcher. Export and box colours are mutually exclusive.
+- ProjectMapScreen.kt: builds exportOptions from the existing SAF launchers (same file names).
+- Organize still pauses/resumes timers exactly as before (same onToggleStructureMode).
+- Tests: MapSelectionFlowUiTest updated (toggle button instead of More menu) + new strip/export test; map + mappreview 151 passed.
+- APK: releases\Virlin-map-organize-button-20261108-0914.apk (emulator-5556 only).
+
+## 2026-11-08 - Mind map Undo/Redo audit + fixes
+- Audit: undo/redo itself worked for appearance + moves, but renames were never recorded, duplicate/paste/delete wiped the whole history, history lived only while the map screen was composed (lost after opening a Page/task), and an unreplayable move stayed on top and blocked every earlier step.
+- MapEditHistory.kt: MapEdit.Rename; discard(edit); dropMoves(); MapEditHistories session registry per project (forget on project delete); MapAppearance.applyStep(from,to) re-applies only the fields a step changed (no stale full-snapshot overwrite of later/desktop/cleanup changes); describe() for messages.
+- ProjectMapScreen.kt: history from MapEditHistories.of(project.id); renameNode() shared by strip Edit, preview popup name and history; both renames recorded; travelHistory uses applyStep, replays renames only if the title is still the expected one, drops a refused step with a 'Can't undo/redo' notice, and shows 'Undone: x' / 'Redone: x' snackbar; duplicate, paste (copy) and node delete call dropMoves() instead of clear().
+- Tests: MapEditHistoryTest +4; map + mappreview 155 passed.
+- APK: releases\Virlin-map-undo-redo-20261108-0923.apk (emulator-5556 only). Verified: rename -> Undo -> Redo -> Undo, history kept after opening a Page and returning.
+
+## 2026-11-08 - Duplicate task branch popup restyled
+- MapStructureEditor.kt: new MapConfirmDialog (same card as MapRenameDialog: white 26dp, title + round close, muted message, Cancel + thick 48dp accent confirm; tags map_confirm_dialog/_cancel/_ok).
+- ProjectMapScreen.kt: 'Duplicate task branch?' uses MapConfirmDialog instead of AlertDialog; same duplicateTask action, history and snackbar.
+- Tests: MapSelectionFlowUiTest +1; map + mappreview 156 passed.
+- APK: releases\Virlin-map-duplicate-dialog-20261108-0938.apk (emulator-5556 only).
+
+## 2026-11-08 Organize timers: edits never strand paused timers; paused items can take children
+- New domain/action/OrganizeTimerPause.kt: pendingTimerPause (last STATE-CHANGE event must be the provenance pause; renames/reorders/new children no longer hide it), isOrganizePaused, endOrganizePauseForChildren (PAUSED -> READY in the caller's transaction, cycle closed, banked time and closed sessions kept, READY event recorded).
+- DefaultVirlinActions.resumeTimers: replaced the brittle pause.at == item.updatedAt guard (rename / duplicate sibling shift / move left timers stuck PAUSED after Organize) with pendingTimerPause; provenance strings shared as constants.
+- StructureActions: createTaskIn / placeTask / placeBranch / moveTasks accept an Organize-paused owner or destination and end its paused timer after all validation (placeBranch/moveTasks after the sibling writes, which save rows from the pre-move snapshot). Moving a branch that holds Organize-paused timers is allowed only within the same workstream (task timer history is keyed by workstream). Active or manually paused items still refuse children, unchanged.
+- ProjectMapScreen: add-subtask snackbar says when the parent's paused timer ended.
+- Tests: ProjectTimerControlTest +3. Focused domain run 95 tests, 1 failure = pre-existing MasterResumeRoomTest timing (660 vs 600).
+- Verified on emulator-5556: focus task -> Organize pauses it (0 open sessions) and the running external; add subtask under the paused task succeeds; Done organizing resumes the external, the new parent stays READY. Test subtask "Organize draft" left on the test AVD.
+- APK: releases\Virlin-organize-timers-20261108-1015.apk
+
+## 2026-11-08 Map selected-task strip always on top
+- ui/map/VirlinMindMap.kt: MapSelectedTaskBar (Open Task / Flashcard / Page / Add) gets zIndex(6f). Fold pills (z0, composed after it), resize edge (z1) and Organize drag handle (z2) used to paint over it while panning; now they pass underneath and the opaque strip also takes the touches. Zoom controls (z10) are lifted above the strip already; the Add palette replaces the strip.
+- Tests: map + mappreview 156/156.
+- Verified on emulator-5556: Organize on, selected node panned under the strip; its handle and fold pill are hidden behind the strip.
+- APK: releases\Virlin-map-strip-on-top-20261108-1000.apk
+
+## 2026-11-08 - Map colour studio rebuilt (Cursor agent)
+- Fixed: branch colours. Every node used to inherit the root colour, so all branches used palette colour 1. Each workstream now takes its own palette colour (MapColorScheme.kt mapBranchTints). Visible change on existing maps: workstreams are now multicoloured.
+- New colour model in MapAppearance (all optional, defaults paint exactly as before): branchMode MULTI/SINGLE/LEVELS, singleBranchColor, levelColors, boxFill SOFT/PASTEL/BOLD/WHITE/CUSTOM + boxFillColor, boxBorder AUTO/BRANCH/CUSTOM/NONE + boxBorderColor, boxTextColor (auto contrast otherwise), backgroundColor, savedPalettes. 13 presets (first 4 keep their old indices).
+- Hand-drawn finishes now honour fill/border choices (HandDrawnBox.kt new optional params).
+- Persistence: MapColourJson.kt shared by MapAppearanceStore and VirlinMapFile (.vmap stays schema 1, fields additive). Undo/redo steps the new fields (MapEditHistory.applyStep). Canvas and PNG/PDF exports use the map background.
+- MapStudioPage.kt rewritten: sticky live preview (real map slice, real workstream colour indices, drawn on the map background), tabs Palette / Branches / Boxes / Items, one Save/Cancel footer. Palette: editable slots (2-12), shuffle, reverse, presets, My palettes, harmonies from one colour, paste import (hex codes, Coolors / Color Hunt links; text only, no network).
+- MapColourPicker.kt: one picker dialog (hue ring + saturation/brightness square, HSB sliders, swatch grid, hex, palette and My colours).
+- desktop/virlin-connect/src/project-map.js: added the 9 new presets to MAP_PALETTES so indices match. Desktop does not render the new fill/border/background modes.
+- Tests: new MapColourStudioTest (10); MapSelectionFlowUiTest updated for the new studio labels. Map suites 166/166. Goldens not re-recorded.
+- APK: releases\Virlin-map-colour-studio-20261108-1023e.apk (verified on emulator-5556).
+
+## 2026-11-08 - Flashcard composer redesign (rich, exact note blocks)
+- New ui/notes/FlashcardSlice.kt: sliceProjectedRange (exact note blocks under a cross-block selection; types, runs, fonts, links, media kept), flashcardBlocks, flashcardPassageText, flashcardSummaryBlock.
+- FlashcardCreateDialog rewritten: floating card with all corners rounded (SafeDialog), fixed header and Create button, scrolling body. Passage selection has the system Copy/Select-all bar suppressed; Front/Back send buttons sit below the passage (no selection = whole passage). Back starts as the whole passage, Front empty. Each side previews with NoteDocumentPreview; edit mode edits block by block (type kept), B/I, remove part, + Line.
+- FlashcardStore: optional frontBlocks/backBlocks (additive JSON fields, v=1 kept, legacy fields still written; undecodable face falls back to the summary). Set-based list now includes cards from an owner's own notes (task-1#note-x under task-1) - task-note cards previously never appeared in branch study.
+- NotesRoute: only the FLASHCARD tool call site and the save call changed (no editor changes).
+- FlashcardsRoute StudyCard: renders rich faces with NoteDocumentPreview; legacy cards unchanged; copy uses full face text.
+- Tests: FlashcardCreateDialogTest rewritten, FlashcardRichSidesTest (new), FlashcardStudyScreenTest rich-face test. APK releases\Virlin-flashcard-composer-20261108-1215.apk verified on emulator-5556.
+
+## 2026-11-08 - Task Page header title on one line
+- TaskPageScreen top bar: title is one line with ellipsis (20sp, was 23sp unbounded) and the Page caption is one line, so long task names no longer wrap over the 72dp header. No other change. APK releases\Virlin-page-title-20261108-1215.apk verified on emulator-5556.
+
+## 2026-11-08 Map palette now colours the boxes
+- MapAppearance: boxPaletteMode (By workstream / By level / One colour / Every box / Match lines), boxStrength (Light/Medium/Strong, default Medium), boxLevelColors, boxSingleColor, boxBranchColors (per-branch, inherits down), branchPalette (optional separate line colours).
+- MapColorScheme: mapBoxTints() is the box-colour pipeline; paintMap tints boxes from it, connectors still from mapBranchTints(). Organize highlight (nodeColors) still wins for its one box only. Soft/hand-drawn fills now show the tint by strength; Light keeps the old look.
+- MapColourJson / MapEditHistory / MapAppearanceStore.prune carry the new fields. MapStudioPage Palette tab: 'How boxes use this palette', level/workstream rows, Colour strength, 'Colour a branch' search. Branches tab: editable line colours. Boxes tab untouched.
+- Tests: MapColourStudioTest new cases; map suite 119/119. APK releases\Virlin-map-box-palette-20261108-1500.apk on emulator-5556. Desktop project-map.js not updated.
+
+## 2026-11-08 29 new map box finishes
+- MapModels: MapBoxFinishGroup (Classic / Hand-drawn & handmade / Materials & modern); MapBoxFinish gains a group and 29 entries appended (saved by name, no migration): 16 handmade (Crayon, Charcoal, Watercolour, Brush pen, Felt tip, Scribble fill, Cross hatch, Stipple, Rough sketch, Highlighter, Dry brush, Stitched, Taped note, Sticky note, Torn paper, Paper cut-out) and 13 materials (Kraft card, Canvas, Cork board, Wood grain, Marble, Concrete, Brushed metal, Soft clay, Terrazzo, Dot grid, Graph paper, Notebook, Halftone).
+- New BoxFinishes.kt: drawCraftedBox (handmade, deterministic noise, palette-tinted paper + palette pigment, ink overrides as before) and drawMaterialTexture (translucent overlay on the palette fill). Paint state restored after drawing.
+- HandDrawnBox: isHandDrawn() = HANDMADE group; new finishes delegate to drawCraftedBox, original four unchanged. paintMap passes paletteTint and draws material textures. MapStudioPage Box finish card grouped by MapBoxFinishGroup; tiles preview with the same painters.
+- Tests: MapBoxColorRenderTest (every finish paints, follows box colour, keeps connector), ProjectMapTest (every finish round-trips .vmap). Map suite 122/122. APK releases\Virlin-box-finishes-20261108-1300.apk on emulator-5556.
+
+## 2026-11-08 8 new map layouts (7 hand-drawn)
+- MapLayout: handDrawn flag + SKETCH_TREE (Pencil sketch), WHITEBOARD, DOODLE_BUBBLES, STICKY_WALL, BRUSH_INK, DRAFTING (Drafting table), PAPER_CRAFT, METRO_LINES. Saved by name, no migration. All left-to-right logic charts.
+- New CraftLayouts.kt: craftNodePath (wobbly/sticky/cut shapes seeded per frame), craftCardHeight (sticky taller, bubbles roomier), drawCraftUnderlay (shadow / second paper sheet), drawCraftFill (layout surface only under the Smooth finish), drawCraftOutline (ink edges, respects border mode, selection always visible), drawCraftConnector (pencil elbows, marker curves, strings, tapered brush, ruled elbows, ribbons, octilinear metro), drawCraftEndpoint (dots, arrowheads, stars, push pins, flicks, ticks, tabs, station rings).
+- VirlinMindMap: arrange x/baseStep branches + craftCardHeight; paintMap routes craft layouts to the new painters; picker shows a Hand-drawn tag. BoxFinishes: mapNoise/wobblyPath made internal for reuse.
+- Tests: ProjectMapTest layout count 21 + distinct labels; MapBoxColorRenderTest every layout draws connectors and follows box colour (with Crayon / Kraft+no-border variants). Map suite 143/143. APK releases\Virlin-craft-layouts-20261108-1330.apk on emulator-5556.
+
+## 2026-11-08 Notes select-across: real blocks + whole-block multi-select
+- NoteBlockEditor: select mode now draws the note's own blocks (NoteBlockRow, read only: same fonts, video/audio cards, equations, tables) under a tap/long-press selection layer instead of the plain-text projection. Pinned bar: count, Select all/Clear, Copy/Copy all. Normal and paged rendering unchanged.
+- NoteBlockSelection.kt (new): blockWithFolded (selecting a folded heading/toggle includes what it hides), blockRange, contiguousBlockRange.
+- NotesViewModel: deleteBlocks(ids) and cycleBlocksCase(ids), one undo step each; deleteBlocks refuses (message, no change) when the rich document could not hold the result.
+- NotesRoute: selection is a set of block ids; Flashcard/Toggle/Change case/Delete act on whole selected blocks; toggle needs neighbouring blocks.
+- Tests: NotePasteUiTest + RestoredNotesRouteTest updated to the block selection, new NoteBlockSelectionTest. APK releases\Virlin-note-multiselect-20261108-1620.apk.
+
+## 2026-11-08 Page cards: open button in the card header
+- MapContainerPageScreen.MasterDocumentItem (shared by the task Page and the map/project Page): 40dp open button (OpenInNew, testTag map_page_open_top_<id>, label 'Open <kind> <title>') beside the expand chevron, visible collapsed or expanded; opens the same route as the bottom 'Open <kind>' button, which is kept. Card content and expand behaviour unchanged.
+- MasterDocumentItemUiTest: headerOpenButtonOpensTheNoteWithoutExpandingTheCard. APK releases\Virlin-page-open-icon-20261108-1520.apk.
+
+## 2026-11-08 Flashcards redesign: deck page + full-height practice page
+- FlashcardsRoute.kt: FlashcardStudyScreen is now two pages. Deck: one-line group chips (New/Due/Future/All/Archived with counts), sort menu (Scheduled/Weakest/Newest/Starred first), Practice button, colour grid of cards (tap = practise from it, long-press = Star / Archive / Restore). Practice: slim top bar (back to deck, position, star, archive, menu with copy + sort), thin progress line, the group chips, a card that fills the rest (tap to flip; question side catches taps before rich text fields), one-line rating pills (mark hidden under 330dp width), Previous / round flip button / Next. Swiping and Previous/Next wrap around. Archive shows a 4 s Undo.
+- flashcardColor: integer-built pastels, unique for the first 11,340 cards (UNIQUE_FLASHCARD_SHADES), neighbours ~136 deg apart, every channel >= 180.
+- FlashcardStore: SavedFlashcard.isArchived (optional JSON field, store version unchanged, old files read as not archived) + setArchived().
+- Tests: FlashcardStudyScreenTest (start practice from deck, wrap-around, deck tile + archive + Archived group, card tap on a rich face), FlashcardStudyGroupingTest (archive filtering, starred sort, wrappedIndex, 10,000 distinct shades). APK releases\Virlin-flashcards-redesign-20261108-1700.apk.
+
+## 2026-11-08 Flashcards deck page: gallery redesign
+- FlashcardsRoute.kt deck page only (practice page untouched): serif title block, hero card in the project accent (palette.secondary, default 0xFF087848) with count, learned progress, Start practice (flashcard_start) and Shuffle (flashcard_shuffle), accent group chips with count badges, search field (flashcard_search_toggle / flashcard_search; matches question, answer, note title), masonry LazyVerticalStaggeredGrid of tall pastel tiles (serif front, status pill, star toggle flashcard_tile_star_<id>, No. NN, review count; long-press adds Copy question), stacked-cards empty state.
+- FlashcardSort.SHUFFLED: order keyed on card id + seed so it holds still while cards are reviewed/archived; also in both sort menus. Undo text uses the accent.
+- FlashcardsRoute resolves projectId for project/workstream/task and passes accent; FlashcardStudyScreen gains accent param (default).
+- Tests: shuffledOrderHoldsStillWhenACardLeaves, searchMatchesQuestionAnswerAndNoteTitle, deckSearchStarAndShuffleWorkFromTheGallery; deck tests scroll the grid/chips. 20/20 pass. APK releases\Virlin-flashcard-gallery-20261108-1620.apk.
+
+## 2026-11-08 - Flashcard practice deck rewrite (FlashcardsRoute.kt)
+- Root cause of 'flip button / Hard-Good-Easy do nothing after the first card': Compose memoized ::localFunction references (flip, rate, settle, archive) with stale captures. All converted to lambda vals; ratings and flip now act on the card showing.
+- Practice page rebuilt as a physical card deck: keyed layers (card id) with zIndex, depth scale/lift/tilt, spring fly-out/back, velocity-aware swipe, previous card always fully built so swipe-back never creates WebViews mid-gesture.
+- Whole-card 3D flip (rotationY, face swap edge-on, no alpha) so equation/rich cards flip without GPU stalls.
+- Ratings always enabled when a card is showing; feedback pill shows interval and destination group (e.g. Good - back in 1 day - moved to Future).
+- Project accent (rememberProjectPalette secondary, DefaultDeckAccent fallback) on chips, progress, flip button, Next, sort menu.
+- Source-note chip on card + 'Open source note' menu item navigate to notesRoute(ownerKey, noteTitle).
+- Group/sort/index/practicing state survives process death (rememberSaveable).
+- Test: flipButtonAndRatingsActOnTheCardNowShowing. 21/21 flashcard tests pass.
+- APK: releases\Virlin-flashcard-deck-20261108-1715.apk

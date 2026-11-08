@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -281,6 +283,14 @@ internal fun MasterDocumentItem(entry: MasterDocumentEntry, ink: Color,
                     Text(entry.title, color = ink, fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp, lineHeight = 20.sp, maxLines = if (isExpanded) 3 else 2,
                         overflow = TextOverflow.Ellipsis)
+                }
+                Box(Modifier.padding(horizontal = 4.dp).size(40.dp).clip(RoundedCornerShape(12.dp))
+                    .background(accent.copy(alpha = .1f))
+                    .clickable(role = Role.Button, onClickLabel = "Open ${entry.kind}", onClick = onOpen)
+                    .testTag("map_page_open_top_${entry.id}"),
+                    contentAlignment = Alignment.Center) {
+                    Icon(Icons.AutoMirrored.Outlined.OpenInNew, "Open ${entry.kind} ${entry.title}", tint = accent,
+                        modifier = Modifier.size(18.dp))
                 }
                 Icon(if (isExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                     if (isExpanded) "Collapse" else "Expand", tint = accent)

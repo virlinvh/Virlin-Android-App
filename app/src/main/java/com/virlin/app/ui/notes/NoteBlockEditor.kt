@@ -14,6 +14,8 @@ import com.virlin.app.domain.notedoc.NoteMath
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -87,6 +89,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
@@ -126,14 +130,16 @@ private val CodeBg: Color @Composable get() = NotesWash.copy(alpha = .55f)
  * the platform's own rather than a simulation. Stored runs are painted through a
  * [VisualTransformation]: without one the marks would persist but never appear.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NoteBlockEditor(
     state: NotesUiState,
     vm: NotesViewModel,
     headingFoldMode: Boolean = false,
+    /** Select-across: the note drawn as usual, read only, where taps select whole blocks. */
     documentSelectionMode: Boolean = false,
-    documentSelection: TextRange = TextRange.Zero,
-    onDocumentSelectionChange: (TextRange) -> Unit = {},
+    selectedBlockIds: Set<String> = emptySet(),
+    onSelectedBlockIdsChange: (Set<String>) -> Unit = {},
     modifier: Modifier = Modifier,
     /** Note key under which the reading position is kept across reopening; null keeps none. */
     positionKey: String? = null,
@@ -164,6 +170,9 @@ fun NoteBlockEditor(
         focusedBlockId = null, focusedCell = null, cellFocusRequest = null, selectedImageId = null,
         playingVideoId = readerPlaying, pasting = false,
     )
+    val selectionRowActions = remember(vm) {
+        NoteRowActions(readOnly = true, toggleCollapsed = vm::toggleCollapsed, playVideo = vm::playVideo)
+    }
     val rowActions = remember(readOnly, vm, paged) {
         if (paged) NoteRowActions(readOnly = false, toggleCollapsed = {}, playVideo = vm::playVideo)
         else if (!readOnly) NoteRowActions(readOnly = false, toggleCollapsed = vm::toggleCollapsed, playVideo = vm::playVideo)
@@ -196,8 +205,7 @@ fun NoteBlockEditor(
     val positions = remember(context) { NotePositionStore(context) }
     var topBlockId by rememberSaveable { mutableStateOf<String?>(null) }
     var previousSelectionMode by remember { mutableStateOf<Boolean?>(null) }
-    var selectionLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    var selectionTextTop by remember { mutableStateOf<Float?>(null) }
+    var selectionAnchor by remember { mutableStateOf<String?>(null) }
     val currentBlocks by rememberUpdatedState(state.blocks)
     val currentVisible by rememberUpdatedState(visible)
     LaunchedEffect(documentSelectionMode) {
@@ -206,25 +214,14 @@ fun NoteBlockEditor(
         val cameFrom = previousSelectionMode
         previousSelectionMode = documentSelectionMode
         if (documentSelectionMode) {
-            // Open the selectable text at the line that was at the top of the editor.
-            val layout = snapshotFlow { selectionLayout?.takeIf { selectionTextTop != null } }.filterNotNull().first()
-            val index = currentBlocks.indexOfFirst { it.id == topBlockId }
-            if (index > 0) {
-                val start = projectedBlocks(currentBlocks)[index].start.coerceIn(0, layout.layoutInput.text.length)
-                val y = (selectionTextTop ?: 0f) + layout.getLineTop(layout.getLineForOffset(start))
-                scroll.scrollToItem(0, y.roundToInt())
-            }
-            snapshotFlow { scroll.firstVisibleItemIndex to scroll.firstVisibleItemScrollOffset }.collect { (item, offset) ->
-                val l = selectionLayout ?: return@collect
-                val top = selectionTextTop ?: return@collect
-                if (item != 0) return@collect
-                val char = l.getOffsetForPosition(Offset(0f, (offset - top).coerceAtLeast(0f)))
-                val at = projectedBlocks(currentBlocks).indexOfLast { it.start <= char }
-                currentBlocks.getOrNull(at)?.id?.let { topBlockId = it }
+            // The same blocks stay on screen below the selection bar (list item 0).
+            val index = currentVisible.indexOfFirst { it.id == topBlockId }
+            if (index <= 0) scroll.scrollToItem(0)
+            else if (scroll.firstVisibleItemIndex != index + 1) scroll.scrollToItem(index + 1)
+            snapshotFlow { scroll.firstVisibleItemIndex }.collect { item ->
+                currentVisible.getOrNull((item - 1).coerceAtLeast(0))?.id?.let { topBlockId = it }
             }
         } else {
-            selectionLayout = null
-            selectionTextTop = null
             when (cameFrom) {
                 // First show: continue where this note was last read, unless the list kept its own
                 // position (the app was restored with its saved state).
@@ -261,31 +258,32 @@ fun NoteBlockEditor(
         state = scroll, contentPadding = PaddingValues(top = if (paged) deskGap else NoteDocumentTopSpace)) {
         if (readOnly && readerHeader != null) item(key = "reader_header") { readerHeader() }
         if (documentSelectionMode) {
-            item { Column {
-                val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
-                val projection = remember(state.blocks) { selectableNoteText(state.blocks) }
-                Row(Modifier.fillMaxWidth().padding(bottom = 18.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text("Long-press and drag across the note", color = Muted, fontSize = 12.sp,
-                        modifier = Modifier.weight(1f))
-                    Text("Copy all", color = Green, fontSize = 13.sp,
-                        modifier = Modifier.clickable {
-                            clipboard?.setPrimaryClip(ClipData.newPlainText("Virlin note", projection.text))
-                        }.testTag("notes_copy_all"))
+            stickyHeader(key = "selection_bar") {
+                NoteSelectionBar(state.blocks, selectedBlockIds, onSelectedBlockIdsChange)
+            }
+            val shownIds = visible.mapTo(HashSet()) { it.id }
+            itemsIndexed(visible, key = { _, block -> block.id }) { visibleIndex, block ->
+                Spacer(Modifier.height(NoteDocumentLayout.beforeDp(block, visibleIndex).dp))
+                SelectableNoteBlock(
+                    block = block,
+                    selected = block.id in selectedBlockIds,
+                    onTap = {
+                        val group = blockWithFolded(state.blocks, shownIds, block.id)
+                        selectionAnchor = block.id
+                        onSelectedBlockIdsChange(
+                            if (block.id in selectedBlockIds) selectedBlockIds - group.toSet() else selectedBlockIds + group)
+                    },
+                    onLongPress = {
+                        val from = selectionAnchor?.takeIf { it in shownIds } ?: block.id
+                        selectionAnchor = block.id
+                        onSelectedBlockIdsChange(selectedBlockIds + blockRange(state.blocks, visible, from, block.id))
+                    },
+                ) {
+                    NoteBlockRow(block, numbers[block.id] ?: 0, state, vm, headingFoldMode,
+                        null, {}, selectionRowActions)
                 }
-                BasicTextField(
-                    value = TextFieldValue(projection,
-                        TextRange(documentSelection.start.coerceIn(0, projection.length),
-                            documentSelection.end.coerceIn(0, projection.length))),
-                    onValueChange = { next -> onDocumentSelectionChange(next.selection) },
-                    readOnly = true,
-                    textStyle = TextStyle(color = Ink, fontSize = 16.sp, lineHeight = 25.sp),
-                    onTextLayout = { selectionLayout = it },
-                    modifier = Modifier.fillMaxWidth()
-                        .onGloballyPositioned { selectionTextTop = it.positionInParent().y }
-                        .testTag("notes_document_selection_text"),
-                )
-            } }
+                Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(visibleIndex + 1)).dp))
+            }
         } else if (paged && pageView != null) {
             itemsIndexed(visible, key = { _, block -> block.id }) { visibleIndex, block ->
                 val place = pagePlace(pageView, visible, visibleIndex, measured)
@@ -310,6 +308,71 @@ fun NoteBlockEditor(
         }
         item { Spacer(Modifier.height(if (paged) deskGap * 6 else 76.dp)) }
     }
+    }
+}
+
+/** Select-across controls, pinned above the note: count, Select all / Clear and Copy. */
+@Composable
+private fun NoteSelectionBar(blocks: List<NoteDocBlock>, selected: Set<String>, onChange: (Set<String>) -> Unit) {
+    val context = LocalContext.current
+    val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
+    val chosen = blocks.filter { it.id in selected }
+    val all = chosen.size == blocks.size
+    Row(Modifier.fillMaxWidth().background(NotesPaper).padding(bottom = 10.dp, top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(if (chosen.isEmpty()) "Tap blocks to select" else "${chosen.size} selected",
+            color = Muted, fontSize = 12.sp, maxLines = 1, modifier = Modifier.weight(1f).testTag("notes_selection_count"))
+        Text(if (all) "Clear" else "Select all", color = Green, fontSize = 13.sp,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                .clickable(role = Role.Button) { onChange(if (all) emptySet() else blocks.mapTo(LinkedHashSet()) { it.id }) }
+                .padding(horizontal = 8.dp, vertical = 10.dp).testTag("notes_select_all"))
+        Text(if (chosen.isEmpty()) "Copy all" else "Copy", color = Green, fontSize = 13.sp,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                .clickable(role = Role.Button) {
+                    val text = selectableNoteText(chosen.ifEmpty { blocks }).text
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("Virlin note", text))
+                }
+                .padding(horizontal = 8.dp, vertical = 10.dp)
+                .testTag(if (chosen.isEmpty()) "notes_copy_all" else "notes_copy_selection"))
+    }
+}
+
+/**
+ * One block drawn exactly as in the note, under a layer that takes its touches: a tap selects
+ * or unselects the whole block (video, audio, image, equation or text alike), a long press
+ * selects every block from the last one touched.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SelectableNoteBlock(
+    block: NoteDocBlock,
+    selected: Boolean,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val accent = Green
+    Box(Modifier.fillMaxWidth()) {
+        content()
+        Box(
+            Modifier.matchParentSize()
+                .clip(RoundedCornerShape(8.dp))
+                .then(if (selected) Modifier.background(accent.copy(alpha = .14f))
+                    .border(1.5.dp, accent.copy(alpha = .7f), RoundedCornerShape(8.dp)) else Modifier)
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    role = Role.Checkbox,
+                    onLongClickLabel = "Select up to here",
+                    onLongClick = onLongPress,
+                    onClick = onTap,
+                )
+                .semantics {
+                    this.selected = selected
+                    stateDescription = if (selected) "Selected" else "Not selected"
+                }
+                .testTag("notes_select_block_${block.id}"),
+        )
     }
 }
 

@@ -313,6 +313,10 @@ class RoomWorkStreamRepository private constructor(
                 }
             )
         }
+        override suspend fun deleteNoteDoc(ownerKey: String) {
+            db.virlinNoteChunks().deleteByOwner(ownerKey)
+            db.virlinNotes().deleteByOwner(ownerKey)
+        }
 
         override suspend fun mapNodePreviewOf(ownerId: String) =
             db.mapNodePreviews().byOwner(ownerId)?.let {

@@ -1,6 +1,13 @@
 package com.virlin.app.ui.map
 
 import android.net.Uri
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.PictureAsPdf
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -230,7 +237,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
     }
     var selectedNode by remember { mutableStateOf<MapTopic?>(null) }
     var colorPickerNodeId by remember(project.id) { mutableStateOf<String?>(null) }
-    val editHistory = remember(project.id) { MapEditHistory() }
+    val editHistory = remember(project.id) { MapEditHistories.of(project.id) }
     var historyRevision by remember(project.id) { androidx.compose.runtime.mutableIntStateOf(0) }
     var historyBusy by remember(project.id) { mutableStateOf(false) }
     fun historyChanged() { historyRevision++ }
@@ -381,7 +388,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                     historyChanged()
                 } else {
                     // A copy creates a new hierarchy with new ids; do not replay stale moves.
-                    editHistory.clear()
+                    editHistory.dropMoves()
                     historyChanged()
                 }
                 // A queued snackbar would keep offering Undo for an EARLIER move while a later
@@ -416,19 +423,43 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
         }
     }
 
+    /** The canonical title paths: the same calls the project, workstream and task screens make. */
+    suspend fun renameNode(kind: MapKind, id: String, title: String): ActionResult<*> {
+        val actions = VirlinGraph.actions
+        val name = com.virlin.app.domain.action.Field.Set(title)
+        return when (kind) {
+            MapKind.PROJECT -> actions.updateProject(id, com.virlin.app.domain.action.ProjectUpdate(title = name))
+            MapKind.WORKSTREAM -> actions.updateContext(id, com.virlin.app.domain.action.ContextUpdate(title = name))
+            MapKind.TASK -> actions.updateTask(id, com.virlin.app.domain.action.TaskUpdate(title = name))
+        }
+    }
+
     suspend fun travelHistory(undo: Boolean) {
         if (historyBusy) return
         val edit = if (undo) editHistory.undoCandidate() else editHistory.redoCandidate()
         if (edit == null) return
         historyBusy = true
+        // A step that can no longer be replayed is dropped with its reason, so it cannot block
+        // every earlier step behind it.
+        fun drop(reason: String) {
+            editHistory.discard(edit)
+            historyChanged()
+            notice = (if (undo) "Can't undo" else "Can't redo") to reason
+        }
+        var done = false
         try {
             when (edit) {
                 is MapEdit.Appearance -> {
-                    val restored = if (undo) edit.before else edit.after
-                    latestHistoryAppearance = restored
-                    store.save(project.id, restored)
+                    val current = latestHistoryAppearance ?: appearance
+                    val restored = if (undo) current.applyStep(edit.after, edit.before)
+                        else current.applyStep(edit.before, edit.after)
+                    if (restored != current) {
+                        latestHistoryAppearance = restored
+                        store.save(project.id, restored)
+                    }
                     if (undo) editHistory.confirmUndo(edit) else editHistory.confirmRedo(edit)
                     historyChanged()
+                    done = true
                 }
                 is MapEdit.Move -> {
                     val request = if (undo) {
@@ -437,21 +468,43 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                     } else edit.forward.copy(expectedRevision =
                         VirlinGraph.actions.hierarchyRevision(project.id))
                     if (request == null) {
-                        refused = "This move can no longer be reversed."
+                        drop("This move can no longer be reversed.")
                     } else when (val result = VirlinGraph.actions.placeBranch(project.id, request)) {
                         is ActionResult.Success -> {
                             if (undo) editHistory.confirmUndo(edit)
                             else editHistory.confirmRedo(edit.copy(commit = result.value))
                             historyChanged()
+                            done = true
                         }
-                        is ActionResult.Rejected -> refused =
+                        is ActionResult.Rejected -> drop(
                             (result.reason as? DomainError.PlacementRejected)?.reason
-                                ?: "The hierarchy changed; this edit could not be restored."
-                        else -> refused = "This edit could not be restored."
+                                ?: "The hierarchy changed; this edit could not be restored.")
+                        else -> drop("This edit could not be restored.")
+                    }
+                }
+                is MapEdit.Rename -> {
+                    val expected = if (undo) edit.after else edit.before
+                    val now = topics.firstOrNull { it.id == edit.id }?.title
+                    if (now == null) drop("That box no longer exists, so its name cannot be restored.")
+                    else if (now != expected) drop("That name was changed since, so it was left as \"$now\".")
+                    else when (val result = renameNode(edit.kind, edit.id, if (undo) edit.before else edit.after)) {
+                        is ActionResult.Success -> {
+                            if (undo) editHistory.confirmUndo(edit) else editHistory.confirmRedo(edit)
+                            historyChanged()
+                            done = true
+                        }
+                        else -> drop(editRefusal(result))
                     }
                 }
             }
         } finally { historyBusy = false }
+        if (done) {
+            snackbar.currentSnackbarData?.dismiss()
+            scope.launch {
+                snackbar.showSnackbar((if (undo) "Undone: " else "Redone: ") + edit.describe(),
+                    withDismissAction = true)
+            }
+        }
     }
 
     /**
@@ -474,6 +527,24 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
         historyChanged()
         latestHistoryAppearance = changed
         store.save(project.id, changed)
+    }
+
+    val exportOptions = remember(project.title) {
+        val name = project.title.fileSafe()
+        listOf(
+            MapExportOption("map_export_xmind", "XMind", Icons.Default.AccountTree) {
+                exportXmind.launch("$name.xmind") },
+            MapExportOption("map_export_virlin", "VMap", Icons.Default.Layers) {
+                exportVirlin.launch("$name.vmap") },
+            MapExportOption("map_export_pdf", "PDF", Icons.Default.PictureAsPdf) {
+                exportPdf.launch("$name.pdf") },
+            MapExportOption("map_export_png", "PNG image", Icons.Default.Image) {
+                exportPng.launch("$name.png") },
+            MapExportOption("map_export_md", "Markdown", Icons.Default.Description) {
+                exportMarkdown.launch("$name.md") },
+            MapExportOption("map_export_json", "JSON", Icons.Default.Code) {
+                exportJson.launch("$name.json") },
+        )
     }
 
     VirlinProjectMindMap(
@@ -612,6 +683,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                 affectedCount = selectedNode?.let { branchSize(it.id) } ?: 0,
                 clipboard = clipboard,
                 organizing = structureMode,
+                exportOptions = exportOptions,
                 // The floating toolbar owns Open Task, while Organize keeps Move.
                 taskToolbarPresent = selectedNode?.kind == MapKind.TASK,
                 onOpen = { selectedNode?.let(::openTopic) },
@@ -686,6 +758,11 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                         saveMapAppearance(clearBoxColor(latestHistoryAppearance ?: appearance, id))
                     }
                 },
+                onSetBoxColor = { color ->
+                    selectedNode?.id?.let { id ->
+                        saveMapAppearance(setBoxColor(latestHistoryAppearance ?: appearance, id, color))
+                    }
+                },
                 selectedBoxHidden = selectedNode?.id in (latestHistoryAppearance ?: appearance).hiddenNodeIds,
                 hasHiddenBoxes = (latestHistoryAppearance ?: appearance).hiddenNodeIds.isNotEmpty(),
                 showHidden = showHidden,
@@ -712,6 +789,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                 nodeTitle = topic.title,
                 draft = draft,
                 savingName = previewNameSaving,
+                nameLabel = if (topic.kind == MapKind.PROJECT) "Project name" else "Task name",
                 onDraftChange = { previewHost.draft = it },
                 onPickImage = { replacingImage = false; previewPicker.launch(arrayOf("image/*")) },
                 onReplaceImage = { replacingImage = true; previewPicker.launch(arrayOf("image/*")) },
@@ -722,22 +800,14 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                         previewNameSaving = true
                         scope.launch {
                         if (editedName != topic.title) {
-                            val result: ActionResult<*> = when (topic.kind) {
-                                MapKind.PROJECT -> VirlinGraph.actions.updateProject(topic.id,
-                                    com.virlin.app.domain.action.ProjectUpdate(
-                                        title = com.virlin.app.domain.action.Field.Set(editedName)))
-                                MapKind.WORKSTREAM -> VirlinGraph.actions.updateContext(topic.id,
-                                    com.virlin.app.domain.action.ContextUpdate(
-                                        title = com.virlin.app.domain.action.Field.Set(editedName)))
-                                MapKind.TASK -> VirlinGraph.actions.updateTask(topic.id,
-                                    com.virlin.app.domain.action.TaskUpdate(
-                                        title = com.virlin.app.domain.action.Field.Set(editedName)))
-                            }
+                            val result = renameNode(topic.kind, topic.id, editedName)
                             if (result !is ActionResult.Success) {
                                 previewNameSaving = false
                                 snackbar.showSnackbar(editRefusal(result))
                                 return@launch
                             }
+                            editHistory.record(MapEdit.Rename(topic.kind, topic.id, topic.title, editedName))
+                            historyChanged()
                         }
                         previewHost.save(previewContext) { error ->
                             previewNameSaving = false
@@ -796,23 +866,16 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
             onSave = { title ->
                 renaming = null
                 scope.launch {
-                    val actions = VirlinGraph.actions
-                    // The canonical paths: the same calls the project and task screens make.
-                    val result = when (topic.kind) {
-                        MapKind.PROJECT -> actions.updateProject(
-                            topic.id,
-                            com.virlin.app.domain.action.ProjectUpdate(
-                                title = com.virlin.app.domain.action.Field.Set(title)
-                            )
-                        )
-                        else -> actions.updateTask(
-                            topic.id,
-                            com.virlin.app.domain.action.TaskUpdate(
-                                title = com.virlin.app.domain.action.Field.Set(title)
-                            )
-                        )
+                    // Workstreams are renamed on their own screen; this dialog edits tasks and the project.
+                    val kind = if (topic.kind == MapKind.PROJECT) MapKind.PROJECT else MapKind.TASK
+                    val result = renameNode(kind, topic.id, title)
+                    if (result is ActionResult.Success) {
+                        if (title != topic.title) {
+                            editHistory.record(MapEdit.Rename(kind, topic.id, topic.title, title))
+                            historyChanged()
+                        }
+                        selectedNode = null
                     }
-                    if (result is ActionResult.Success) selectedNode = null
                     else notice = "Can't rename this" to editRefusal(result)
                 }
             }
@@ -1003,12 +1066,15 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                     // addSubtask is THE canonical child creation: it inherits the parent's
                     // project and workstream and appends to the sibling group by the domain's
                     // own rules, so the map never writes an ownership field itself.
+                    val parentWasPaused = tasks.firstOrNull { it.id == parent.id }?.execution?.state ==
+                        com.virlin.app.domain.model.WorkStreamState.PAUSED
                     when (val result = VirlinGraph.actions.addSubtask(parent.id, title)) {
                         is ActionResult.Success -> {
                             // Stay on the parent so several children can be added in a row.
                             snackbar.currentSnackbarData?.dismiss()
                             snackbar.showSnackbar(
-                                "Added \"" + title + "\" under " + parent.title,
+                                "Added \"" + title + "\" under " + parent.title +
+                                    if (parentWasPaused) ". Its paused timer ended; recorded time is kept." else "",
                                 withDismissAction = true,
                             )
                         }
@@ -1020,28 +1086,26 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
     }
 
     duplicating?.let { topic ->
-        AlertDialog(
-            onDismissRequest = { duplicating = null },
-            title = { Text("Duplicate task branch?") },
-            text = { Text("A copy of this task and its subtasks will be placed beside the original.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    duplicating = null
-                    scope.launch {
-                        when (val result = VirlinGraph.actions.duplicateTask(topic.id)) {
-                            is ActionResult.Success -> {
-                                editHistory.clear()
-                                historyChanged()
-                                selectedNode = null
-                                snackbar.currentSnackbarData?.dismiss()
-                                snackbar.showSnackbar("Duplicated " + topic.title, withDismissAction = true)
-                            }
-                            else -> notice = "Can't duplicate this branch" to editRefusal(result)
+        MapConfirmDialog(
+            title = "Duplicate task branch?",
+            message = "A copy of this task and its subtasks will be placed beside the original.",
+            confirm = "Duplicate",
+            onDismiss = { duplicating = null },
+            onConfirm = {
+                duplicating = null
+                scope.launch {
+                    when (val result = VirlinGraph.actions.duplicateTask(topic.id)) {
+                        is ActionResult.Success -> {
+                            editHistory.dropMoves()
+                            historyChanged()
+                            selectedNode = null
+                            snackbar.currentSnackbarData?.dismiss()
+                            snackbar.showSnackbar("Duplicated " + topic.title, withDismissAction = true)
                         }
+                        else -> notice = "Can't duplicate this branch" to editRefusal(result)
                     }
-                }) { Text("Duplicate") }
+                }
             },
-            dismissButton = { TextButton(onClick = { duplicating = null }) { Text("Cancel") } },
         )
     }
 
@@ -1057,6 +1121,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                             if (result is ActionResult.Success ||
                                 repository.projects.value.none { it.id == project.id }) {
                                 editHistory.clear()
+                                MapEditHistories.forget(project.id)
                                 historyChanged()
                                 if (result !is ActionResult.Success) Toast.makeText(context,
                                     "Project removed. Remaining cleanup is queued for retry.",
@@ -1079,7 +1144,7 @@ private fun ProjectMapContent(projectId: String?, navController: NavController,
                     if (topic.kind == MapKind.WORKSTREAM) "workstream" else "task"),
                 onDismiss = { deletingNode = null },
                 onRemoved = {
-                    editHistory.clear()
+                    editHistory.dropMoves()
                     historyChanged()
                     deletingNode = null
                     selectedNode = null

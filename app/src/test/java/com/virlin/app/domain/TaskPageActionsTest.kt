@@ -109,6 +109,87 @@ class TaskPageActionsTest {
         assertNull(pages.duplicateNote("capture-x"))
     }
 
+    @Test fun duplicate_here_copies_notes_and_captures_right_after_the_original_but_not_the_checklist() = runTest {
+        val pages = TaskPageActions(repo, clock, ids)
+        val virlin = DefaultVirlinActions(repo, clock, ids)
+        val note = pages.newNote(task.id)!!
+        virlin.saveNoteDoc(note.ownerKey, "Plan", listOf(com.virlin.app.domain.notedoc.NoteDocBlock("a", text = "one")))
+        val link = (virlin.createCapture(CreateCapture(type = CaptureType.LINK, content = "{}", title = "Docs",
+            sourceUrl = "https://example.com", context = CaptureContext(taskId = task.id))) as ActionResult.Success).value
+        pages.ensure(task.id, TaskPageTypeKeys.TODO, task.id)
+        val blocks = pages.loadAndReconcile(task.id)
+
+        assertTrue(pages.duplicateHere(blocks.first { it.typeKey == TaskPageTypeKeys.NOTE }.id))
+        assertTrue(pages.duplicateHere(blocks.first { it.contentId == link.id }.id))
+        assertFalse(pages.duplicateHere(blocks.first { it.typeKey == TaskPageTypeKeys.TODO }.id))
+
+        val after = pages.loadAndReconcile(task.id)
+        assertEquals(5, after.size)
+        assertEquals(TaskPageTypeKeys.NOTE, after[1].typeKey)
+        assertEquals("Plan (copy)", repo.getNoteDoc(after[1].contentId)!!.title)
+        assertEquals(link.id, after[2].contentId)
+        val copy = repo.getCapture(after[3].contentId)!!
+        assertNotEquals(link.id, copy.id)
+        assertEquals("Docs (copy)", copy.title)
+        assertEquals(task.id, copy.taskId)
+        assertEquals("Docs", repo.getCapture(link.id)!!.title)
+    }
+
+    @Test fun deleting_from_the_page_removes_a_note_archives_a_capture_and_refuses_the_checklist() = runTest {
+        val pages = TaskPageActions(repo, clock, ids)
+        val virlin = DefaultVirlinActions(repo, clock, ids)
+        val note = pages.newNote(task.id)!!
+        virlin.saveNoteDoc(note.ownerKey, "Plan", listOf(com.virlin.app.domain.notedoc.NoteDocBlock("a", text = "one")))
+        val kept = pages.newNote(task.id)!!
+        virlin.saveNoteDoc(kept.ownerKey, kept.title, listOf(com.virlin.app.domain.notedoc.NoteDocBlock("b", text = "two")))
+        val link = (virlin.createCapture(CreateCapture(type = CaptureType.LINK, content = "{}",
+            sourceUrl = "https://example.com", context = CaptureContext(taskId = task.id))) as ActionResult.Success).value
+        pages.ensure(task.id, TaskPageTypeKeys.TODO, task.id)
+        val blocks = pages.loadAndReconcile(task.id)
+
+        assertTrue(pages.delete(blocks.first { it.contentId == note.ownerKey }.id))
+        assertNull(repo.getNoteDoc(note.ownerKey))
+        assertNotNull(repo.getNoteDoc(kept.ownerKey))
+        assertTrue(pages.delete(blocks.first { it.contentId == link.id }.id))
+        assertEquals(CaptureStatus.ARCHIVED, repo.getCapture(link.id)!!.status)
+        assertFalse(pages.delete(blocks.first { it.typeKey == TaskPageTypeKeys.TODO }.id))
+
+        // Reopening does not bring either back, and the rest keep a dense order.
+        val after = pages.loadAndReconcile(task.id)
+        assertEquals(listOf(kept.ownerKey, task.id), after.map { it.contentId })
+        assertEquals(listOf(0, 1), after.map { it.order })
+        // The deleted note's task can still start a fresh note later.
+        assertEquals(note.ownerKey, pages.newNote(task.id)!!.ownerKey)
+    }
+
+    @Test fun moving_a_note_carries_its_whole_document_to_the_other_task() = runTest {
+        val pages = TaskPageActions(repo, clock, ids)
+        val virlin = DefaultVirlinActions(repo, clock, ids)
+        val note = pages.newNote(task.id)!!
+        virlin.saveNoteDoc(note.ownerKey, "Plan", listOf(com.virlin.app.domain.notedoc.NoteDocBlock("a", text = "one")))
+        val kept = pages.newNote(task.id)!!
+        virlin.saveNoteDoc(kept.ownerKey, kept.title, listOf(com.virlin.app.domain.notedoc.NoteDocBlock("b", text = "two")))
+        val source = repo.getNoteDoc(note.ownerKey)!!
+        val block = pages.loadAndReconcile(task.id).first { it.contentId == note.ownerKey }
+
+        assertNull(pages.moveNote(block.id, task.id))
+        val owner = pages.moveNote(block.id, other.id)!!
+        assertEquals(other.id, TaskPageTypeKeys.noteTaskId(owner))
+        val moved = repo.getNoteDoc(owner)!!
+        assertEquals(source.blocks, moved.blocks)
+        assertEquals(source.richDocument, moved.richDocument)
+        assertEquals("Plan", moved.title)
+        assertNull(repo.getNoteDoc(note.ownerKey))
+        assertEquals(listOf(kept.ownerKey), pages.loadAndReconcile(task.id).map { it.contentId })
+        assertEquals(listOf(owner), pages.loadAndReconcile(other.id).map { it.contentId })
+
+        // An empty note has nothing to carry: nothing is written.
+        val empty = pages.newNote(task.id)!!
+        val emptyBlock = repo.getTaskPageBlocks(task.id).first { it.contentId == empty.ownerKey }
+        assertNull(pages.moveNote(emptyBlock.id, other.id))
+        assertEquals(listOf(owner), repo.getTaskPageBlocks(other.id).map { it.contentId })
+    }
+
     @Test fun reopening_the_page_drops_new_notes_left_unwritten_and_keeps_saved_ones() = runTest {
         val pages = TaskPageActions(repo, clock, ids)
         val virlin = DefaultVirlinActions(repo, clock, ids)

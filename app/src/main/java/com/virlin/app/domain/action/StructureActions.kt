@@ -104,12 +104,21 @@ internal class StructureActions(
         val all = allTasks()
         val now = clock.now()
 
+        // An Organize-paused owner may take children; its paused timer ends once the add is valid.
+        var organizePausedOwner: String? = null
         if (repository.taskExecutionEnabled) {
             val parentActivity = r.parentTaskId?.let { getTask(it)?.execution }
             val streamActivity = if (r.parentTaskId == null) r.workStreamId?.let { getStream(it) } else null
-            if ((parentActivity != null && parentActivity.state != WorkStreamState.READY && parentActivity.state != WorkStreamState.DONE) ||
-                (streamActivity != null && streamActivity.state != WorkStreamState.READY && streamActivity.state != WorkStreamState.DONE))
-                return@with ActionResult.Rejected(DomainError.PlacementRejected("End this item's activity and reminders before adding children. Recorded time will remain saved."))
+            val activeOwner = when {
+                parentActivity != null && parentActivity.state != WorkStreamState.READY && parentActivity.state != WorkStreamState.DONE -> r.parentTaskId
+                streamActivity != null && streamActivity.state != WorkStreamState.READY && streamActivity.state != WorkStreamState.DONE -> streamActivity.id
+                else -> null
+            }
+            if (activeOwner != null) {
+                if (!isOrganizePaused(activeOwner))
+                    return@with ActionResult.Rejected(DomainError.PlacementRejected("End this item's activity and reminders before adding children. Recorded time will remain saved."))
+                organizePausedOwner = activeOwner
+            }
         }
 
         // Resolve ownership deterministically.
@@ -150,6 +159,7 @@ internal class StructureActions(
             execution = if (repository.taskExecutionEnabled) com.virlin.app.domain.model.TaskExecution() else null,
             createdAt = now, updatedAt = now
         )
+        organizePausedOwner?.let { endOrganizePauseForChildren(it, now) { ids.newId("ev") } }
         saveTask(task)
         workStreamId?.let {
             streamEvent(it, EventType.TASK_CREATED, now,
@@ -400,6 +410,7 @@ internal class StructureActions(
             target?.id?.let { rejectActiveDestination(it) }?.let { return@tx it }
             if (all.filter { it.id in subtree }.any { it.execution?.state?.let { state -> state != WorkStreamState.READY && state != WorkStreamState.DONE } == true })
                 return@tx ActionResult.Rejected(DomainError.PlacementRejected("End branch activity before changing its workstream."))
+            target?.id?.let { endOrganizePauseForChildren(it, now) { ids.newId("ev") } }
         }
         val moved = task.copy(workStreamId = target?.id, projectId = projectId, updatedAt = now)
         saveTask(moved)
@@ -488,7 +499,8 @@ internal class StructureActions(
         val source = all.first { it.id == allowed.source.id }
         if (repository.taskExecutionEnabled && (source.parentTaskId != newParentTaskId || source.workStreamId != newStreamId || request.operation == PlacementOperation.COPY)) {
             rejectActiveDestination(request.targetParentId)?.let { return@tx it }
-            if (request.operation == PlacementOperation.MOVE && (listOf(source) + TaskHierarchy.descendants(all, source.id)).any { it.execution?.state?.let { state -> state != WorkStreamState.READY && state != WorkStreamState.DONE } == true })
+            if (request.operation == PlacementOperation.MOVE &&
+                hasActivityBlockingMove(listOf(source) + TaskHierarchy.descendants(all, source.id), sameStream = source.workStreamId == newStreamId))
                 return@tx ActionResult.Rejected(DomainError.PlacementRejected("End branch activity before moving it to another parent. Reordering remains available."))
         }
         val commit = when (request.operation) {
@@ -497,6 +509,9 @@ internal class StructureActions(
             PlacementOperation.COPY ->
                 copyBranch(allowed, all, newParentTaskId, newStreamId, project.id, request.insertBeforeId, now)
         }
+        // After the branch writes: sibling renumbering saves rows from the pre-move snapshot.
+        if (repository.taskExecutionEnabled && (source.parentTaskId != newParentTaskId || source.workStreamId != newStreamId || request.operation == PlacementOperation.COPY))
+            endOrganizePauseForChildren(request.targetParentId, now) { ids.newId("ev") }
 
         // One event for the whole operation, on the stream that received the branch. A
         // standalone landing has no stream to carry it.
@@ -732,7 +747,7 @@ internal class StructureActions(
         // Into itself, or into its own subtree, would orphan the branch from the tree.
         if (repository.taskExecutionEnabled && moving.any { it.parentTaskId != newParentId }) {
             newParentId?.let { rejectActiveDestination(it) }?.let { return@tx it }
-            if (moving.flatMap { listOf(it) + TaskHierarchy.descendants(all, it.id) }.any { it.execution?.state?.let { state -> state != WorkStreamState.READY && state != WorkStreamState.DONE } == true })
+            if (hasActivityBlockingMove(moving.flatMap { listOf(it) + TaskHierarchy.descendants(all, it.id) }, sameStream = true))
                 return@tx ActionResult.Rejected(DomainError.PlacementRejected("End branch activity before changing its parent. Reordering remains available."))
         }
         if (parent != null) {
@@ -743,6 +758,7 @@ internal class StructureActions(
         }
 
         val now = clock.now()
+        val reparenting = repository.taskExecutionEnabled && moving.any { it.parentTaskId != newParentId }
         val movedIds = moving.map { it.id }.toSet()
         // Siblings at the destination, with the moved tasks taken out, in their stored order.
         val destination = all
@@ -767,6 +783,7 @@ internal class StructureActions(
             saveTask(updated)
             updated
         }
+        if (reparenting) newParentId?.let { endOrganizePauseForChildren(it, now) { ids.newId("ev") } }
         streamEvent(stream.id, EventType.TASK_UPDATED, now,
             TaskEventDetail.encode(moving.first().id, moving.first().title,
                 moving.first().status, moving.first().status))
@@ -942,9 +959,16 @@ internal class StructureActions(
 
     private suspend fun WorkStreamWriter.rejectActiveDestination(id: String): ActionResult.Rejected? {
         val state = getTask(id)?.execution?.state ?: getStream(id)?.state ?: return null
-        return if (state !in setOf(WorkStreamState.READY, WorkStreamState.DONE))
+        return if (state !in setOf(WorkStreamState.READY, WorkStreamState.DONE) && !isOrganizePaused(id))
             ActionResult.Rejected(DomainError.PlacementRejected("End the destination item's activity before giving it children.")) else null
     }
+
+    /** Moving inside one workstream keeps each task's timer history with it, so Organize-paused timers may travel. */
+    private suspend fun WorkStreamWriter.hasActivityBlockingMove(branch: List<Task>, sameStream: Boolean): Boolean =
+        branch.any { task ->
+            val state = task.execution?.state ?: return@any false
+            state != WorkStreamState.READY && state != WorkStreamState.DONE && !(sameStream && isOrganizePaused(task.id))
+        }
 
     private suspend fun <T> tx(block: suspend WorkStreamWriter.() -> ActionResult<T>): ActionResult<T> =
         try { repository.transaction { block() } } catch (e: Exception) { ActionResult.Failure(e) }

@@ -1,5 +1,26 @@
 package com.virlin.app.ui.map
 
+import android.content.Context
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import com.virlin.app.ui.notes.NoteColorPalettes
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -58,6 +79,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
@@ -76,6 +98,13 @@ import kotlinx.coroutines.delay
 
 const val MapStructureBarTag = "map_structure_bar"
 const val MapMoveSheetTag = "map_move_sheet"
+const val MapExportStripTag = "map_export_strip"
+const val MapConfirmDialogTag = "map_confirm_dialog"
+const val MapConfirmCancelTag = "map_confirm_cancel"
+const val MapConfirmOkTag = "map_confirm_ok"
+const val MapBoxColorHexTag = "map_box_color_hex"
+const val MapBoxColorHexFieldTag = "map_box_color_hex_field"
+const val MapBoxColorHexApplyTag = "map_box_color_hex_apply"
 fun mapDestinationTag(id: String) = "map_destination_$id"
 
 // The map surface's palette. Package-visible so every map overlay - the structure bar, the
@@ -124,96 +153,193 @@ fun MapStructureBar(
     onToggleColorPicker: () -> Unit = {},
     onChooseBoxColor: (Long) -> Unit = {},
     onClearBoxColor: () -> Unit = {},
+    /** Sets a colour without toggling it off, for colour codes and custom swatches. */
+    onSetBoxColor: (Long) -> Unit = onChooseBoxColor,
     selectedBoxHidden: Boolean = false,
     hasHiddenBoxes: Boolean = false,
     showHidden: Boolean = false,
     onToggleHideBox: () -> Unit = {},
     onToggleShowHidden: () -> Unit = {},
+    /** Map-wide export formats. When present, Organize shows an Export tool that opens them. */
+    exportOptions: List<MapExportOption> = emptyList(),
 ) {
-    if (selected == null) {
-        // Hiding deselects a box. Keep this map-level recovery action reachable without selection.
-        if (organizing && hasHiddenBoxes) {
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp),
-                horizontalArrangement = Arrangement.End) {
-                MapIconAction(Icons.Default.Visibility, "Show hidden", showHidden,
-                    false, true, 0L, onToggleShowHidden)
-            }
-        }
-        return
+    if (selected == null && !organizing) return
+    var exportOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(organizing) { if (!organizing) exportOpen = false }
+    // One extra strip at a time: opening the colours closes Export, and the reverse below.
+    LaunchedEffect(colorPickerOpen, selected?.id) {
+        if (colorPickerOpen && selected != null) exportOpen = false
     }
-    val openLabel = when (selected.kind) {
+    val openLabel = when (selected?.kind) {
         MapKind.TASK -> "Open Task"
         MapKind.WORKSTREAM -> "Open Workstream"
         else -> "Open Project"
     }
-    val secondaryActions = buildList {
+    Column(Modifier.fillMaxWidth().testTag(MapStructureBarTag), horizontalAlignment = Alignment.End) {
         if (organizing) {
-            add(MapToolbarAction(Icons.Default.AccountTree, "Add branch", onAddBranch))
-            if (selected.kind == MapKind.TASK) {
-                add(MapToolbarAction(Icons.Default.ContentCopy, "Copy", onCopy))
-                add(MapToolbarAction(Icons.Default.FileCopy, "Duplicate", onDuplicate))
-            } else if (!taskToolbarPresent) {
-                add(MapToolbarAction(Icons.Default.OpenInNew, openLabel, onOpen))
+            // Grouped like the notes rail: shaping the branch, copying it, its look, history,
+            // export, delete. Box tools wait for a selected box; map-wide tools always work.
+            val boxSelected = selected != null
+            val groups = listOf(
+                listOf(
+                    MapToolbarAction(Icons.Default.Edit, "Edit", onEdit, enabled = boxSelected),
+                    MapToolbarAction(Icons.Default.DriveFileMove, "Into", onMove,
+                        enabled = boxSelected && selected?.kind != MapKind.PROJECT),
+                    MapToolbarAction(Icons.Default.AccountTree, "Add branch", onAddBranch, enabled = boxSelected),
+                ),
+                buildList {
+                    if (selected?.kind == MapKind.TASK || selected == null) {
+                        add(MapToolbarAction(Icons.Default.ContentCopy, "Copy", onCopy, enabled = boxSelected))
+                        add(MapToolbarAction(Icons.Default.FileCopy, "Duplicate", onDuplicate, enabled = boxSelected))
+                    } else if (!taskToolbarPresent) {
+                        add(MapToolbarAction(Icons.Default.OpenInNew, openLabel, onOpen))
+                    }
+                    if (clipboard != null) add(MapToolbarAction(Icons.Default.ContentPaste, "Paste into", onPaste,
+                        enabled = boxSelected))
+                },
+                listOf(
+                    MapToolbarAction(Icons.Default.SwapHoriz, "Resize horizontally", onToggleResize,
+                        boxSelected && resizing, enabled = boxSelected),
+                    MapToolbarAction(Icons.Default.Palette, "Box color", onToggleColorPicker,
+                        selected = boxSelected && selectedBoxColor != null, enabled = boxSelected),
+                    MapToolbarAction(Icons.Default.VisibilityOff, "Hide box", onToggleHideBox,
+                        selected = selectedBoxHidden, enabled = boxSelected && selected?.kind != MapKind.PROJECT),
+                    MapToolbarAction(Icons.Default.Visibility, "Show hidden", onToggleShowHidden,
+                        selected = showHidden, enabled = hasHiddenBoxes),
+                ),
+                listOf(
+                    MapToolbarAction(Icons.Default.Undo, "Undo", onUndo, enabled = canUndo),
+                    MapToolbarAction(Icons.Default.Redo, "Redo", onRedo, enabled = canRedo),
+                ),
+                if (exportOptions.isEmpty()) emptyList()
+                else listOf(MapToolbarAction(Icons.Default.IosShare, "Export", {
+                    val opening = !exportOpen
+                    if (opening && colorPickerOpen && selected != null) onToggleColorPicker()
+                    exportOpen = opening
+                }, selected = exportOpen)),
+                listOf(MapToolbarAction(Icons.Outlined.DeleteOutline, "Delete selected box", onDelete,
+                    destructive = true, enabled = boxSelected)),
+            ).filter { it.isNotEmpty() }
+            MapOrganizeStrip(selected?.id.orEmpty(), groups, onClear.takeIf { boxSelected })
+        } else {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.weight(1f))
+                if (!taskToolbarPresent) MapIconAction(Icons.Default.OpenInNew, openLabel, false, false, true, 0L, onOpen)
+                MapIconAction(Icons.Default.Close, "Clear selection", false, false, true, 0L, onClear)
             }
-            if (clipboard != null) add(MapToolbarAction(Icons.Default.ContentPaste, "Paste into", onPaste))
-            add(MapToolbarAction(Icons.Default.SwapHoriz, "Resize horizontally", onToggleResize, resizing))
-            add(MapToolbarAction(Icons.Outlined.DeleteOutline, "Delete selected box", onDelete,
-                destructive = true))
-            add(MapToolbarAction(Icons.Default.Undo, "Undo", onUndo, enabled = canUndo))
-            add(MapToolbarAction(Icons.Default.Redo, "Redo", onRedo, enabled = canRedo))
-            add(MapToolbarAction(Icons.Default.Palette, "Box color", onToggleColorPicker,
-                selected = selectedBoxColor != null))
-            add(MapToolbarAction(Icons.Default.VisibilityOff, "Hide box", onToggleHideBox,
-                selected = selectedBoxHidden, enabled = selected.kind != MapKind.PROJECT))
-            add(MapToolbarAction(Icons.Default.Visibility, "Show hidden", onToggleShowHidden,
-                selected = showHidden, enabled = hasHiddenBoxes))
-        } else if (!taskToolbarPresent) {
-            add(MapToolbarAction(Icons.Default.OpenInNew, openLabel, onOpen))
+        }
+        if (organizing && colorPickerOpen && selected != null) {
+            MapBoxColorPalette(selectedBoxColor, onChooseBoxColor, onClearBoxColor, onSetBoxColor)
+        }
+        AnimatedVisibility(
+            visible = organizing && exportOpen && exportOptions.isNotEmpty(),
+            enter = fadeIn(tween(180)) + expandVertically(tween(220)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(180)),
+        ) {
+            MapExportStrip(exportOptions, onClose = { exportOpen = false })
         }
     }
-    Column(Modifier.fillMaxWidth().testTag(MapStructureBarTag), horizontalAlignment = Alignment.End) {
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp),
+}
+
+/** One export format offered from the Organize strip. */
+class MapExportOption(val tag: String, val label: String, val icon: ImageVector, val onClick: () -> Unit)
+
+/** Map-wide export formats in a feathered, horizontally scrolling strip under Organize. */
+@Composable
+private fun MapExportStrip(options: List<MapExportOption>, onClose: () -> Unit) {
+    BackHandler { onClose() }
+    val palette = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+    val accent = palette?.let { Color(it.secondary) } ?: MapGreen
+    Box(Modifier.fillMaxWidth().background(Color.White).testTag(MapExportStripTag)) {
+        Row(Modifier.fillMaxWidth().height(52.dp).padding(start = 10.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            if (organizing) {
-                val actionScroll = rememberScrollState()
-                LaunchedEffect(selected.id, actionScroll.maxValue) {
-                    actionScroll.scrollTo(actionScroll.maxValue)
-                }
-                Row(Modifier.weight(1f).horizontalScroll(actionScroll),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    secondaryActions.asReversed().forEachIndexed { index, action ->
-                        key(selected.id, action.label) {
-                            MapIconAction(action.icon, action.label, action.selected,
-                                action.destructive, action.enabled,
-                                entranceDelayMs = (secondaryActions.size - index) * 45L,
-                                action.onClick)
-                        }
+            Box(Modifier.size(30.dp).clip(RoundedCornerShape(50)).background(accent.copy(alpha = .12f)),
+                contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.IosShare, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+            }
+            Spacer(Modifier.width(6.dp))
+            com.virlin.app.ui.notes.NoteFeatheredRow(Modifier.weight(1f).height(52.dp), peek = true) {
+                options.forEachIndexed { index, option ->
+                    if (index > 0) Spacer(Modifier.width(8.dp))
+                    val shape = RoundedCornerShape(12.dp)
+                    Row(
+                        Modifier.height(38.dp).clip(shape)
+                            .background(Color.White)
+                            .border(1.dp, MapHairline, shape)
+                            .clickable(role = Role.Button) { onClose(); option.onClick() }
+                            .semantics { contentDescription = "Export as ${option.label}" }
+                            .testTag(option.tag)
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(option.icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(option.label, color = MapInk, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                     }
                 }
-                // Primary actions stay visible at the right while the rest scrolls to their left.
-                MapIconAction(Icons.Default.Edit, "Edit", false, false, true, 0L, onEdit)
-                MapIconAction(Icons.Default.DriveFileMove, "Into", false, false,
-                    selected.kind != MapKind.PROJECT, 0L, onMove)
-            } else {
-                Spacer(Modifier.weight(1f))
-                secondaryActions.forEach { action ->
-                    MapIconAction(action.icon, action.label, action.selected,
-                        action.destructive, action.enabled, 0L, action.onClick)
-                }
             }
-            MapIconAction(Icons.Default.Close, "Clear selection", false, false, true, 0L, onClear)
-        }
-        if (organizing && colorPickerOpen) {
-            val paletteScroll = rememberScrollState()
-            val surface = MaterialTheme.colorScheme.surface
-            val featherPx = with(LocalDensity.current) { 36.dp.toPx() }
             Box(
-                Modifier.fillMaxWidth().height(52.dp)
-                    .testTag("map_box_color_palette")
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(surface)
-                    .border(1.dp, MapHairline, RoundedCornerShape(16.dp)),
-            ) {
+                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
+                    .clickable(role = Role.Button, onClick = onClose)
+                    .semantics { contentDescription = "Close export" },
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Default.Close, contentDescription = null, tint = MapMuted, modifier = Modifier.size(20.dp)) }
+        }
+        Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(1.dp).background(MapHairline))
+    }
+}
+
+private const val MAX_RECENT_BOX_COLORS = 8
+
+private fun loadRecentBoxColors(context: Context): List<Long> =
+    context.getSharedPreferences("map_box_colors", Context.MODE_PRIVATE)
+        .getString("recent", "").orEmpty()
+        .split(',').mapNotNull { it.toLongOrNull() }.take(MAX_RECENT_BOX_COLORS)
+
+private fun saveRecentBoxColors(context: Context, values: List<Long>) {
+    context.getSharedPreferences("map_box_colors", Context.MODE_PRIVATE).edit()
+        .putString("recent", values.joinToString(",")).apply()
+}
+
+/**
+ * The box highlight swatches. The pinned "#" switches the strip to a colour-code field; codes
+ * applied there are kept at the front as custom swatches for reuse.
+ */
+@Composable
+private fun MapBoxColorPalette(
+    selectedBoxColor: Long?,
+    onChooseBoxColor: (Long) -> Unit,
+    onClearBoxColor: () -> Unit,
+    onSetBoxColor: (Long) -> Unit,
+) {
+    val context = LocalContext.current
+    val recents = remember { mutableStateListOf<Long>().apply { addAll(loadRecentBoxColors(context)) } }
+    var hexMode by remember { mutableStateOf(false) }
+    BackHandler(enabled = hexMode) { hexMode = false }
+    val custom = (listOfNotNull(selectedBoxColor) + recents).distinct()
+        .filter { it !in boxHighlightColors }
+    val paletteScroll = rememberScrollState()
+    val surface = MaterialTheme.colorScheme.surface
+    val featherPx = with(LocalDensity.current) { 36.dp.toPx() }
+    Box(
+        Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 6.dp).height(52.dp)
+            .testTag("map_box_color_palette")
+            .clip(RoundedCornerShape(16.dp))
+            .background(surface)
+            .border(1.dp, MapHairline, RoundedCornerShape(16.dp)),
+    ) {
+        if (hexMode) MapBoxHexEntry(
+            onBack = { hexMode = false },
+            onApply = { argb ->
+                recents.remove(argb); recents.add(0, argb)
+                while (recents.size > MAX_RECENT_BOX_COLORS) recents.removeAt(recents.lastIndex)
+                saveRecentBoxColors(context, recents.toList())
+                onSetBoxColor(argb)
+                hexMode = false
+            },
+        ) else Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f).height(52.dp)) {
                 Row(
                     Modifier.fillMaxWidth()
                         .horizontalScroll(paletteScroll)
@@ -234,26 +360,14 @@ fun MapStructureBar(
                         Icon(Icons.Default.FormatColorReset, contentDescription = null,
                             tint = MapMuted, modifier = Modifier.size(24.dp))
                     }
+                    custom.forEach { color ->
+                        val hex = NoteColorPalettes.hexOf(color)
+                        BoxColorSwatch(color, selectedBoxColor == color, "Box color $hex",
+                            "map_box_color_custom_${hex.removePrefix("#")}") { onSetBoxColor(color) }
+                    }
                     boxHighlightColors.forEachIndexed { index, color ->
-                        val active = selectedBoxColor == color
-                        Box(
-                            Modifier.size(40.dp)
-                                .testTag("map_box_color_$index")
-                                .semantics {
-                                    contentDescription = "Box color ${index + 1}"
-                                    this.selected = active
-                                }
-                                .clickable(role = Role.Button) { onChooseBoxColor(color) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Box(
-                                Modifier.size(if (active) 30.dp else 26.dp)
-                                    .background(Color(color.toInt()), RoundedCornerShape(50))
-                                    .then(if (active) Modifier.border(2.dp,
-                                        MaterialTheme.colorScheme.onSurface,
-                                        RoundedCornerShape(50)) else Modifier),
-                            )
-                        }
+                        BoxColorSwatch(color, selectedBoxColor == color, "Box color ${index + 1}",
+                            "map_box_color_$index") { onChooseBoxColor(color) }
                     }
                 }
                 // Stationary feathered edges make swatches emerge and disappear as the row moves.
@@ -273,7 +387,162 @@ fun MapStructureBar(
                             1f to surface)))
                 }
             }
+            Box(Modifier.width(1.dp).height(24.dp).background(MapHairline))
+            Box(
+                Modifier.padding(horizontal = 4.dp).size(40.dp).clip(RoundedCornerShape(12.dp))
+                    .clickable(role = Role.Button) { hexMode = true }
+                    .semantics { contentDescription = "Type a colour code" }
+                    .testTag(MapBoxColorHexTag),
+                contentAlignment = Alignment.Center,
+            ) { Text("#", color = MapInk, fontSize = 18.sp, fontWeight = FontWeight.SemiBold) }
         }
+    }
+}
+
+@Composable
+private fun BoxColorSwatch(color: Long, active: Boolean, label: String, tag: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(40.dp)
+            .testTag(tag)
+            .semantics {
+                contentDescription = label
+                this.selected = active
+            }
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(if (active) 30.dp else 26.dp)
+                .background(Color(color.toInt()), RoundedCornerShape(50))
+                .then(if (active) Modifier.border(2.dp,
+                    MaterialTheme.colorScheme.onSurface,
+                    RoundedCornerShape(50)) else Modifier),
+        )
+    }
+}
+
+@Composable
+private fun MapBoxHexEntry(onBack: () -> Unit, onApply: (Long) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val parsed = NoteColorPalettes.parseHex(text)
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    val apply = { parsed?.let(onApply); Unit }
+    Row(
+        Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
+                .clickable(role = Role.Button, onClick = onBack)
+                .semantics { contentDescription = "Back to colours" },
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = MapMuted, modifier = Modifier.size(20.dp)) }
+        val shape = RoundedCornerShape(12.dp)
+        Row(
+            Modifier.weight(1f).height(40.dp).clip(shape)
+                .border(1.dp, if (text.isNotEmpty() && parsed == null) Color(0xFFD32F2F) else MapGreen.copy(alpha = .6f), shape)
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("#", color = MapMuted, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            BasicTextField(
+                value = text,
+                onValueChange = { next ->
+                    text = next.trim().removePrefix("#").filter { it.isLetterOrDigit() }.take(6).uppercase()
+                },
+                singleLine = true,
+                textStyle = TextStyle(color = MapInk, fontSize = 16.sp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp),
+                cursorBrush = SolidColor(MapGreen),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters,
+                    autoCorrect = false, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { apply() }),
+                modifier = Modifier.weight(1f).padding(start = 4.dp).focusRequester(focus)
+                    .semantics { contentDescription = "Colour code" }
+                    .testTag(MapBoxColorHexFieldTag),
+            )
+            Box(
+                Modifier.size(24.dp).clip(RoundedCornerShape(50))
+                    .background(parsed?.let { Color(it.toInt()) } ?: Color.White)
+                    .border(1.dp, MapInk.copy(alpha = .18f), RoundedCornerShape(50)),
+            )
+        }
+        Row(
+            Modifier.height(40.dp).clip(RoundedCornerShape(12.dp))
+                .background(if (parsed != null) MapGreen else MapHairline)
+                .clickable(enabled = parsed != null, role = Role.Button, onClick = apply)
+                .semantics { contentDescription = "Apply colour code" }
+                .testTag(MapBoxColorHexApplyTag)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+            Text("Done", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+/**
+ * The organize tools as a strip under the map's top bar, made like the notes rail: bordered
+ * rounded buttons in groups, scrolling sideways under feathered edges. Clear stays put at the
+ * right, directly under the three-dot menu.
+ */
+@Composable
+private fun MapOrganizeStrip(selectedId: String, groups: List<List<MapToolbarAction>>, onClear: (() -> Unit)?) {
+    val entrance = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { entrance.animateTo(1f, tween(200)) }
+    val palette = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+    val accent = palette?.let { Color(it.secondary) } ?: MapGreen
+    // The strip is white whatever the map's colours, so icons use the dark map ink.
+    val ink = MapInk
+    Box(
+        Modifier.fillMaxWidth()
+            .graphicsLayer {
+                alpha = entrance.value
+                translationY = (1f - entrance.value) * -8.dp.toPx()
+            }
+            .background(Color.White)
+            .testTag("map_organize_strip"),
+    ) {
+        Row(Modifier.fillMaxWidth().height(56.dp).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            com.virlin.app.ui.notes.NoteFeatheredRow(Modifier.weight(1f).height(56.dp), peek = true) {
+                groups.forEachIndexed { index, group ->
+                    if (index > 0) Box(Modifier.padding(horizontal = 6.dp).width(1.dp).height(24.dp)
+                        .background(MapHairline))
+                    group.forEachIndexed { i, action ->
+                        if (i > 0) Spacer(Modifier.width(6.dp))
+                        key(selectedId, action.label) { MapStripTool(action, accent, ink) }
+                    }
+                }
+            }
+            if (onClear != null) MapIconAction(Icons.Default.Close, "Clear selection", false, false, true, 0L, onClear)
+        }
+        Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(1.dp).background(MapHairline))
+    }
+}
+
+@Composable
+private fun MapStripTool(action: MapToolbarAction, accent: Color, ink: Color) {
+    val shape = RoundedCornerShape(12.dp)
+    val color = when {
+        !action.enabled -> MapMuted.copy(alpha = .45f)
+        action.destructive -> MaterialTheme.colorScheme.error
+        action.selected -> accent
+        else -> ink
+    }
+    Box(
+        Modifier.size(40.dp)
+            .clip(shape)
+            .background(if (action.selected) accent.copy(alpha = .12f) else Color.White)
+            .border(1.dp, if (action.selected) accent.copy(alpha = .38f) else MapHairline, shape)
+            .semantics { contentDescription = action.label; this.selected = action.selected }
+            .clickable(enabled = action.enabled, role = Role.Button, onClick = action.onClick)
+            .testTag("map_tool_${action.label.lowercase().replace(' ', '_')}"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(action.icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -449,7 +718,10 @@ fun PlacementRefusedDialog(reason: String, onDismiss: () -> Unit) {
     )
 }
 
-/** Renaming a node in place, saved through the app's own update actions. */
+/**
+ * The one name editor for a map box: the Organize strip's Edit and the pencil in the preview
+ * editor both open it. Styled like the preview editor card. It only hands the new name back.
+ */
 @Composable
 fun MapRenameDialog(
     current: String,
@@ -458,25 +730,113 @@ fun MapRenameDialog(
     onSave: (String) -> Unit,
 ) {
     var text by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(current) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Edit name") },
-        text = {
-            androidx.compose.material3.OutlinedTextField(
-                value = text, onValueChange = { text = it },
-                label = { Text(label) }, singleLine = true,
-                modifier = Modifier.fillMaxWidth().testTag(MapRenameFieldTag)
-            )
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSave(text.trim()) },
-                enabled = text.isNotBlank() && text.trim() != current,
-                modifier = Modifier.testTag(MapRenameSaveTag)
-            ) { Text("Save") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
+    val palette = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+    val accent = palette?.let { Color(it.secondary) } ?: Color(0xFF0E7A54)
+    val ink = palette?.let { Color(it.text) } ?: Color(0xFF192229)
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        androidx.compose.material3.Surface(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).testTag(MapRenameDialogTag),
+            shape = RoundedCornerShape(26.dp),
+            color = Color.White,
+            shadowElevation = 16.dp,
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Edit name", modifier = Modifier.weight(1f), fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold, color = ink)
+                    Box(
+                        Modifier.size(44.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xFFF1F3F2))
+                            .semantics { contentDescription = "Close without saving" }
+                            .clickable(role = Role.Button, onClick = onDismiss),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Default.Close, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp)) }
+                }
+                Spacer(Modifier.height(14.dp))
+                Text(label, fontSize = 13.sp, color = accent, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(6.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    // Not single line: a pasted name can hold line breaks, and a single-line field shows
+                    // only its first line, so the rest could never be seen or removed.
+                    value = text, onValueChange = { text = it },
+                    minLines = 1, maxLines = 6,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = ink, fontSize = 16.sp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color(0xFFF7F9F8), unfocusedContainerColor = Color(0xFFF7F9F8),
+                        focusedBorderColor = accent, unfocusedBorderColor = Color.Transparent, cursorColor = accent),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus).testTag(MapRenameFieldTag)
+                )
+                Spacer(Modifier.height(18.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    TextButton(onClick = onDismiss, modifier = Modifier.weight(1f).height(48.dp).testTag(MapRenameCancelTag)) {
+                        Text("Cancel", color = ink)
+                    }
+                    androidx.compose.material3.Button(
+                        onClick = { onSave(text.trim()) },
+                        enabled = text.isNotBlank() && text.trim() != current,
+                        modifier = Modifier.weight(1f).height(48.dp).testTag(MapRenameSaveTag),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = accent,
+                            contentColor = com.virlin.app.ui.hierarchy.readableOn(accent)),
+                        shape = RoundedCornerShape(14.dp),
+                    ) { Text("Save") }
+                }
+            }
+        }
+    }
+}
+
+/** A yes/no question in the same card as [MapRenameDialog]: round close, Cancel and a thick confirm. */
+@Composable
+fun MapConfirmDialog(
+    title: String,
+    message: String,
+    confirm: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val palette = com.virlin.app.ui.hierarchy.LocalProjectPalette.current
+    val accent = palette?.let { Color(it.secondary) } ?: Color(0xFF0E7A54)
+    val ink = palette?.let { Color(it.text) } ?: Color(0xFF192229)
+    val muted = palette?.let { Color(it.muted) } ?: MapMuted
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        androidx.compose.material3.Surface(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).testTag(MapConfirmDialogTag),
+            shape = RoundedCornerShape(26.dp),
+            color = Color.White,
+            shadowElevation = 16.dp,
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, modifier = Modifier.weight(1f), fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold, color = ink)
+                    Box(
+                        Modifier.size(44.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xFFF1F3F2))
+                            .semantics { contentDescription = "Close" }
+                            .clickable(role = Role.Button, onClick = onDismiss),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Default.Close, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp)) }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(message, fontSize = 15.sp, color = muted, lineHeight = 21.sp)
+                Spacer(Modifier.height(20.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    TextButton(onClick = onDismiss, modifier = Modifier.weight(1f).height(48.dp)
+                        .testTag(MapConfirmCancelTag)) { Text("Cancel", color = ink) }
+                    androidx.compose.material3.Button(
+                        onClick = onConfirm,
+                        modifier = Modifier.weight(1f).height(48.dp).testTag(MapConfirmOkTag),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = accent,
+                            contentColor = com.virlin.app.ui.hierarchy.readableOn(accent)),
+                        shape = RoundedCornerShape(14.dp),
+                    ) { Text(confirm) }
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -547,6 +907,8 @@ const val MapAddTextSaveTag = "map_add_text_save"
 const val MapAddSubtaskFieldTag = "map_add_subtask_field"
 const val MapAddSubtaskSaveTag = "map_add_subtask_save"
 
+const val MapRenameDialogTag = "map_rename_dialog"
+const val MapRenameCancelTag = "map_rename_cancel"
 const val MapRenameFieldTag = "map_rename_field"
 const val MapRenameSaveTag = "map_rename_save"
 

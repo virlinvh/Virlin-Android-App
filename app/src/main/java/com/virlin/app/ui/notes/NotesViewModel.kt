@@ -920,6 +920,18 @@ class NotesViewModel(
         return applyTextCase(targets)
     }
 
+    /** [cycleTextCase] over the whole text of every selected block that has editable text. */
+    fun cycleBlocksCase(ids: Set<String>): Boolean {
+        val s = _state.value
+        if (s.pasting || s.loading || s.damaged) return false
+        val targets = s.blocks.indices.mapNotNull { i ->
+            val block = s.blocks[i]
+            if (block.id !in ids || !caseEditable(block) || block.text.isEmpty()) null
+            else i to block.text.indices
+        }
+        return applyTextCase(targets)
+    }
+
     private fun caseEditable(block: NoteDocBlock) = block.type.isTextual && block.type != NoteDocBlockType.CODE
 
     private fun applyTextCase(targets: List<Pair<Int, IntRange>>): Boolean {
@@ -1040,6 +1052,33 @@ class NotesViewModel(
         pushUndo()
         ui = s.copy(
             blocks = remaining.ifEmpty { listOf(newBlock()) },
+            focusedBlockId = null,
+            selection = TextRange.Zero,
+            caretMarks = emptySet(),
+            save = NoteSaveState.EDITED,
+        )
+        scheduleSave()
+        return true
+    }
+
+    /**
+     * Removes the selected blocks, media included, as one undo step. Refused with a message,
+     * changing nothing, when the stored rich document could not hold the result exactly.
+     */
+    fun deleteBlocks(ids: Set<String>): Boolean {
+        val s = _state.value
+        if (s.pasting || s.loading || s.damaged) return false
+        val remaining = s.blocks.filterNot { it.id in ids }
+        if (remaining.size == s.blocks.size) return false
+        val next = remaining.ifEmpty { listOf(newBlock()) }
+        if (!richDocumentAccepts(next)) {
+            ui = s.copy(dialog = NoteDialog.Message(
+                "These blocks can't be removed together here (they sit inside a nested part of this note). Nothing was changed."))
+            return false
+        }
+        pushUndo()
+        ui = s.copy(
+            blocks = next,
             focusedBlockId = null,
             selection = TextRange.Zero,
             caretMarks = emptySet(),

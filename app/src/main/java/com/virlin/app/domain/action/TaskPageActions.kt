@@ -1,6 +1,7 @@
 package com.virlin.app.domain.action
 
 import com.virlin.app.domain.id.IdProvider
+import com.virlin.app.domain.model.CaptureStatus
 import com.virlin.app.domain.model.TaskPageBlock
 import com.virlin.app.domain.model.TaskPageTypeKeys
 import com.virlin.app.domain.repository.WorkStreamRepository
@@ -16,7 +17,10 @@ class TaskPageActions(
     suspend fun loadAndReconcile(taskId: String): List<TaskPageBlock> {
         repository.transaction {
             getTask(taskId) ?: return@transaction
-            val captures = repository.captures.value.filter { it.taskId == taskId }
+            // Archived items were removed from the Page on purpose; restoring one brings it back.
+            val captures = repository.captures.value.filter {
+                it.taskId == taskId && it.status != CaptureStatus.ARCHIVED
+            }
             if (stepsOf(taskId).isNotEmpty()) ensurePageBlock(taskId, TaskPageTypeKeys.TODO, taskId)
             if (noteDocOf(TaskPageTypeKeys.noteOwner(taskId)) != null) {
                 ensurePageBlock(taskId, TaskPageTypeKeys.NOTE, TaskPageTypeKeys.noteOwner(taskId))
@@ -114,6 +118,31 @@ class TaskPageActions(
         true
     }
 
+    /**
+     * Moves a saved task note to another task of the same project: its whole document is stored
+     * under a new note of the destination, listed last on that Page, and only then removed from
+     * the source, all in one transaction. Returns the note's new owner key, or null when the note
+     * is empty, unreadable, already there, or the destination is not allowed; nothing is written then.
+     */
+    suspend fun moveNote(blockId: String, destinationTaskId: String): String? = repository.transaction {
+        val block = getPageBlock(blockId) ?: return@transaction null
+        if (block.typeKey != TaskPageTypeKeys.NOTE || block.taskId == destinationTaskId) return@transaction null
+        if (TaskPageTypeKeys.noteTaskId(block.contentId) != block.taskId) return@transaction null
+        val source = getTask(block.taskId) ?: return@transaction null
+        val destination = getTask(destinationTaskId) ?: return@transaction null
+        if (source.projectId != destination.projectId) return@transaction null
+        val doc = noteDocOf(block.contentId) ?: return@transaction null
+        if (doc.loadError != null) return@transaction null
+        val now = clock.now()
+        val owner = TaskPageTypeKeys.extraNoteOwner(destination.id, ids.newId("note"))
+        saveNoteDoc(doc.copy(ownerKey = owner, updatedAt = now, revision = 0))
+        ensurePageBlock(destination.id, TaskPageTypeKeys.NOTE, owner)
+        deleteNoteDoc(block.contentId)
+        deletePageBlock(block.id)
+        denseOrder(block.taskId, now)
+        owner
+    }
+
     suspend fun duplicate(blockId: String, destinationTaskId: String): Boolean = repository.transaction {
         val block = getPageBlock(blockId) ?: return@transaction false
         val destination = getTask(destinationTaskId) ?: return@transaction false
@@ -122,7 +151,10 @@ class TaskPageActions(
         val original = getCapture(block.contentId) ?: return@transaction false
         val now = clock.now()
         val copyId = ids.newId("cap")
-        val copy = original.copy(id = copyId, projectId = destination.projectId,
+        val sameTask = destination.id == block.taskId
+        val copyTitle = if (sameTask) original.title?.takeIf { it.isNotBlank() }?.let { "$it (copy)".take(MAX_NOTE_TITLE) }
+            else original.title
+        val copy = original.copy(id = copyId, title = copyTitle ?: original.title, projectId = destination.projectId,
             workStreamId = destination.workStreamId, taskId = destination.id,
             convertedTaskId = null, archivedAt = null, createdAt = now, updatedAt = now)
         saveCapture(copy)
@@ -131,8 +163,60 @@ class TaskPageActions(
         getPromptByCaptureId(original.id)?.let { savePromptDocument(it.copy(id = ids.newId("prompt"), captureItemId = copyId, createdAt = now, updatedAt = now)) }
         getAttachmentByCaptureId(original.id)?.let { saveAttachmentDocument(it.copy(id = ids.newId("attachment"), captureItemId = copyId, createdAt = now, updatedAt = now)) }
         getVoiceByCaptureId(original.id)?.let { saveVoiceDocument(it.copy(id = ids.newId("voice"), captureItemId = copyId, createdAt = now, updatedAt = now)) }
-        ensureTaskPageBlock(ids, clock, destination.id, TaskPageTypeKeys.capture(copy.type), copy.id)
+        val page = ensureTaskPageBlock(ids, clock, destination.id, TaskPageTypeKeys.capture(copy.type), copy.id)
+        if (sameTask) placeAfter(block.taskId, page, block.id, now)
         true
+    }
+
+    /**
+     * Duplicate on the Page itself: the copy is listed right after the original. Notes copy their
+     * whole document; captured items copy with their documents. The checklist is the task's own
+     * steps, so it has no second copy on the same task.
+     */
+    suspend fun duplicateHere(blockId: String): Boolean {
+        val block = repository.transaction { getPageBlock(blockId) } ?: return false
+        return when {
+            block.typeKey == TaskPageTypeKeys.NOTE -> duplicateNote(block.contentId) != null
+            block.typeKey.startsWith("capture.") -> duplicate(block.id, block.taskId)
+            else -> false
+        }
+    }
+
+    /**
+     * Removes one card from its Page once the user confirmed by typing its name. A note's document
+     * is deleted; a captured item is archived, so it stays restorable from the Inbox. The checklist
+     * and anything unreadable are refused, and nothing is written then.
+     */
+    suspend fun delete(blockId: String): Boolean = repository.transaction {
+        val block = getPageBlock(blockId) ?: return@transaction false
+        val now = clock.now()
+        when {
+            block.typeKey == TaskPageTypeKeys.NOTE -> {
+                if (TaskPageTypeKeys.noteTaskId(block.contentId) != block.taskId) return@transaction false
+                val doc = noteDocOf(block.contentId)
+                if (doc?.loadError != null) return@transaction false
+                if (doc != null) deleteNoteDoc(block.contentId)
+            }
+            block.typeKey.startsWith("capture.") -> {
+                val capture = getCapture(block.contentId)
+                if (capture != null && capture.status != CaptureStatus.ARCHIVED) {
+                    saveCapture(capture.copy(status = CaptureStatus.ARCHIVED, archivedAt = now, updatedAt = now))
+                }
+            }
+            else -> return@transaction false
+        }
+        deletePageBlock(block.id)
+        denseOrder(block.taskId, now)
+        true
+    }
+
+    private suspend fun WorkStreamWriter.placeAfter(taskId: String, moved: TaskPageBlock, afterId: String, now: java.time.Instant) {
+        val ordered = pageBlocksOf(taskId).sortedBy { it.order }.filter { it.id != moved.id }.toMutableList()
+        val after = ordered.indexOfFirst { it.id == afterId }
+        ordered.add(if (after >= 0) after + 1 else ordered.size, moved)
+        ordered.forEachIndexed { index, item ->
+            if (item.order != index) savePageBlock(item.copy(order = index, updatedAt = now))
+        }
     }
 
     private suspend fun WorkStreamWriter.denseOrder(taskId: String, now: java.time.Instant) {

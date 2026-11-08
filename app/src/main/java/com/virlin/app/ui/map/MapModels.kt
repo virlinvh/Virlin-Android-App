@@ -11,18 +11,58 @@ import com.virlin.app.domain.model.ProgressResult
 enum class MapKind { PROJECT, WORKSTREAM, TASK }
 enum class MapStatus { NONE, TODO, CURRENT, DONE, BLOCKED }
 
-enum class MapBoxFinish(val label: String) {
-    SMOOTH("Smooth"), FROSTED("Frosted"), PAPER("Fine paper"), LINEN("Linen"),
-    GRAIN("Soft grain"), GLASS("Glass"), OUTLINE("Outline"), EMBOSSED("Embossed"),
-    PENCIL_HATCH("Pencil hatch"), HAND_DRAWN("Hand drawn"),
-    PENCIL_SKETCH("Pencil sketch"), DOUBLE_INK("Double ink"), MARKER_EDGE("Marker edge")
+enum class MapBoxFinishGroup(val label: String, val detail: String) {
+    CLASSIC("Classic", "Clean surfaces."),
+    HANDMADE("Hand-drawn & handmade", "Ink, pencil, paint and paper craft, drawn by hand."),
+    MATERIAL("Materials & modern", "Real surfaces and modern stationery."),
 }
 
+/** Saved by name, so new finishes can be appended without touching stored maps. */
+enum class MapBoxFinish(val label: String, val group: MapBoxFinishGroup = MapBoxFinishGroup.CLASSIC) {
+    SMOOTH("Smooth"), FROSTED("Frosted"), PAPER("Fine paper"), LINEN("Linen"),
+    GRAIN("Soft grain"), GLASS("Glass"), OUTLINE("Outline"), EMBOSSED("Embossed"),
+    PENCIL_HATCH("Pencil hatch"), HAND_DRAWN("Hand drawn", MapBoxFinishGroup.HANDMADE),
+    PENCIL_SKETCH("Pencil sketch", MapBoxFinishGroup.HANDMADE),
+    DOUBLE_INK("Double ink", MapBoxFinishGroup.HANDMADE),
+    MARKER_EDGE("Marker edge", MapBoxFinishGroup.HANDMADE),
+    CRAYON("Crayon", MapBoxFinishGroup.HANDMADE),
+    CHARCOAL("Charcoal", MapBoxFinishGroup.HANDMADE),
+    WATERCOLOUR("Watercolour", MapBoxFinishGroup.HANDMADE),
+    BRUSH_PEN("Brush pen", MapBoxFinishGroup.HANDMADE),
+    FELT_TIP("Felt tip", MapBoxFinishGroup.HANDMADE),
+    SCRIBBLE("Scribble fill", MapBoxFinishGroup.HANDMADE),
+    CROSS_HATCH("Cross hatch", MapBoxFinishGroup.HANDMADE),
+    STIPPLE("Stipple", MapBoxFinishGroup.HANDMADE),
+    ROUGH_SKETCH("Rough sketch", MapBoxFinishGroup.HANDMADE),
+    HIGHLIGHTER("Highlighter", MapBoxFinishGroup.HANDMADE),
+    DRY_BRUSH("Dry brush", MapBoxFinishGroup.HANDMADE),
+    STITCHED("Stitched", MapBoxFinishGroup.HANDMADE),
+    TAPED_NOTE("Taped note", MapBoxFinishGroup.HANDMADE),
+    STICKY_NOTE("Sticky note", MapBoxFinishGroup.HANDMADE),
+    TORN_PAPER("Torn paper", MapBoxFinishGroup.HANDMADE),
+    PAPER_CUTOUT("Paper cut-out", MapBoxFinishGroup.HANDMADE),
+    KRAFT("Kraft card", MapBoxFinishGroup.MATERIAL),
+    CANVAS("Canvas", MapBoxFinishGroup.MATERIAL),
+    CORK("Cork board", MapBoxFinishGroup.MATERIAL),
+    WOOD("Wood grain", MapBoxFinishGroup.MATERIAL),
+    MARBLE("Marble", MapBoxFinishGroup.MATERIAL),
+    CONCRETE("Concrete", MapBoxFinishGroup.MATERIAL),
+    BRUSHED_METAL("Brushed metal", MapBoxFinishGroup.MATERIAL),
+    SOFT_CLAY("Soft clay", MapBoxFinishGroup.MATERIAL),
+    TERRAZZO("Terrazzo", MapBoxFinishGroup.MATERIAL),
+    DOT_GRID("Dot grid", MapBoxFinishGroup.MATERIAL),
+    GRAPH_PAPER("Graph paper", MapBoxFinishGroup.MATERIAL),
+    NOTEBOOK("Notebook", MapBoxFinishGroup.MATERIAL),
+    HALFTONE("Halftone", MapBoxFinishGroup.MATERIAL),
+}
+
+/** Saved by name, so new layouts can be appended without touching stored maps. */
 enum class MapLayout(
     val label: String,
     val fork: String,
     val node: String,
     val endpoint: String,
+    val handDrawn: Boolean = false,
 ) {
     RIGHT_TREE("Right tree", "Shared trunk", "Rounded cards", "Card tips"),
     FLOW_FORKS("Flow forks", "S-curves", "Pill cards", "Pill tips"),
@@ -36,7 +76,15 @@ enum class MapLayout(
     CLOUD_OUTCOMES("Cloud outcomes", "Diagonal links", "Square cards", "Cloud leaves"),
     FAN_FORKS("Beaded fan", "Wide fan", "Capsule cards", "Bead tips"),
     FACETED_PATHS("Faceted paths", "Angled links", "Faceted cards", "Pointed tips"),
-    LOOP_FORKS("Loop & notch", "Looped curves", "Pill parents", "Notched leaves")
+    LOOP_FORKS("Loop & notch", "Looped curves", "Pill parents", "Notched leaves"),
+    SKETCH_TREE("Pencil sketch", "Pencil trunk", "Sketched cards", "Ink dots", handDrawn = true),
+    WHITEBOARD("Whiteboard", "Marker arrows", "Marker boxes", "Arrowheads", handDrawn = true),
+    DOODLE_BUBBLES("Doodle bubbles", "Loose curves", "Doodle bubbles", "Tiny stars", handDrawn = true),
+    STICKY_WALL("Sticky wall", "Pinned strings", "Sticky notes", "Push pins", handDrawn = true),
+    BRUSH_INK("Brush & ink", "Brush strokes", "Ink-wash cards", "Brush flicks", handDrawn = true),
+    DRAFTING("Drafting table", "Ruled elbows", "Drafted frames", "Dimension ticks", handDrawn = true),
+    PAPER_CRAFT("Paper craft", "Paper ribbons", "Cut-paper cards", "Folded tabs", handDrawn = true),
+    METRO_LINES("Metro lines", "Transit lines", "Station pills", "Station rings"),
 }
 
 /**
@@ -68,7 +116,53 @@ data class MapAppearance(
     val nodeWidths: Map<String, Float> = emptyMap(),
     /** Map-only visibility; hiding never removes the underlying project, workstream, or task. */
     val hiddenNodeIds: Set<String> = emptySet(),
+    /** How connector colours are chosen. Per-branch overrides always win over the mode. */
+    val branchMode: MapBranchMode = MapBranchMode.MULTI,
+    /** The shared colour for [MapBranchMode.SINGLE]; null means the palette's first colour. */
+    val singleBranchColor: Long? = null,
+    /** [MapBranchMode.LEVELS] colours: [0] primary (workstreams), [1] secondary, ... Missing = palette. */
+    val levelColors: List<Long> = emptyList(),
+    val boxFill: MapFillMode = MapFillMode.SOFT,
+    val boxFillColor: Long? = null,
+    val boxBorder: MapBorderMode = MapBorderMode.AUTO,
+    val boxBorderColor: Long? = null,
+    /** Box title colour; null picks dark or light ink for the fill automatically. */
+    val boxTextColor: Long? = null,
+    /** Canvas colour behind the map; null keeps the project surface. */
+    val backgroundColor: Long? = null,
+    val savedPalettes: List<MapSavedPalette> = emptyList(),
+    /** How the palette colours the boxes. Branch lines have their own [branchMode]. */
+    val boxPaletteMode: MapBoxPaletteMode = MapBoxPaletteMode.WORKSTREAM,
+    /** How much palette colour a Soft-tint box shows; Boxes ▸ Fill other than Soft tint decides on its own. */
+    val boxStrength: MapBoxStrength = MapBoxStrength.MEDIUM,
+    /** Chosen box colours by level: 0 project, 1 workstreams, 2 tasks, 3 subtasks, 4 deeper. Missing = palette. */
+    val boxLevelColors: Map<Int, Long> = emptyMap(),
+    /** The shared colour for [MapBoxPaletteMode.SINGLE]; null means the palette's first colour. */
+    val boxSingleColor: Long? = null,
+    /** Box colour for an item and everything under it. A one-box highlight ([nodeColors]) still wins. */
+    val boxBranchColors: Map<String, Long> = emptyMap(),
+    /** Multicolour branch lines; empty follows the palette. */
+    val branchPalette: List<Long> = emptyList(),
 )
+
+enum class MapBranchMode(val label: String) { MULTI("Multicolour"), SINGLE("One colour"), LEVELS("By level") }
+
+enum class MapBoxPaletteMode(val label: String) {
+    WORKSTREAM("By workstream"), LEVEL("By level"), SINGLE("One colour"), EVERY("Every box"), BRANCHES("Match lines")
+}
+
+enum class MapBoxStrength(val label: String) { LIGHT("Light"), MEDIUM("Medium"), STRONG("Strong") }
+
+enum class MapFillMode(val label: String) {
+    SOFT("Soft tint"), PASTEL("Pastel"), BOLD("Bold"), WHITE("Plain white"), CUSTOM("Custom")
+}
+
+/** AUTO keeps each finish's own edge: the branch colour on smooth boxes, ink on hand-drawn ones. */
+enum class MapBorderMode(val label: String) {
+    AUTO("Finish default"), BRANCH("Branch colour"), CUSTOM("Custom"), NONE("No border")
+}
+
+data class MapSavedPalette(val name: String, val colors: List<Long>)
 
 /**
  * Builds the map from the real records. Every WorkStream of the project appears, including one

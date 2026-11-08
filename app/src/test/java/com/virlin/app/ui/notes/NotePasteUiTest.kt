@@ -56,7 +56,9 @@ class NotePasteUiTest {
             MaterialTheme { if (!state.loading) NoteBlockEditor(state, vm,
                 documentSelectionMode = true) }
         }
-        compose.onNodeWithTag("notes_document_selection_text").assertExists()
+        // The blocks themselves are drawn, in the editor's own text fields.
+        before.forEach { compose.onNodeWithTag("notes_select_block_${it.id}").assertExists() }
+        before.forEach { compose.onNodeWithTag("notes_block_${it.id}").assertExists() }
         compose.onNodeWithTag("notes_copy_all").performClick()
         compose.runOnIdle {
             assertEquals("Main heading\n\nSubheading\n\nBody text",
@@ -65,33 +67,61 @@ class NotePasteUiTest {
         }
     }
 
-    @OptIn(ExperimentalTestApi::class)
-    @Test fun crossBlockSelectionFeedsFlashcardWithoutClipboardCopy() {
+    @Test fun blockSelectionFeedsFlashcardWithoutClipboardCopy() {
         val ids = SequentialIdProvider()
         val vm = NotesViewModel("task-direct-flashcard-selection", "Note",
             DefaultVirlinActions(InMemoryWorkStreamRepository(), FakeClock(Instant.EPOCH), ids), ids)
         val first = vm.state.value.blocks.single().id
         val pasted = "# Heading\n\nAnswer paragraph"
         assertTrue(vm.pasteStructured(first, pasted, pasted))
-        var selection = TextRange.Zero
+        var selection = emptySet<String>()
         compose.setContent {
             val state by vm.state.collectAsState()
-            var selected by remember { mutableStateOf(TextRange.Zero) }
+            var selected by remember { mutableStateOf(emptySet<String>()) }
             MaterialTheme {
                 NoteBlockEditor(state, vm, documentSelectionMode = true,
-                    documentSelection = selected,
-                    onDocumentSelectionChange = { selected = it; selection = it })
+                    selectedBlockIds = selected,
+                    onSelectedBlockIdsChange = { selected = it; selection = it })
             }
         }
-        val projection = selectableNoteText(vm.state.value.blocks)
-        compose.onNodeWithTag("notes_document_selection_text")
-            .performTextInputSelection(TextRange(0, projection.length))
+        compose.onNodeWithTag("notes_select_all").performClick()
         compose.runOnIdle {
-            assertEquals(TextRange(0, projection.length), selection)
-            val source = flashcardSourceFromCopiedText(vm.state.value.blocks,
-                projection.text.substring(selection.min, selection.max), selection.min)
-            assertEquals("Heading\n\nAnswer paragraph", source?.text)
-            assertEquals(vm.state.value.blocks.size, 2)
+            val blocks = vm.state.value.blocks
+            assertEquals(blocks.map { it.id }.toSet(), selection)
+            val card = flashcardBlocks(blocks.filter { it.id in selection })
+            assertEquals(listOf("Heading", "Answer paragraph"), card.map { it.text })
+            assertEquals(blocks.map { it.type }, card.map { it.type })
+            assertEquals(2, blocks.size)
+        }
+    }
+
+    @Test fun selectModeDrawsMediaAndSelectsItLikeAnyBlock() {
+        val ids = SequentialIdProvider()
+        val actions = DefaultVirlinActions(InMemoryWorkStreamRepository(), FakeClock(Instant.EPOCH), ids)
+        val owner = "task-select-media-${System.nanoTime()}"
+        val blocks = listOf(
+            com.virlin.app.domain.notedoc.NoteDocBlock("h", NoteDocBlockType.HEADING_1, "Lecture"),
+            com.virlin.app.domain.notedoc.NoteDocBlock("v", NoteDocBlockType.VIDEO, "",
+                video = com.virlin.app.domain.notedoc.NoteDocVideo("dQw4w9WgXcQ")),
+            com.virlin.app.domain.notedoc.NoteDocBlock("p", NoteDocBlockType.PARAGRAPH, "After the video"),
+        )
+        kotlinx.coroutines.runBlocking { actions.saveNoteDoc(owner, "Note", blocks) }
+        val vm = NotesViewModel(owner, "Note", actions, ids)
+        var selection = emptySet<String>()
+        compose.setContent {
+            val state by vm.state.collectAsState()
+            var selected by remember { mutableStateOf(emptySet<String>()) }
+            MaterialTheme { if (!state.loading) NoteBlockEditor(state, vm, documentSelectionMode = true,
+                selectedBlockIds = selected, onSelectedBlockIdsChange = { selected = it; selection = it }) }
+        }
+        compose.onNodeWithTag("notes_select_block_v").performClick()
+        compose.onNodeWithTag("notes_select_block_p").performClick()
+        compose.runOnIdle { assertEquals(setOf("v", "p"), selection) }
+        compose.onNodeWithTag("notes_select_block_v").performClick()
+        compose.runOnIdle { assertEquals(setOf("p"), selection) }
+        compose.runOnIdle {
+            assertTrue(vm.deleteBlocks(setOf("h", "v")))
+            assertEquals(listOf("p"), vm.state.value.blocks.map { it.id })
         }
     }
 

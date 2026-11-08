@@ -78,6 +78,7 @@ class MapAppearanceStore(context: Context) {
     private fun prune(appearance: MapAppearance) = appearance.copy(
         nodeColors = appearance.nodeColors - removedOwners,
         branchColors = appearance.branchColors - removedOwners,
+        boxBranchColors = appearance.boxBranchColors - removedOwners,
         nodeFinishes = appearance.nodeFinishes - removedOwners,
         nodeWidths = appearance.nodeWidths - removedOwners,
         hiddenNodeIds = appearance.hiddenNodeIds - removedOwners,
@@ -114,7 +115,7 @@ class MapAppearanceStore(context: Context) {
                             boxFinish = enumValueOrDefault(o.optString("boxFinish")),
                             nodeFinishes = o.finishMap("nodeFinishes"),
                             nodeWidths = o.widthMap("nodeWidths"),
-                        )
+                        ).withColourSettings(o)
                     )
                 }
             }
@@ -143,6 +144,7 @@ class MapAppearanceStore(context: Context) {
                         .put("nodeWidths", JSONObject().also { o -> appearance.nodeWidths.forEach { (id, width) ->
                             if (width.isFinite() && width in 110f..560f) o.put(id, width.toDouble())
                         } })
+                        .putColourSettings(appearance)
                 )
             }
             val atomic = android.util.AtomicFile(file)

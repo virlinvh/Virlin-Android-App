@@ -22,7 +22,7 @@ android {
     }
     buildTypes {
         debug {
-            versionNameSuffix = "-notes-videocorners-20261107-1425"
+            versionNameSuffix = "-flashcard-deck-20261108-1715"
         }
         release {
             isMinifyEnabled = false
