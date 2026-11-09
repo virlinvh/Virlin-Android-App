@@ -721,10 +721,10 @@ class DefaultVirlinActions(
     }
 
     override suspend fun pauseAllTimers(projectId: String?): ActionResult<Int> =
-        pauseTimers(projectId, "All timers paused")
+        pauseTimers(projectId, ALL_TIMERS_PAUSED)
 
     override suspend fun pauseTimersForOrganize(projectId: String): ActionResult<Int> =
-        pauseTimers(projectId, "Organize timers paused")
+        pauseTimers(projectId, ORGANIZE_TIMERS_PAUSED)
 
     private suspend fun pauseTimers(projectId: String?, provenance: String): ActionResult<Int> = try {
         repository.transaction {
@@ -759,10 +759,10 @@ class DefaultVirlinActions(
     } catch (e: Exception) { ActionResult.Failure(e) }
 
     override suspend fun resumeAllTimers(projectId: String?): ActionResult<Int> =
-        resumeTimers(projectId, "All timers paused")
+        resumeTimers(projectId, ALL_TIMERS_PAUSED)
 
     override suspend fun resumeTimersForOrganize(projectId: String): ActionResult<Int> =
-        resumeTimers(projectId, "Organize timers paused")
+        resumeTimers(projectId, ORGANIZE_TIMERS_PAUSED)
 
     private suspend fun resumeTimers(projectId: String?, provenance: String): ActionResult<Int> = try {
         repository.transaction {
@@ -773,23 +773,17 @@ class DefaultVirlinActions(
             var count = 0
             with(writer) {
                 var humanRunning = items.any { it.state == FOCUS }
-                if (provenance == "Organize timers paused" && humanRunning && items.any { item ->
+                if (provenance == ORGANIZE_TIMERS_PAUSED && humanRunning && items.any { item ->
                         (projectId == null || belongsToProject(item, projectId)) &&
-                            item.state == PAUSED && !item.externalTrackingPaused &&
-                            executionEvents(item.id).lastOrNull()?.let { pause ->
-                                pause.type == EventType.PAUSED && pause.at == item.updatedAt &&
-                                    pause.detail?.contains(provenance) == true
-                            } == true
+                            !item.externalTrackingPaused && pendingTimerPause(item, provenance) != null
                     }) return@transaction ActionResult.Rejected(DomainError.AnotherTaskIsExecuting)
                 for (item in items.distinctBy { it.id }) {
                     if (projectId != null && !belongsToProject(item, projectId)) continue
                     if (item.state != PAUSED) continue
                     if (repository.taskExecutionEnabled && getTask(item.id) != null &&
                         !ExecutionEligibility.isLeaf(item.id, allTasks())) continue
-                    val pause = executionEvents(item.id).lastOrNull() ?: continue
                     // Persisted provenance survives app restarts. Never resume an unrelated manual pause.
-                    if (pause.type != EventType.PAUSED || pause.at != item.updatedAt ||
-                        pause.detail?.contains(provenance) != true) continue
+                    val pause = pendingTimerPause(item, provenance) ?: continue
                     val external = item.externalTrackingPaused
                     if (!external && humanRunning) continue
                     val remaining = Regex("remaining=(-?\\d+)").find(pause.detail!!)?.groupValues?.get(1)?.toLongOrNull()

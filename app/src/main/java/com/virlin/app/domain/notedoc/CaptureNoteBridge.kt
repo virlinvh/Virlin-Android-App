@@ -52,7 +52,7 @@ object CaptureNoteBridge {
         val type = when (block.type) {
             NoteDocBlockType.HEADING_1 -> NoteBlockType.HEADING_1
             NoteDocBlockType.HEADING_2 -> NoteBlockType.HEADING_2
-            NoteDocBlockType.HEADING_3 -> NoteBlockType.HEADING_3
+            NoteDocBlockType.HEADING_3, NoteDocBlockType.HEADING_4, NoteDocBlockType.HEADING_5 -> NoteBlockType.HEADING_3
             NoteDocBlockType.BULLET -> NoteBlockType.BULLETED_LIST
             NoteDocBlockType.NUMBERED -> NoteBlockType.NUMBERED_LIST
             NoteDocBlockType.CHECKLIST -> NoteBlockType.CHECKBOX
@@ -65,7 +65,12 @@ object CaptureNoteBridge {
         NoteBlock(block.id, type,
             plainText = block.table?.let { table -> (0 until table.rows).joinToString("\n") { row ->
                 (0 until table.cols).joinToString("\t") { column -> table.cell(row, column) }
-            } } ?: if (block.type == NoteDocBlockType.IMAGE) "[Image]" else block.text,
+            } } ?: when (block.type) {
+                NoteDocBlockType.IMAGE -> "[Image]"
+                NoteDocBlockType.VIDEO -> NoteYouTube.plainText(block.video)
+                NoteDocBlockType.AUDIO -> NoteDocAudio.plainText(block.audio)
+                else -> block.text
+            },
             checked = block.checked,
             marks = block.runs.flatMap { run -> run.marks.map { mark -> TextMark(run.start, run.end, when (mark) {
                 NoteDocMark.BOLD -> InlineStyle.BOLD

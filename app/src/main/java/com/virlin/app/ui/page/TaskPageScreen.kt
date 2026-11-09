@@ -37,6 +37,9 @@ import com.virlin.app.domain.model.*
 import com.virlin.app.ui.hierarchy.MasterDocumentEntry
 import com.virlin.app.ui.hierarchy.MasterDocumentItem
 import com.virlin.app.ui.hierarchy.taskPageBody
+import com.virlin.app.ui.hierarchy.previewableNoteBlocks
+import com.virlin.app.ui.hierarchy.noteCardTitle
+import com.virlin.app.domain.notedoc.NoteDocBlock
 import com.virlin.app.ui.hierarchy.rememberProjectPalette
 import kotlinx.coroutines.launch
 
@@ -51,12 +54,17 @@ data class TaskPageRow(
     val attachmentKind: AttachmentKind? = null,
     val fullBody: String = preview,
     val mediaPath: String? = null,
+    val noteBlocks: List<NoteDocBlock>? = null,
 )
 data class TaskPageState(
     val task: Task? = null,
     val rows: List<TaskPageRow> = emptyList(),
     val destinations: List<Task> = emptyList(),
     val branchSections: List<TaskPageSection> = emptyList(),
+    /** Where an item can move: every task of this project (or stream, if it has none). */
+    val projectTitle: String = "",
+    val projectTasks: List<Task> = emptyList(),
+    val projectStreams: List<WorkStream> = emptyList(),
     val loading: Boolean = true,
     val message: String? = null,
 )
@@ -104,7 +112,10 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
         suspend fun rowsFor(ownerId: String): List<TaskPageRow> {
           val ownerBlocks = if (ownerId == taskId) blocks else repository.getTaskPageBlocks(ownerId)
           val steps = repository.getTaskSteps(ownerId)
-          return ownerBlocks.map { block ->
+          return ownerBlocks.filterNot { block ->
+            block.typeKey == TaskPageTypeKeys.NOTE && TaskPageTypeKeys.isExtraNoteOwner(block.contentId) &&
+                repository.getNoteDoc(block.contentId) == null
+          }.map { block ->
             val capture = captures[block.contentId]
             when (block.typeKey) {
                 TaskPageTypeKeys.TODO -> {
@@ -112,9 +123,10 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
                     TaskPageRow(block, "To-do", "Checklist", body.lineSequence().first(), fullBody = body)
                 }
                 TaskPageTypeKeys.NOTE -> {
-                    val body = taskPageBody(block.typeKey, ownerId, steps,
-                        repository.getNoteDoc(TaskPageTypeKeys.noteOwner(ownerId)))
-                    TaskPageRow(block, "Note", "Notes", body.lineSequence().first(), fullBody = body)
+                    val doc = repository.getNoteDoc(block.contentId)
+                    val body = taskPageBody(block.typeKey, ownerId, steps, doc)
+                    TaskPageRow(block, "Note", noteCardTitle(doc), body.lineSequence().first(), fullBody = body,
+                        noteBlocks = previewableNoteBlocks(doc))
                 }
                 else -> {
                     val label = TaskPageBlockRegistry.label(block.typeKey)
@@ -158,8 +170,36 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
             val owner = if (id == taskId) task else byId[id] ?: return@mapNotNull null
             TaskPageSection(owner, if (id == taskId) rows else rowsFor(id))
         }
-        val destinations = task.projectId?.let { repository.getTasksByProject(it) }.orEmpty().filter { it.id != task.id }
-        state = TaskPageState(task, rows, destinations, branchSections, loading = false)
+        val projectTasks = task.projectId?.let { repository.getTasksByProject(it) }
+            ?: repository.tasks.value.filter { it.projectId == null && it.workStreamId == task.workStreamId }
+        val destinations = projectTasks.filter { it.id != task.id }
+        val streams = repository.streams.value.filter { stream -> projectTasks.any { it.workStreamId == stream.id } }
+        val projectTitle = task.projectId?.let { id -> repository.projects.value.firstOrNull { it.id == id }?.title }
+            ?: streams.firstOrNull()?.title ?: "Project"
+        state = TaskPageState(task, rows, destinations, branchSections, loading = false,
+            projectTitle = projectTitle, projectTasks = projectTasks, projectStreams = streams)
+    }
+
+    /**
+     * Moves one item to [destination]. A note moves with its whole document under a new key;
+     * [onNoteMoved] then carries what is kept beside the note (flashcards, page setup) along.
+     */
+    fun moveTo(row: TaskPageRow, destination: Task, onNoteMoved: suspend (String, String) -> Unit) = viewModelScope.launch {
+        val note = row.block.typeKey == TaskPageTypeKeys.NOTE
+        var followUpFailed = false
+        val ok = if (note) {
+            val owner = runCatching { actions.moveNote(row.block.id, destination.id) }.getOrNull()
+            if (owner != null) followUpFailed = runCatching { onNoteMoved(row.block.contentId, owner) }.isFailure
+            owner != null
+        } else runCatching { actions.move(row.block.id, destination.id) }.getOrDefault(false)
+        val empty = note && !ok && runCatching { repository.getNoteDoc(row.block.contentId) }.getOrNull() == null
+        buildState()
+        state = state.copy(message = when {
+            ok && followUpFailed -> "Moved to ${destination.title}. Its flashcards could not be moved along."
+            ok -> "Moved to ${destination.title}"
+            empty -> "This note is still empty. Write something in it first, then move it."
+            else -> "This item cannot be moved safely"
+        })
     }
 
     fun moveBy(blockId: String, delta: Int) = viewModelScope.launch {
@@ -168,10 +208,27 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
         val item = ids.removeAt(from); ids.add(to, item)
         if (actions.reorder(taskId, ids)) buildState()
     }
-    fun transfer(blockId: String, destinationId: String, duplicate: Boolean) = viewModelScope.launch {
-        val ok = if (duplicate) actions.duplicate(blockId, destinationId) else actions.move(blockId, destinationId)
-        state = state.copy(message = if (ok) (if (duplicate) "Block duplicated" else "Block moved") else "This block cannot be ${if (duplicate) "duplicated" else "moved"} safely")
+    /** Copies the item in place, listed right after the original. */
+    fun duplicateHere(blockId: String) = viewModelScope.launch {
+        val ok = runCatching { actions.duplicateHere(blockId) }.getOrDefault(false)
+        val reason = if (ok) null else state.rows.firstOrNull { it.block.id == blockId }
+            ?.takeIf { it.block.typeKey == TaskPageTypeKeys.NOTE }
+            ?.let { row ->
+                val doc = runCatching { repository.getNoteDoc(row.block.contentId) }.getOrNull()
+                when {
+                    doc == null -> "This note is still empty. Write something in it first, then duplicate it."
+                    doc.loadError != null -> "This note can't be read safely, so it was not copied."
+                    else -> null
+                }
+            }
         buildState()
+        if (!ok) state = state.copy(message = reason ?: "This item cannot be duplicated safely")
+    }
+    /** Runs only after the user typed the item's name in the delete warning. */
+    fun delete(blockId: String) = viewModelScope.launch {
+        val ok = runCatching { actions.delete(blockId) }.getOrDefault(false)
+        buildState()
+        if (!ok) state = state.copy(message = "This item cannot be deleted safely")
     }
     fun clearMessage() { state = state.copy(message = null) }
 
@@ -198,14 +255,21 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
     val s = vm.state
     var organize by remember { mutableStateOf(false) }
     var acrossBranch by rememberSaveable(taskId) { mutableStateOf(false) }
-    var transfer by remember { mutableStateOf<Pair<TaskPageRow, Boolean>?>(null) }
+    var moving by remember { mutableStateOf<TaskPageRow?>(null) }
+    var deleting by remember { mutableStateOf<TaskPageRow?>(null) }
     val palette = rememberProjectPalette(s.task?.projectId)
     val green = palette?.let { Color(it.secondary) } ?: Color(0xFF07865B)
     val ink = palette?.let { Color(it.text) } ?: Color(0xFF17231E)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Box(Modifier.fillMaxSize()) {
     Scaffold(containerColor = Color(0xFFFCFBF8), topBar = {
         Row(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton({ navController.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-            Column(Modifier.weight(1f)) { Text(s.task?.title ?: "Page", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = ink); Text("Page", color = Color.Gray) }
+            Column(Modifier.weight(1f)) {
+                Text(s.task?.title ?: "Page", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = ink,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Text("Page", color = Color.Gray, fontSize = 13.sp, maxLines = 1)
+            }
             TextButton({ organize = !organize }) { Text(if (organize) "Done" else "Organize", color = green, fontWeight = FontWeight.SemiBold) }
         }
     }) { padding ->
@@ -256,16 +320,24 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
                         MasterDocumentItem(
                             MasterDocumentEntry(row.block.id, row.title, row.label, row.fullBody,
                                 row.block.contentId, row.mediaPath,
-                                row.attachmentKind == AttachmentKind.IMAGE),
-                            ink, green) { openBlock(navController, row, vm::notify) }
+                                row.attachmentKind == AttachmentKind.IMAGE, noteBlocks = row.noteBlocks),
+                            ink, green, palette) { openBlock(navController, row, vm::notify) }
                         if (organize && row.block.taskId == taskId) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp),
                                 horizontalArrangement = Arrangement.End) {
                                 IconButton({ vm.moveBy(row.block.id, -1) }) { Icon(Icons.Default.KeyboardArrowUp, "Move up") }
                                 IconButton({ vm.moveBy(row.block.id, 1) }) { Icon(Icons.Default.KeyboardArrowDown, "Move down") }
-                                IconButton({ transfer = row to false }) { Icon(Icons.Default.DriveFileMove, "Move") }
-                                IconButton({ transfer = row to true }, enabled = row.block.typeKey.startsWith("capture.")) {
+                                // The checklist is the task's own steps: it does not move, copy or delete here.
+                                val ownsContent = row.block.typeKey == TaskPageTypeKeys.NOTE ||
+                                    row.block.typeKey.startsWith("capture.")
+                                IconButton({ moving = row }, enabled = ownsContent) { Icon(Icons.Default.DriveFileMove, "Move") }
+                                IconButton({ vm.duplicateHere(row.block.id) }, enabled = ownsContent) {
                                     Icon(Icons.Default.ContentCopy, "Duplicate")
+                                }
+                                IconButton({ deleting = row }, enabled = ownsContent) {
+                                    Icon(Icons.Default.DeleteOutline, "Delete",
+                                        tint = if (ownsContent) MaterialTheme.colorScheme.error
+                                            else LocalContentColor.current)
                                 }
                             }
                         }
@@ -276,8 +348,34 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
             }
         }
     }
+    moving?.let { row ->
+        s.task?.let { task ->
+            PageMoveDestinationSheet(
+                itemLabel = row.label, projectTitle = s.projectTitle, streams = s.projectStreams,
+                tasks = s.projectTasks, currentTaskId = task.id, palette = palette,
+                onDismiss = { moving = null },
+                onMove = { destination ->
+                    moving = null
+                    vm.moveTo(row, destination) { from, to ->
+                        com.virlin.app.data.flashcard.FlashcardStore.rekey(context, from, to)
+                        val pages = com.virlin.app.ui.notes.NotePageSetupStore(context)
+                        pages.load(from)?.let { pages.save(to, it); pages.setOn(to, pages.isOn(from)) }
+                    }
+                })
+        }
+    }
+    }
+    deleting?.let { row ->
+        val note = row.block.typeKey == TaskPageTypeKeys.NOTE
+        val kind = if (row.label.all { it.isUpperCase() }) row.label else row.label.lowercase()
+        com.virlin.app.ui.hierarchy.DeleteByNameDialog(row.title, kind,
+            warning = if (note) "Permanent · the note and everything in it"
+                else "Archived · it can be restored from the Inbox",
+            busy = false, error = null,
+            onDismiss = { deleting = null },
+            onDelete = { deleting = null; vm.delete(row.block.id) })
+    }
     s.message?.let { AlertDialog(onDismissRequest = vm::clearMessage, confirmButton = { TextButton(vm::clearMessage) { Text("OK") } }, text = { Text(it) }) }
-    transfer?.let { (row, duplicate) -> AlertDialog(onDismissRequest = { transfer = null }, title = { Text(if (duplicate) "Duplicate block" else "Move block") }, text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) { if (s.destinations.isEmpty()) Text("No other task is available in this project.") else s.destinations.forEach { task -> Text(task.title, Modifier.fillMaxWidth().clickable { transfer = null; vm.transfer(row.block.id, task.id, duplicate) }.padding(vertical = 14.dp), fontWeight = FontWeight.Medium) } } }, confirmButton = {}, dismissButton = { TextButton({ transfer = null }) { Text("Cancel") } }) }
 }
 
 private fun iconFor(key: String) = when (key) { TaskPageTypeKeys.TODO -> Icons.Default.CheckBox; TaskPageTypeKeys.NOTE -> Icons.Default.Description; TaskPageTypeKeys.capture(CaptureType.LINK) -> Icons.Default.Link; TaskPageTypeKeys.capture(CaptureType.PROMPT) -> Icons.Default.Assignment; else -> Icons.Default.InsertDriveFile }
@@ -296,7 +394,7 @@ private fun iconFor(key: String) = when (key) { TaskPageTypeKeys.TODO -> Icons.D
 private fun openBlock(nav: NavController, row: TaskPageRow, onUnsupported: (String) -> Unit) {
     when (row.block.typeKey) {
         TaskPageTypeKeys.TODO -> nav.navigate(com.virlin.app.ui.todo.taskTodo(row.block.taskId))
-        TaskPageTypeKeys.NOTE -> nav.navigate(com.virlin.app.ui.notes.notesForTask(row.block.taskId, row.title))
+        TaskPageTypeKeys.NOTE -> nav.navigate(com.virlin.app.ui.notes.notesRoute(row.block.contentId, row.title))
         TaskPageTypeKeys.capture(CaptureType.PROMPT) -> nav.navigate(com.virlin.app.ui.prompt.promptEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.LINK) -> nav.navigate(com.virlin.app.ui.link.linkEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.VOICE) -> nav.navigate(com.virlin.app.ui.voice.voiceEditorRoute(row.block.contentId))

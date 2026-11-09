@@ -54,15 +54,45 @@ class RichNoteActionsTest {
     }
 
     @Test fun desktopBlockSavesMergeIntoTheRichTreeOrAreRefused() = runTest {
-        actions.saveRichNoteDoc("task-1", "T", tree, null)
+        // A cell holding two paragraphs cannot be rebuilt by the phone table editor.
+        val multiPart = tree.replaceFirst("\"text\":\"x\"}]}",
+            "\"text\":\"x\"}]},{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"more\"}]}")
+        assertNotEquals(tree, multiPart)
+        actions.saveRichNoteDoc("task-1", "T", multiPart, null)
         val blocks = actions.loadNoteDoc("task-1")!!.blocks
         val edited = blocks.map { if (it.id == "b") it.copy(text = "inner edited") else it }
         val saved = actions.saveNoteDoc("task-1", "T", edited, expectedRevision = 1) as ActionResult.Success
         assertNotNull(saved.value.richDocument)
         assertEquals(edited, saved.value.blocks)
-        val resized = edited.map { if (it.id == "t") it.copy(table = NoteDocTable.blank(2, 2)) else it }
+        val resized = edited.map { if (it.id == "t") it.copy(table = NoteDocTable(1, 1, listOf("x"))) else it }
         assertEquals(NoteDocMessages.RICH_STRUCTURE, reason(actions.saveNoteDoc("task-1", "T", resized, 2)))
         assertEquals(edited, actions.loadNoteDoc("task-1")!!.blocks)
+    }
+
+    @Test fun simpleRichTablesSaveRowColumnHeaderAndShadeChanges() = runTest {
+        actions.saveRichNoteDoc("task-1", "T", tree, null)
+        val blocks = actions.loadNoteDoc("task-1")!!.blocks
+        val changed = blocks.map {
+            if (it.id == "t") it.copy(table = it.table!!.withoutColumn(1).withRowAt(1).withCell(1, 0, "new")
+                .copy(headerRow = true, gridLines = false).withCellFill(1, 0, 0xFFFFF4C2L).withColumnWidth(0, 160))
+            else it
+        }
+        val saved = actions.saveNoteDoc("task-1", "T", changed, expectedRevision = 1) as ActionResult.Success
+        assertNotNull(saved.value.richDocument)
+        assertEquals(changed, saved.value.blocks)
+        assertEquals(changed, actions.loadNoteDoc("task-1")!!.blocks)
+    }
+
+    @Test fun phoneEditorTurnsAHeadingIntoABulletAndBackAndEverySaveIsAccepted() = runTest {
+        actions.saveRichNoteDoc("task-1", "T", tree, null)
+        val blocks = actions.loadNoteDoc("task-1")!!.blocks
+        val bulleted = blocks.map { if (it.id == "h") it.copy(type = NoteDocBlockType.BULLET) else it }
+        val saved = actions.saveNoteDoc("task-1", "T", bulleted, expectedRevision = 1) as ActionResult.Success
+        assertEquals(bulleted, saved.value.blocks)
+        val back = bulleted.map { if (it.id == "h") it.copy(type = NoteDocBlockType.PARAGRAPH) else it }
+        val again = actions.saveNoteDoc("task-1", "T", back, expectedRevision = 2) as ActionResult.Success
+        assertEquals(back, again.value.blocks)
+        assertEquals(back, actions.loadNoteDoc("task-1")!!.blocks)
     }
 
     @Test fun damagedNotesAreNeverOverwrittenExceptByRecovery() = runTest {

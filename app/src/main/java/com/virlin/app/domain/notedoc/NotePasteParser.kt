@@ -12,6 +12,10 @@ import org.jsoup.nodes.TextNode
 object NotePasteParser {
     fun parse(plainText: String, htmlText: String? = null,
         imageResolver: ((String) -> String?)? = null): List<NoteDocBlock> {
+        if (htmlText != null && GoogleDocsPaste.isGoogleDocsHtml(htmlText)) {
+            runCatching { GoogleDocsPaste.parse(htmlText, imageResolver) }.getOrNull()
+                ?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
         val htmlBlocks = htmlText?.takeIf { it.isNotBlank() }?.let {
             runCatching { fromHtml(it, imageResolver) }.getOrNull()
         }.orEmpty()
@@ -45,10 +49,45 @@ object NotePasteParser {
         val htmlHasImportedImage = htmlBlocks.any { it.type == NoteDocBlockType.IMAGE }
         val blocks = if (htmlBlocks.isNotEmpty() &&
             !(markdownLooksStructured && !htmlHasImportedImage &&
-                (htmlOnlyWrapsPlainText || htmlContainsRawMarkdown))) htmlBlocks
-        else fromMarkdown(plainText)
+                (htmlOnlyWrapsPlainText || htmlContainsRawMarkdown)))
+            if (markdownLooksStructured) restoreMissingMarkdownBlocks(htmlBlocks,
+                fromMarkdown(plainText, imageResolver)) else htmlBlocks
+        else fromMarkdown(plainText, imageResolver)
         val grouped = groupMetricCards(blocks)
         return ChatPromptCards.group(grouped)
+    }
+
+    private val RESTORABLE = setOf(NoteDocBlockType.CODE, NoteDocBlockType.PROMPT, NoteDocBlockType.TABLE)
+
+    private fun contentKey(block: NoteDocBlock): String =
+        (block.text + block.table?.cells?.joinToString("").orEmpty() + block.promptTitle.orEmpty())
+            .filter(Char::isLetterOrDigit).lowercase()
+
+    /**
+     * A clipboard's HTML can leave out content its plain text carries (a diagram's source, a
+     * code or table block rendered as a picture or widget). Those code / prompt / table blocks
+     * from the Markdown are put back after the last HTML block that matches the text before them.
+     */
+    private fun restoreMissingMarkdownBlocks(html: List<NoteDocBlock>,
+        markdown: List<NoteDocBlock>): List<NoteDocBlock> {
+        if (markdown.none { it.type in RESTORABLE }) return html
+        val htmlKeys = html.map(::contentKey)
+        val allHtml = htmlKeys.joinToString("")
+        val inserts = sortedMapOf<Int, MutableList<NoteDocBlock>>()
+        var lastMatched = -1
+        for (block in markdown) {
+            val key = contentKey(block)
+            if (key.length < 4) continue
+            val found = (maxOf(lastMatched, 0) until html.size).firstOrNull { htmlKeys[it].contains(key) }
+            if (found != null) { lastMatched = found; continue }
+            if (block.type in RESTORABLE && !allHtml.contains(key))
+                inserts.getOrPut(lastMatched + 1) { mutableListOf() } += block
+        }
+        if (inserts.isEmpty()) return html
+        val out = ArrayList<NoteDocBlock>(html.size + inserts.values.sumOf { it.size })
+        html.forEachIndexed { index, block -> inserts[index]?.let(out::addAll); out += block }
+        inserts[html.size]?.let(out::addAll)
+        return out
     }
 
     private fun block(type: NoteDocBlockType, text: String, runs: List<NoteDocRun> = emptyList(),
@@ -57,7 +96,9 @@ object NotePasteParser {
             runs = NoteRuns.normalize(runs, text.length), indent = indent, table = table,
             mathMode = mathMode)
 
-    private fun fromMarkdown(source: String): List<NoteDocBlock> {
+    private val MARKDOWN_IMAGE = Regex("^\\s*!\\[([^\\]\\n]{0,1000})]\\(([^)\\s]{1,8000})\\)\\s*$")
+
+    private fun fromMarkdown(source: String, imageResolver: ((String) -> String?)? = null): List<NoteDocBlock> {
         val lines = source.replace("\r\n", "\n").replace('\r', '\n').split('\n')
         val result = mutableListOf<NoteDocBlock>()
         val paragraph = mutableListOf<String>()
@@ -131,7 +172,12 @@ object NotePasteParser {
                 val bullet = Regex("^(\\s*)[-*+•]\\s+(.+)$").matchEntire(line)
                 val numbered = Regex("^(\\s*)\\d{1,4}(?:\\\\)?[.)]\\s+(.+)$").matchEntire(line)
                 val quote = Regex("^\\s*>\\s?(.+)$").matchEntire(line)
+                val image = if (line.length <= 9_100) MARKDOWN_IMAGE.matchEntire(line) else null
                 when {
+                    image != null -> {
+                        flush()
+                        result += imageBlock(image.groupValues[2], image.groupValues[1], imageResolver)
+                    }
                     heading != null -> {
                         flush()
                         val type = when (heading.groupValues[1].length) {
@@ -307,11 +353,34 @@ object NotePasteParser {
         return grouped
     }
 
+    /** An image the resolver could store, else its alt text (linked to a web source) so it is not lost silently. */
+    private fun imageBlock(source: String, alt: String, imageResolver: ((String) -> String?)?): NoteDocBlock {
+        val imported = source.takeIf { it.isNotBlank() }
+            ?.let { runCatching { imageResolver?.invoke(it) }.getOrNull() }
+        if (imported != null) return block(NoteDocBlockType.IMAGE, "").copy(imagePath = imported)
+        val label = alt.trim().ifBlank { "Image unavailable from clipboard" }
+        val web = source.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+        return block(NoteDocBlockType.PARAGRAPH, label,
+            if (web != null) listOf(NoteDocRun(0, label.length, emptySet(), linkUrl = web)) else emptyList())
+    }
+
+    /** A drawn diagram keeps its words, one label per line. Icons (no words) are chrome and add nothing. */
+    private fun svgLabels(svg: Element): NoteDocBlock? {
+        val labels = svg.getElementsByTag("text").map { it.text().trim() }.filter(String::isNotEmpty)
+        return if (labels.isEmpty()) null else block(NoteDocBlockType.PARAGRAPH, labels.joinToString("\n"))
+    }
+
     private fun fromHtml(html: String, imageResolver: ((String) -> String?)?): List<NoteDocBlock> {
         val document = Jsoup.parseBodyFragment(html)
         val result = mutableListOf<NoteDocBlock>()
         val blockTags = setOf("p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
             "blockquote", "pre", "li", "ul", "ol", "table", "hr", "img")
+        fun media(node: Element) {
+            when (node.normalName()) {
+                "img" -> result += imageBlock(node.attr("src"), node.attr("alt"), imageResolver)
+                "svg" -> svgLabels(node)?.let { result += it }
+            }
+        }
         fun collect(element: Element, type: NoteDocBlockType, indent: Int) {
             // Rendered MathML retains its original TeX in this annotation.
             val annotatedTeX = element.select("annotation[encoding=application/x-tex]")
@@ -329,6 +398,8 @@ object NotePasteParser {
             }
             val text = StringBuilder()
             val runs = mutableListOf<NoteDocRun>()
+            // Pictures and drawings inside a paragraph's inline markup follow it as their own blocks.
+            val nestedMedia = mutableListOf<Element>()
             fun walk(node: Node, inherited: InlineStyle) {
                 when (node) {
                     is TextNode -> {
@@ -342,7 +413,8 @@ object NotePasteParser {
                                 fontSizeSp = inherited.fontSizeSp, linkUrl = inherited.link)
                     }
                     is Element -> {
-                        if (node.normalName() in setOf("script", "style", "iframe", "img", "ul", "ol")) return
+                        if (node.normalName() in setOf("img", "svg")) { nestedMedia.add(node); return }
+                        if (node.normalName() in setOf("script", "style", "iframe", "canvas", "ul", "ol")) return
                         if (node.normalName() == "br") { text.append('\n'); return }
                         val marks = inherited.marks.toMutableSet()
                         val css = node.attr("style").lowercase()
@@ -377,7 +449,9 @@ object NotePasteParser {
                         val next = InlineStyle(marks, href ?: inherited.link,
                             color = cssColor(cssValue(css, "color")) ?: inherited.color,
                             highlight = cssColor(cssValue(css, "background-color"))
-                                ?: if (node.normalName() == "mark") 0xFFFFEB8AL else inherited.highlight,
+                                ?: if (node.normalName() == "mark")
+                                    cssColor(cssValue(css, "background")) ?: 0xFFFFEB8AL
+                                else inherited.highlight,
                             fontSizeSp = fontSize ?: inherited.fontSizeSp,
                             fontFamily = family ?: inherited.fontFamily)
                         node.childNodes().forEach { walk(it, next) }
@@ -386,7 +460,8 @@ object NotePasteParser {
             }
             walk(element, InlineStyle())
             val raw = text.toString()
-            val leading = raw.indexOfFirst { !it.isWhitespace() }.takeIf { it >= 0 } ?: return
+            val leading = raw.indexOfFirst { !it.isWhitespace() }.takeIf { it >= 0 }
+                ?: return nestedMedia.forEach(::media)
             val end = raw.indexOfLast { !it.isWhitespace() } + 1
             val trimmedRuns = runs.mapNotNull {
                 val start = (it.start - leading).coerceAtLeast(0)
@@ -403,25 +478,44 @@ object NotePasteParser {
                 value.indexOf('\\'), 1, 0, cleanValue.length) else trimmedRuns
             result += block(type, cleanValue, cleanRuns, indent,
                 mathMode = if (element.normalName() == "math") true else null)
+            nestedMedia.forEach(::media)
         }
-        fun visit(parent: Element, listType: NoteDocBlockType? = null, indent: Int = 0) {
+        // Chrome's clipboard copy of a page (Google Search's AI answer) can wrap whole paragraphs,
+        // headings and tables inside inline elements; those must not be glued into one paragraph.
+        val nestedBlockSelector = "p, div, h1, h2, h3, h4, h5, h6, blockquote, pre, li, ul, ol, table, hr, " +
+            "[style~=(?i)display\\s*:\\s*(block|flex|grid|list-item|table)(?![\\w-])]"
+        fun hasNestedBlocks(element: Element): Boolean =
+            element.children().any { it.selectFirst(nestedBlockSelector) != null }
+        val styledBlock = Regex("display\\s*:\\s*(block|flex|grid|list-item|table)(?![\\w-])",
+            RegexOption.IGNORE_CASE)
+        fun isStyledBlock(element: Element): Boolean = styledBlock.containsMatchIn(element.attr("style"))
+        val inlineOnlyTags = setOf("pre", "blockquote", "a", "h1", "h2", "h3", "h4", "h5", "h6", "math")
+        fun visit(parent: Element, listType: NoteDocBlockType? = null, indent: Int = 0,
+            groupInline: Boolean = false) {
+            val inline = mutableListOf<Node>()
+            fun flushInline() {
+                if (inline.isEmpty()) return
+                val run = Element("p")
+                inline.forEach { run.appendChild(it.clone()) }
+                inline.clear()
+                collect(run, listType ?: NoteDocBlockType.PARAGRAPH, indent)
+            }
             parent.childNodes().forEach { node ->
+                if (groupInline && (node is TextNode || node is Element &&
+                        node.normalName() !in blockTags && node.normalName() !in
+                        setOf("svg", "script", "style", "iframe", "canvas") && !isStyledBlock(node) &&
+                        !hasNestedBlocks(node))) {
+                    inline += node
+                    return@forEach
+                }
+                flushInline()
                 if (node is TextNode && node.wholeText.isNotBlank()) {
                     collect(Element("p").text(node.wholeText), listType ?: NoteDocBlockType.PARAGRAPH, indent)
                 } else if (node is Element) {
                     val tag = node.normalName()
                     when (tag) {
-                        "script", "style", "iframe" -> Unit
-                        "img" -> {
-                            val source = node.attr("src")
-                            val imported = source.takeIf { it.isNotBlank() }?.let { imageResolver?.invoke(it) }
-                            if (imported != null) result += block(NoteDocBlockType.IMAGE, "")
-                                .copy(imagePath = imported)
-                            else {
-                                val alt = node.attr("alt").ifBlank { "Image unavailable from clipboard" }
-                                result += block(NoteDocBlockType.PARAGRAPH, alt)
-                            }
-                        }
+                        "script", "style", "iframe", "canvas" -> Unit
+                        "img", "svg" -> media(node)
                         "ul", "ol" -> visit(node, if (tag == "ul") NoteDocBlockType.BULLET
                             else NoteDocBlockType.NUMBERED, indent)
                         "hr" -> result += block(NoteDocBlockType.DIVIDER, "")
@@ -445,6 +539,7 @@ object NotePasteParser {
                                 result += block(NoteDocBlockType.PARAGRAPH,
                                     children[0].text().trim() + "\n" + children[1].text().trim())
                             } else if (children.any { it.normalName() in blockTags }) visit(node, listType, indent)
+                            else if (hasNestedBlocks(node)) visit(node, listType, indent, groupInline = true)
                             else collect(node, listType ?: NoteDocBlockType.PARAGRAPH, indent)
                         }
                         "li" -> {
@@ -472,11 +567,14 @@ object NotePasteParser {
                             }
                             if (node.children().any { it.normalName() in blockTags } &&
                                 tag !in setOf("pre", "blockquote")) visit(node, listType, indent)
+                            else if (tag !in inlineOnlyTags && hasNestedBlocks(node))
+                                visit(node, listType, indent, groupInline = true)
                             else collect(node, type, indent)
                         }
                     }
                 }
             }
+            flushInline()
         }
         visit(document.body())
         return result

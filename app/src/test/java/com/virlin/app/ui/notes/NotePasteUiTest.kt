@@ -11,6 +11,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -55,7 +56,9 @@ class NotePasteUiTest {
             MaterialTheme { if (!state.loading) NoteBlockEditor(state, vm,
                 documentSelectionMode = true) }
         }
-        compose.onNodeWithTag("notes_document_selection_text").assertExists()
+        // The blocks themselves are drawn, in the editor's own text fields.
+        before.forEach { compose.onNodeWithTag("notes_select_block_${it.id}").assertExists() }
+        before.forEach { compose.onNodeWithTag("notes_block_${it.id}").assertExists() }
         compose.onNodeWithTag("notes_copy_all").performClick()
         compose.runOnIdle {
             assertEquals("Main heading\n\nSubheading\n\nBody text",
@@ -64,33 +67,61 @@ class NotePasteUiTest {
         }
     }
 
-    @OptIn(ExperimentalTestApi::class)
-    @Test fun crossBlockSelectionFeedsFlashcardWithoutClipboardCopy() {
+    @Test fun blockSelectionFeedsFlashcardWithoutClipboardCopy() {
         val ids = SequentialIdProvider()
         val vm = NotesViewModel("task-direct-flashcard-selection", "Note",
             DefaultVirlinActions(InMemoryWorkStreamRepository(), FakeClock(Instant.EPOCH), ids), ids)
         val first = vm.state.value.blocks.single().id
         val pasted = "# Heading\n\nAnswer paragraph"
         assertTrue(vm.pasteStructured(first, pasted, pasted))
-        var selection = TextRange.Zero
+        var selection = emptySet<String>()
         compose.setContent {
             val state by vm.state.collectAsState()
-            var selected by remember { mutableStateOf(TextRange.Zero) }
+            var selected by remember { mutableStateOf(emptySet<String>()) }
             MaterialTheme {
                 NoteBlockEditor(state, vm, documentSelectionMode = true,
-                    documentSelection = selected,
-                    onDocumentSelectionChange = { selected = it; selection = it })
+                    selectedBlockIds = selected,
+                    onSelectedBlockIdsChange = { selected = it; selection = it })
             }
         }
-        val projection = selectableNoteText(vm.state.value.blocks)
-        compose.onNodeWithTag("notes_document_selection_text")
-            .performTextInputSelection(TextRange(0, projection.length))
+        compose.onNodeWithTag("notes_select_all").performClick()
         compose.runOnIdle {
-            assertEquals(TextRange(0, projection.length), selection)
-            val source = flashcardSourceFromCopiedText(vm.state.value.blocks,
-                projection.text.substring(selection.min, selection.max), selection.min)
-            assertEquals("Heading\n\nAnswer paragraph", source?.text)
-            assertEquals(vm.state.value.blocks.size, 2)
+            val blocks = vm.state.value.blocks
+            assertEquals(blocks.map { it.id }.toSet(), selection)
+            val card = flashcardBlocks(blocks.filter { it.id in selection })
+            assertEquals(listOf("Heading", "Answer paragraph"), card.map { it.text })
+            assertEquals(blocks.map { it.type }, card.map { it.type })
+            assertEquals(2, blocks.size)
+        }
+    }
+
+    @Test fun selectModeDrawsMediaAndSelectsItLikeAnyBlock() {
+        val ids = SequentialIdProvider()
+        val actions = DefaultVirlinActions(InMemoryWorkStreamRepository(), FakeClock(Instant.EPOCH), ids)
+        val owner = "task-select-media-${System.nanoTime()}"
+        val blocks = listOf(
+            com.virlin.app.domain.notedoc.NoteDocBlock("h", NoteDocBlockType.HEADING_1, "Lecture"),
+            com.virlin.app.domain.notedoc.NoteDocBlock("v", NoteDocBlockType.VIDEO, "",
+                video = com.virlin.app.domain.notedoc.NoteDocVideo("dQw4w9WgXcQ")),
+            com.virlin.app.domain.notedoc.NoteDocBlock("p", NoteDocBlockType.PARAGRAPH, "After the video"),
+        )
+        kotlinx.coroutines.runBlocking { actions.saveNoteDoc(owner, "Note", blocks) }
+        val vm = NotesViewModel(owner, "Note", actions, ids)
+        var selection = emptySet<String>()
+        compose.setContent {
+            val state by vm.state.collectAsState()
+            var selected by remember { mutableStateOf(emptySet<String>()) }
+            MaterialTheme { if (!state.loading) NoteBlockEditor(state, vm, documentSelectionMode = true,
+                selectedBlockIds = selected, onSelectedBlockIdsChange = { selected = it; selection = it }) }
+        }
+        compose.onNodeWithTag("notes_select_block_v").performClick()
+        compose.onNodeWithTag("notes_select_block_p").performClick()
+        compose.runOnIdle { assertEquals(setOf("v", "p"), selection) }
+        compose.onNodeWithTag("notes_select_block_v").performClick()
+        compose.runOnIdle { assertEquals(setOf("p"), selection) }
+        compose.runOnIdle {
+            assertTrue(vm.deleteBlocks(setOf("h", "v")))
+            assertEquals(listOf("p"), vm.state.value.blocks.map { it.id })
         }
     }
 
@@ -116,6 +147,85 @@ class NotePasteUiTest {
         val after = compose.onNodeWithTag("notes_editor_scroll").fetchSemanticsNode()
             .config[SemanticsProperties.VerticalScrollAxisRange].value()
         assertTrue("Viewport jumped from $before to $after", kotlin.math.abs(after - before) < 120f)
+    }
+
+    /** A stored 80-paragraph note opened fresh, so no line is focused yet. */
+    private fun longNote(owner: String): NotesViewModel {
+        val ids = SequentialIdProvider()
+        val actions = DefaultVirlinActions(InMemoryWorkStreamRepository(), FakeClock(Instant.EPOCH), ids)
+        val blocks = (1..80).map {
+            com.virlin.app.domain.notedoc.NoteDocBlock("p$it", NoteDocBlockType.PARAGRAPH, "Paragraph $it stays here.")
+        }
+        kotlinx.coroutines.runBlocking { actions.saveNoteDoc(owner, "Note", blocks) }
+        val vm = NotesViewModel(owner, "Note", actions, ids)
+        assertEquals(80, vm.state.value.blocks.size)
+        return vm
+    }
+
+    /** The first block below the note's opening space, which scrolls with the text. */
+    private fun topBlockIndex(vm: NotesViewModel): Int {
+        val blocks = vm.state.value.blocks
+        val editorTop = compose.onNodeWithTag("notes_editor_scroll").fetchSemanticsNode().boundsInRoot.top
+        val contentTop = editorTop + with(compose.density) { NoteDocumentTopSpace.toPx() }
+        return blocks.indexOfFirst { block ->
+            compose.onAllNodesWithTag("notes_block_${block.id}").fetchSemanticsNodes()
+                .any { it.boundsInRoot.bottom > contentTop }
+        }
+    }
+
+    @Test fun reopeningTheNoteContinuesAtTheSamePlace() {
+        val vm = longNote("task-reopen-position-${System.nanoTime()}")
+        var shown by mutableStateOf(true)
+        compose.setContent {
+            val state by vm.state.collectAsState()
+            MaterialTheme { if (shown && !state.loading) NoteBlockEditor(state, vm, positionKey = "reopen-test") }
+        }
+        compose.onNodeWithTag("notes_editor_scroll").performScrollToIndex(50)
+        compose.waitForIdle()
+        val before = topBlockIndex(vm)
+        assertTrue(before >= 45)
+        shown = false
+        compose.waitForIdle()
+        shown = true
+        compose.waitForIdle()
+        assertEquals(before, topBlockIndex(vm))
+    }
+
+    @Test fun selectAcrossOnAndOffKeepsThePlace() {
+        val vm = longNote("task-select-position")
+        var selecting by mutableStateOf(false)
+        compose.setContent {
+            val state by vm.state.collectAsState()
+            MaterialTheme { if (!state.loading) NoteBlockEditor(state, vm, documentSelectionMode = selecting) }
+        }
+        compose.onNodeWithTag("notes_editor_scroll").performScrollToIndex(50)
+        compose.waitForIdle()
+        val before = topBlockIndex(vm)
+        selecting = true
+        compose.waitForIdle()
+        selecting = false
+        compose.waitForIdle()
+        val after = topBlockIndex(vm)
+        assertTrue("Top block moved from $before to $after", kotlin.math.abs(after - before) <= 1)
+    }
+
+    @Test fun addingABlockWithNothingFocusedPutsItWhereTheUserIsLooking() {
+        val vm = longNote("task-insert-position")
+        compose.setContent {
+            val state by vm.state.collectAsState()
+            MaterialTheme { if (!state.loading) NoteBlockEditor(state, vm) }
+        }
+        compose.onNodeWithTag("notes_editor_scroll").performScrollToIndex(50)
+        compose.waitForIdle()
+        val top = topBlockIndex(vm)
+        compose.runOnIdle {
+            assertEquals(null, vm.state.value.focusedBlockId)
+            vm.onTool(NoteTool.TOGGLE)
+        }
+        compose.waitForIdle()
+        val blocks = vm.state.value.blocks
+        assertEquals(NoteDocBlockType.TOGGLE, blocks[top + 1].type)
+        assertTrue(topBlockIndex(vm) in top - 1..top + 1)
     }
 
     @Test fun systemClipboardPasteCreatesHeadingAndCodeBlocks() {

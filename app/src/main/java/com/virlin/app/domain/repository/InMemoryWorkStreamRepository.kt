@@ -173,6 +173,7 @@ class InMemoryWorkStreamRepository(
         }
         staged.stagedSteps.forEach { (id, st) -> stepsById[id] = st }
         staged.removedSteps.forEach { stepsById.remove(it) }
+        staged.removedNoteDocs.forEach { noteDocsByOwner.remove(it) }
         staged.stagedNoteDocs.forEach { (key, doc) -> noteDocsByOwner[key] = doc }
         staged.removedMapPreviews.forEach { mapPreviewsByOwner.remove(it) }
         staged.stagedMapPreviews.forEach { (key, preview) -> mapPreviewsByOwner[key] = preview }
@@ -234,6 +235,7 @@ class InMemoryWorkStreamRepository(
             stepsById.entries.removeAll { it.value.taskId in report.taskIds }
             pageBlocksById.entries.removeAll { it.value.taskId in report.taskIds || it.value.contentId in report.captureIds }
             report.noteOwners.forEach { noteDocsByOwner.remove(it) }
+            noteDocsByOwner.keys.removeAll { report.ownsNote(it) }
             report.ownerIds.forEach { mapPreviewsByOwner.remove(it) }
             deletionQueue[report.projectId] = report
         }
@@ -296,6 +298,7 @@ class InMemoryWorkStreamRepository(
         val stagedNoteDocs = LinkedHashMap<String, com.virlin.app.domain.notedoc.VirlinNoteDoc>()
         val stagedMapPreviews = LinkedHashMap<String, com.virlin.app.domain.mappreview.MapNodePreview>()
         val removedMapPreviews = LinkedHashSet<String>()
+        val removedNoteDocs = LinkedHashSet<String>()
         val stagedPageBlocks = LinkedHashMap<String, com.virlin.app.domain.model.TaskPageBlock>()
         val removedPageBlocks = LinkedHashSet<String>()
 
@@ -326,10 +329,14 @@ class InMemoryWorkStreamRepository(
         override suspend fun deleteStep(id: String) { removedSteps += id }
 
         override suspend fun noteDocOf(ownerKey: String) =
-            stagedNoteDocs[ownerKey] ?: noteDocsByOwner[ownerKey]
+            stagedNoteDocs[ownerKey] ?: if (ownerKey in removedNoteDocs) null else noteDocsByOwner[ownerKey]
         override suspend fun saveNoteDoc(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc) {
-            check(doc.ownerKey !in deletedNoteOwners && deletedProjects.none { doc.ownerKey in it.noteOwners }) { "Note owner was deleted." }
+            val owner = com.virlin.app.domain.model.TaskPageTypeKeys.canonicalNoteOwner(doc.ownerKey)
+            check(owner !in deletedNoteOwners && deletedProjects.none { it.ownsNote(doc.ownerKey) }) { "Note owner was deleted." }
             stagedNoteDocs[doc.ownerKey] = doc
+        }
+        override suspend fun deleteNoteDoc(ownerKey: String) {
+            stagedNoteDocs.remove(ownerKey); removedNoteDocs += ownerKey
         }
         override suspend fun mapNodePreviewOf(ownerId: String) =
             if (ownerId in removedMapPreviews) null

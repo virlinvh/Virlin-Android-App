@@ -1,5 +1,11 @@
 package com.virlin.app.ui.notes
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.unit.Density
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import android.content.ClipboardManager
 import android.content.ClipData
 import android.net.Uri
@@ -7,18 +13,24 @@ import android.text.Html
 import android.text.Spanned
 import com.virlin.app.data.noteimage.NoteImageStore
 import com.virlin.app.domain.notedoc.NoteMath
+import com.virlin.app.domain.notedoc.GoogleDocsPaste
+import android.os.Looper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
@@ -46,7 +58,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.text.TextLayoutResult
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlin.math.roundToInt
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -66,10 +88,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
@@ -89,7 +114,9 @@ import com.virlin.app.domain.notedoc.NoteDocAlign
 import com.virlin.app.domain.notedoc.NoteDocBlock
 import com.virlin.app.domain.notedoc.NoteDocBlockType
 import com.virlin.app.domain.notedoc.NoteDocMark
+import com.virlin.app.domain.notedoc.NoteDocTable
 import com.virlin.app.domain.notedoc.NoteDocRun
+import com.virlin.app.domain.notedoc.NoteListStyles
 import com.virlin.app.domain.notedoc.NoteRuns
 import com.virlin.app.domain.notedoc.visibleNoteBlocks
 
@@ -107,80 +134,389 @@ private val CodeBg: Color @Composable get() = NotesWash.copy(alpha = .55f)
  * the platform's own rather than a simulation. Stored runs are painted through a
  * [VisualTransformation]: without one the marks would persist but never appear.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NoteBlockEditor(
     state: NotesUiState,
     vm: NotesViewModel,
     headingFoldMode: Boolean = false,
+    /** Select-across: the note drawn as usual, read only, where taps select whole blocks. */
     documentSelectionMode: Boolean = false,
-    documentSelection: TextRange = TextRange.Zero,
-    onDocumentSelectionChange: (TextRange) -> Unit = {},
+    selectedBlockIds: Set<String> = emptySet(),
+    onSelectedBlockIdsChange: (Set<String>) -> Unit = {},
     modifier: Modifier = Modifier,
+    /** Note key under which the reading position is kept across reopening; null keeps none. */
+    positionKey: String? = null,
+    /**
+     * The reading view: the same blocks, fonts and colours, but nothing can change the note.
+     * Folding toggles and playing a video still work, as view-only state of this screen.
+     */
+    readOnly: Boolean = false,
+    /** Scrolls above the first block; only used with [readOnly]. */
+    readerHeader: (@Composable () -> Unit)? = null,
+    /**
+     * Page formatting: the note is drawn on paper of the chosen size, at that paper's scale, with
+     * its margins, title and page numbers, breaking where the printout and export break.
+     */
+    pageView: NotePageView? = null,
 ) {
     val scroll = rememberLazyListState()
+    var readerCollapsed by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var readerPlaying by remember { mutableStateOf<String?>(null) }
+    val paged = pageView != null && !readOnly && !documentSelectionMode
+    val original = state
+    val state = if (paged) remember(original) {
+        // Pages print everything, so every folded heading and toggle shows open here too.
+        if (original.blocks.none { it.isCollapsed }) original
+        else original.copy(blocks = original.blocks.map { if (it.isCollapsed) it.copy(isCollapsed = false) else it })
+    } else if (!readOnly) state else state.copy(
+        blocks = state.blocks.map { block -> readerCollapsed[block.id]?.let { block.copy(isCollapsed = it) } ?: block },
+        focusedBlockId = null, focusedCell = null, cellFocusRequest = null, selectedImageId = null,
+        playingVideoId = readerPlaying, pasting = false,
+    )
+    val selectionRowActions = remember(vm) {
+        NoteRowActions(readOnly = true, toggleCollapsed = vm::toggleCollapsed, playVideo = vm::playVideo)
+    }
+    val rowActions = remember(readOnly, vm, paged) {
+        if (paged) NoteRowActions(readOnly = false, toggleCollapsed = {}, playVideo = vm::playVideo)
+        else if (!readOnly) NoteRowActions(readOnly = false, toggleCollapsed = vm::toggleCollapsed, playVideo = vm::playVideo)
+        else NoteRowActions(
+            readOnly = true,
+            toggleCollapsed = { id ->
+                val current = readerCollapsed[id] ?: vm.state.value.blocks.firstOrNull { it.id == id }?.isCollapsed ?: false
+                readerCollapsed = readerCollapsed + (id to !current)
+            },
+            playVideo = { readerPlaying = it },
+        )
+    }
     var focusRequestFor by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(state.focusedBlockId) { focusRequestFor = state.focusedBlockId }
-    val visible = remember(state.blocks, headingFoldMode) {
-        visibleNoteBlocks(state.blocks, foldHeadings = headingFoldMode)
+    val visible = remember(state.blocks, headingFoldMode, paged) {
+        if (paged) state.blocks else visibleNoteBlocks(state.blocks, foldHeadings = headingFoldMode)
     }
-    val numbers = remember(state.blocks) {
-        val result = HashMap<String, Int>()
-        var previousType: NoteDocBlockType? = null
-        var previousIndent = 0
-        var number = 0
-        state.blocks.forEach { block ->
-            number = if (block.type == NoteDocBlockType.NUMBERED) {
-                if (previousType == NoteDocBlockType.NUMBERED && previousIndent == block.indent)
-                    number + 1 else 1
-            } else 0
-            if (block.type == NoteDocBlockType.NUMBERED) result[block.id] = number
-            previousType = block.type
-            previousIndent = block.indent
-        }
-        result
-    }
-    LaunchedEffect(state.focusedBlockId, documentSelectionMode) {
+    val numbers = remember(state.blocks) { noteListNumbers(state.blocks) }
+    LaunchedEffect(state.focusedBlockId) {
         if (!documentSelectionMode) {
             val target = visible.indexOfFirst { it.id == state.focusedBlockId }
             if (target >= 0 && scroll.layoutInfo.visibleItemsInfo.none { it.index == target })
                 scroll.scrollToItem(target)
         }
     }
-    LazyColumn(modifier.fillMaxWidth().fillMaxHeight().testTag("notes_editor_scroll"),
-        state = scroll) {
+
+    // The reading position is the block at the top of the screen. It survives switching into and
+    // out of select-across mode, closing and reopening the note, and the app being restored.
+    val context = LocalContext.current
+    val positions = remember(context) { NotePositionStore(context) }
+    var topBlockId by rememberSaveable { mutableStateOf<String?>(null) }
+    var previousSelectionMode by remember { mutableStateOf<Boolean?>(null) }
+    var selectionAnchor by remember { mutableStateOf<String?>(null) }
+    val currentBlocks by rememberUpdatedState(state.blocks)
+    val currentVisible by rememberUpdatedState(visible)
+    LaunchedEffect(documentSelectionMode) {
+        // The reading view keeps no reading position and never moves the editor's insert point.
+        if (readOnly) return@LaunchedEffect
+        val cameFrom = previousSelectionMode
+        previousSelectionMode = documentSelectionMode
         if (documentSelectionMode) {
-            item {
-                val context = LocalContext.current
-                val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
-                val projection = remember(state.blocks) { selectableNoteText(state.blocks) }
-                Row(Modifier.fillMaxWidth().padding(bottom = 18.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text("Long-press and drag across the note", color = Muted, fontSize = 12.sp,
-                        modifier = Modifier.weight(1f))
-                    Text("Copy all", color = Green, fontSize = 13.sp,
-                        modifier = Modifier.clickable {
-                            clipboard?.setPrimaryClip(ClipData.newPlainText("Virlin note", projection.text))
-                        }.testTag("notes_copy_all"))
+            // The same blocks stay on screen below the selection bar (list item 0).
+            val index = currentVisible.indexOfFirst { it.id == topBlockId }
+            if (index <= 0) scroll.scrollToItem(0)
+            else if (scroll.firstVisibleItemIndex != index + 1) scroll.scrollToItem(index + 1)
+            snapshotFlow { scroll.firstVisibleItemIndex }.collect { item ->
+                currentVisible.getOrNull((item - 1).coerceAtLeast(0))?.id?.let { topBlockId = it }
+            }
+        } else {
+            when (cameFrom) {
+                // First show: continue where this note was last read, unless the list kept its own
+                // position (the app was restored with its saved state).
+                null -> if (positionKey != null && scroll.firstVisibleItemIndex == 0 &&
+                    scroll.firstVisibleItemScrollOffset == 0) {
+                    positions.load(positionKey)?.let { (id, offset) ->
+                        val index = currentVisible.indexOfFirst { it.id == id }
+                        if (index > 0 || (index == 0 && offset > 0)) scroll.scrollToItem(index, offset)
+                    }
                 }
-                BasicTextField(
-                    value = TextFieldValue(projection,
-                        TextRange(documentSelection.start.coerceIn(0, projection.length),
-                            documentSelection.end.coerceIn(0, projection.length))),
-                    onValueChange = { next -> onDocumentSelectionChange(next.selection) },
-                    readOnly = true,
-                    textStyle = TextStyle(color = Ink, fontSize = 16.sp, lineHeight = 25.sp),
-                    modifier = Modifier.fillMaxWidth().testTag("notes_document_selection_text"),
-                )
+                // Back from select-across: return to the line that was at the top there.
+                true -> {
+                    val index = currentBlocks.indexOfFirst { it.id == topBlockId }
+                    val target = (index downTo 0).asSequence().map { currentBlocks[it].id }
+                        .map { id -> currentVisible.indexOfFirst { it.id == id } }.firstOrNull { it >= 0 }
+                    if (target != null) scroll.scrollToItem(target)
+                }
+                false -> Unit
+            }
+            snapshotFlow {
+                Triple(scroll.firstVisibleItemIndex, scroll.firstVisibleItemScrollOffset, scroll.isScrollInProgress)
+            }.collect { (item, offset, moving) ->
+                if (moving) return@collect
+                val id = currentVisible.getOrNull(item)?.id ?: return@collect
+                topBlockId = id
+                vm.setViewAnchor(id)
+                positionKey?.let { positions.save(it, id, offset) }
+            }
+        }
+    }
+    val measured = remember { mutableStateMapOf<String, Int>() }
+    val blockFocus = remember { HashMap<String, FocusRequester>() }
+    CompositionLocalProvider(LocalBlockFocus provides blockFocus) {
+    NotePageScale(if (paged) pageView else null, modifier) { pageModifier, deskGap ->
+    LazyColumn(pageModifier.fillMaxWidth().fillMaxHeight().testTag("notes_editor_scroll"),
+        state = scroll, contentPadding = PaddingValues(top = if (paged) deskGap else NoteDocumentTopSpace)) {
+        if (readOnly && readerHeader != null) item(key = "reader_header") { readerHeader() }
+        if (documentSelectionMode) {
+            stickyHeader(key = "selection_bar") {
+                NoteSelectionBar(state.blocks, selectedBlockIds, onSelectedBlockIdsChange)
+            }
+            val shownIds = visible.mapTo(HashSet()) { it.id }
+            itemsIndexed(visible, key = { _, block -> block.id }) { visibleIndex, block ->
+                Spacer(Modifier.height(NoteDocumentLayout.beforeDp(block, visibleIndex).dp))
+                SelectableNoteBlock(
+                    block = block,
+                    selected = block.id in selectedBlockIds,
+                    onTap = {
+                        val group = blockWithFolded(state.blocks, shownIds, block.id)
+                        selectionAnchor = block.id
+                        onSelectedBlockIdsChange(
+                            if (block.id in selectedBlockIds) selectedBlockIds - group.toSet() else selectedBlockIds + group)
+                    },
+                    onLongPress = {
+                        val from = selectionAnchor?.takeIf { it in shownIds } ?: block.id
+                        selectionAnchor = block.id
+                        onSelectedBlockIdsChange(selectedBlockIds + blockRange(state.blocks, visible, from, block.id))
+                    },
+                ) {
+                    NoteBlockRow(block, numbers[block.id] ?: 0, state, vm, headingFoldMode,
+                        null, {}, selectionRowActions)
+                }
+                Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(visibleIndex + 1)).dp))
+            }
+        } else if (paged && pageView != null) {
+            itemsIndexed(visible, key = { _, block -> block.id }) { visibleIndex, block ->
+                val place = pagePlace(pageView, visible, visibleIndex, measured)
+                NotePageItem(pageView, place.page, place.lastPage, place.firstOnPage, place.lastOnPage, deskGap, place.fill,
+                    onTitleMeasured = { measured[PAGE_TITLE_KEY] = it },
+                    onContentMeasured = { measured[block.id] = it }) {
+                    if (!place.firstOnPage) Spacer(Modifier.height(NoteDocumentLayout.beforeDp(block, visibleIndex).dp))
+                    NoteBlockRow(block, numbers[block.id] ?: 0, state, vm, headingFoldMode,
+                        focusRequestFor, { focusRequestFor = null }, rowActions)
+                    if (!place.lastOnPage) {
+                        Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(visibleIndex + 1)).dp))
+                    }
+                }
             }
         } else {
             itemsIndexed(visible, key = { _, block -> block.id }) { visibleIndex, block ->
                 Spacer(Modifier.height(NoteDocumentLayout.beforeDp(block, visibleIndex).dp))
                 NoteBlockRow(block, numbers[block.id] ?: 0, state, vm, headingFoldMode,
-                    focusRequestFor, { focusRequestFor = null })
+                    focusRequestFor, { focusRequestFor = null }, rowActions)
                 Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(visibleIndex + 1)).dp))
             }
         }
-        item { Spacer(Modifier.height(76.dp)) }
+        item { Spacer(Modifier.height(if (paged) deskGap * 6 else 76.dp)) }
+    }
+    }
+    }
+}
+
+/**
+ * Each editable block field's focus handle while it is on screen. Backspace uses it to move focus
+ * to the block above before a merge removes the focused field: focus that vanishes together with
+ * its field closes the keyboard until the next field asks for it again.
+ */
+private val LocalBlockFocus = staticCompositionLocalOf<MutableMap<String, FocusRequester>?> { null }
+
+/** Select-across controls, pinned above the note: count, Select all / Clear and Copy. */
+@Composable
+private fun NoteSelectionBar(blocks: List<NoteDocBlock>, selected: Set<String>, onChange: (Set<String>) -> Unit) {
+    val context = LocalContext.current
+    val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
+    val chosen = blocks.filter { it.id in selected }
+    val all = chosen.size == blocks.size
+    Row(Modifier.fillMaxWidth().background(NotesPaper).padding(bottom = 10.dp, top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(if (chosen.isEmpty()) "Tap blocks to select" else "${chosen.size} selected",
+            color = Muted, fontSize = 12.sp, maxLines = 1, modifier = Modifier.weight(1f).testTag("notes_selection_count"))
+        Text(if (all) "Clear" else "Select all", color = Green, fontSize = 13.sp,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                .clickable(role = Role.Button) { onChange(if (all) emptySet() else blocks.mapTo(LinkedHashSet()) { it.id }) }
+                .padding(horizontal = 8.dp, vertical = 10.dp).testTag("notes_select_all"))
+        Text(if (chosen.isEmpty()) "Copy all" else "Copy", color = Green, fontSize = 13.sp,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                .clickable(role = Role.Button) {
+                    val text = selectableNoteText(chosen.ifEmpty { blocks }).text
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("Virlin note", text))
+                }
+                .padding(horizontal = 8.dp, vertical = 10.dp)
+                .testTag(if (chosen.isEmpty()) "notes_copy_all" else "notes_copy_selection"))
+    }
+}
+
+/**
+ * One block drawn exactly as in the note, under a layer that takes its touches: a tap selects
+ * or unselects the whole block (video, audio, image, equation or text alike), a long press
+ * selects every block from the last one touched.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SelectableNoteBlock(
+    block: NoteDocBlock,
+    selected: Boolean,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val accent = Green
+    Box(Modifier.fillMaxWidth()) {
+        content()
+        Box(
+            Modifier.matchParentSize()
+                .clip(RoundedCornerShape(8.dp))
+                .then(if (selected) Modifier.background(accent.copy(alpha = .14f))
+                    .border(1.5.dp, accent.copy(alpha = .7f), RoundedCornerShape(8.dp)) else Modifier)
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    role = Role.Checkbox,
+                    onLongClickLabel = "Select up to here",
+                    onLongClick = onLongPress,
+                    onClick = onTap,
+                )
+                .semantics {
+                    this.selected = selected
+                    stateDescription = if (selected) "Selected" else "Not selected"
+                }
+                .testTag("notes_select_block_${block.id}"),
+        )
+    }
+}
+
+/** Each numbered block's number: runs of numbered blocks at one indent count up from 1. */
+private fun noteListNumbers(blocks: List<NoteDocBlock>): Map<String, Int> {
+    val result = HashMap<String, Int>()
+    var previousType: NoteDocBlockType? = null
+    var previousIndent = 0
+    var number = 0
+    blocks.forEach { block ->
+        number = if (block.type == NoteDocBlockType.NUMBERED) {
+            if (previousType == NoteDocBlockType.NUMBERED && previousIndent == block.indent)
+                number + 1 else 1
+        } else 0
+        if (block.type == NoteDocBlockType.NUMBERED) result[block.id] = number
+        previousType = block.type
+        previousIndent = block.indent
+    }
+    return result
+}
+
+/**
+ * A note drawn exactly as its editor draws it, read only, inside another screen's column: the
+ * same rows, fonts, colours, prompt and code boxes with their Copy buttons, tables, images and
+ * spacing. There is no editor behind it, so nothing here can change the note; folding toggles and
+ * playing a video are view-only state of this preview.
+ */
+@Composable
+internal fun NoteReadOnlyBlocks(blocks: List<NoteDocBlock>, modifier: Modifier = Modifier) {
+    var collapsed by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var playing by remember { mutableStateOf<String?>(null) }
+    val currentBlocks by rememberUpdatedState(blocks)
+    val shown = remember(blocks, collapsed) {
+        blocks.map { block -> collapsed[block.id]?.let { block.copy(isCollapsed = it) } ?: block }
+    }
+    val state = remember(shown, playing) { NotesUiState(loading = false, blocks = shown, playingVideoId = playing) }
+    val visible = remember(shown) { visibleNoteBlocks(shown, foldHeadings = false) }
+    val numbers = remember(shown) { noteListNumbers(shown) }
+    val actions = remember {
+        NoteRowActions(
+            readOnly = true,
+            toggleCollapsed = { id ->
+                val current = collapsed[id] ?: currentBlocks.firstOrNull { it.id == id }?.isCollapsed ?: false
+                collapsed = collapsed + (id to !current)
+            },
+            playVideo = { playing = it },
+        )
+    }
+    Column(modifier.fillMaxWidth()) {
+        visible.forEachIndexed { index, block ->
+            key(block.id) {
+                Spacer(Modifier.height(NoteDocumentLayout.beforeDp(block, index).dp))
+                NoteBlockRow(block, numbers[block.id] ?: 0, state, null, false, null, {}, actions)
+                Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(index + 1)).dp))
+            }
+        }
+    }
+}
+
+private const val PAGE_TITLE_KEY = "\u0000page_title"
+
+private class PagePlace(val page: Int, val lastPage: Int, val firstOnPage: Boolean, val lastOnPage: Boolean, val fill: Dp)
+
+/**
+ * Where a block sits on the formatted pages. The rest of a page is filled from the blocks'
+ * measured heights when they are known, so each sheet is exactly the paper's height; otherwise
+ * from the print layout.
+ */
+@Composable
+private fun pagePlace(view: NotePageView, visible: List<NoteDocBlock>, index: Int, measured: Map<String, Int>): PagePlace {
+    val p = view.pagination
+    val block = visible[index]
+    val page = p?.startPage?.get(block.id)
+        ?: visible.subList(0, index).asReversed().firstNotNullOfOrNull { p?.endPage?.get(it.id) } ?: 0
+    val lastPage = p?.endPage?.get(block.id) ?: page
+    val prevEnd = visible.getOrNull(index - 1)?.let { p?.endPage?.get(it.id) }
+    val nextStart = visible.getOrNull(index + 1)?.let { p?.startPage?.get(it.id) }
+    val first = index == 0 || (prevEnd != null && page > prevEnd)
+    val last = index == visible.lastIndex || (nextStart != null && nextStart > lastPage)
+    if (!last) return PagePlace(page, lastPage, first, false, 0.dp)
+    val s = view.settings
+    val margin = s.margins.points
+    val density = LocalDensity.current
+    var sumPx = 0
+    var known = p != null
+    var j = index
+    while (j >= 0) {
+        val b = visible[j]
+        val h = measured[b.id]
+        if (h == null) known = false else sumPx += h
+        val bStart = p?.startPage?.get(b.id) ?: break
+        if (bStart < lastPage || j == 0) break
+        val before = p.endPage[visible[j - 1].id]
+        if (before == null || before < lastPage) break
+        j--
+    }
+    val title = view.title?.trim().orEmpty()
+    if (lastPage == 0 && s.includeTitle && title.isNotEmpty()) {
+        val t = measured[PAGE_TITLE_KEY]
+        if (t == null) known = false else sumPx += t
+    }
+    val fill = if (known) {
+        with(density) { (pagePt(s.pageHeightPt - 2 * margin).toPx() - sumPx).coerceAtLeast(0f).toDp() }
+    } else {
+        val bottom = p?.blockBottom?.get(block.id) ?: (s.pageHeightPt - margin)
+        pagePt((s.pageHeightPt - margin - bottom).coerceAtLeast(0f))
+    }
+    return PagePlace(page, lastPage, first, true, fill)
+}
+
+/**
+ * Draws [content] at paper scale: the editor's units become paper units, so a page of the chosen
+ * paper exactly fills the width, and text, images and spacing shrink with it as they would print.
+ * Without a page view the content is drawn as usual.
+ */
+@Composable
+private fun NotePageScale(view: NotePageView?, modifier: Modifier, content: @Composable (Modifier, Dp) -> Unit) {
+    if (view == null) {
+        content(modifier, 0.dp)
+        return
+    }
+    BoxWithConstraints(modifier) {
+        val gutterPx = with(LocalDensity.current) { 10.dp.toPx() }
+        val widthPx = (constraints.maxWidth - 2 * gutterPx).coerceAtLeast(1f)
+        val pageDensity = Density((widthPx / pagePt(view.settings.pageWidthPt).value).coerceAtLeast(.2f), 1f)
+        CompositionLocalProvider(LocalDensity provides pageDensity) {
+            val gutter = with(pageDensity) { gutterPx.toDp() }
+            val deskGap = with(pageDensity) { (gutterPx * 1.4f).toDp() }
+            content(Modifier.fillMaxSize().padding(horizontal = gutter).testTag("notes_page_view"), deskGap)
+        }
     }
 }
 
@@ -189,24 +525,53 @@ private fun NoteBlockRow(
     block: NoteDocBlock,
     numberIndex: Int,
     state: NotesUiState,
-    vm: NotesViewModel,
+    /** Null draws the block read only: nothing here can change a note without its editor. */
+    vm: NotesViewModel?,
     headingFoldMode: Boolean,
     focusRequestFor: String?,
     onFocusHandled: () -> Unit,
+    actions: NoteRowActions,
 ) {
     val indent = (block.indent * 18).dp
     val quoteAccent = Green
+    val readOnly = actions.readOnly || vm == null
     when (block.type) {
-        NoteDocBlockType.IMAGE -> NoteImageBlock(block.imagePath, Modifier.padding(start = indent))
-        NoteDocBlockType.HEADING_1, NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3 -> Row(
+        NoteDocBlockType.IMAGE -> {
+            val focusManager = LocalFocusManager.current
+            NoteImageBlock(block.imagePath, Modifier.padding(start = indent),
+                selected = state.selectedImageId == block.id,
+                onClick = if (readOnly) null else {
+                    {
+                        // The keyboard steps aside so the image tools strip has the screen.
+                        focusManager.clearFocus()
+                        vm?.selectImage(block.id)
+                    }
+                })
+        }
+        NoteDocBlockType.VIDEO -> {
+            val focusManager = LocalFocusManager.current
+            NoteVideoCard(
+                video = block.video,
+                playing = state.playingVideoId == block.id,
+                onPlay = { focusManager.clearFocus(); actions.playVideo(block.id) },
+                onStop = { actions.playVideo(null) },
+                modifier = Modifier.padding(start = indent),
+                onEdit = if (readOnly) null else { { vm?.openDialog(NoteDialog.Video(block.id)) } },
+                onRemove = if (readOnly) null else { { vm?.deleteVideo(block.id) } },
+            )
+        }
+        NoteDocBlockType.AUDIO -> NoteAudioCard(block.audio, Modifier.padding(start = indent),
+            onRemove = if (readOnly) null else { { vm?.deleteAudio(block.id) } })
+        NoteDocBlockType.HEADING_1, NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3,
+        NoteDocBlockType.HEADING_4, NoteDocBlockType.HEADING_5 -> Row(
             Modifier.fillMaxWidth().padding(start = indent),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = if (block.toggleHeading && !headingFoldMode) Alignment.Top else Alignment.CenterVertically,
         ) {
             if (headingFoldMode) {
                 Box(
                     Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
                         .background(Mint)
-                        .clickable(role = Role.Button) { vm.toggleCollapsed(block.id) }
+                        .clickable(role = Role.Button) { actions.toggleCollapsed(block.id) }
                         .semantics {
                             contentDescription = if (block.isCollapsed) "Expand heading ${block.text}" else "Collapse heading ${block.text}"
                         }
@@ -217,33 +582,43 @@ private fun NoteBlockRow(
                         contentDescription = null, tint = Green, modifier = Modifier.size(18.dp))
                 }
                 Spacer(Modifier.width(8.dp))
+            } else if (block.toggleHeading) {
+                NoteToggleArrow(
+                    collapsed = block.isCollapsed,
+                    textSizeSp = NotesViewModel.defaultSizeFor(block.type),
+                    lineHeightSp = NoteDocumentLayout.lineHeightSp(block),
+                    color = Ink,
+                    contentDescription = if (block.isCollapsed) "Expand toggle heading ${block.text}"
+                        else "Collapse toggle heading ${block.text}",
+                    testTag = "notes_toggle_heading_${block.id}",
+                    onClick = { actions.toggleCollapsed(block.id) },
+                )
+                Spacer(Modifier.width(2.dp))
             }
-            BlockTextField(block, state, vm, Modifier.weight(1f), focusRequestFor, onFocusHandled)
+            BlockTextField(block, state, vm, Modifier.weight(1f), focusRequestFor, onFocusHandled, readOnly)
         }
         NoteDocBlockType.TOGGLE -> Row(
             Modifier.fillMaxWidth().padding(start = indent, top = 4.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
         ) {
-            Box(
-                Modifier.size(32.dp).clip(RoundedCornerShape(8.dp))
-                    .clickable(role = Role.Button) { vm.toggleCollapsed(block.id) }
-                    .semantics {
-                        contentDescription = if (block.isCollapsed) "Expand toggle" else "Collapse toggle"
-                    }
-                    .testTag("notes_toggle_${block.id}"),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(if (block.isCollapsed) "▸" else "▾", color = Green, fontSize = 20.sp)
-            }
-            Spacer(Modifier.width(4.dp))
-            BlockTextField(block, state, vm, Modifier.weight(1f), focusRequestFor, onFocusHandled)
+            NoteToggleArrow(
+                collapsed = block.isCollapsed,
+                textSizeSp = NotesViewModel.defaultSizeFor(block.type),
+                lineHeightSp = NoteDocumentLayout.lineHeightSp(block),
+                color = Ink,
+                contentDescription = if (block.isCollapsed) "Expand toggle" else "Collapse toggle",
+                testTag = "notes_toggle_${block.id}",
+                onClick = { actions.toggleCollapsed(block.id) },
+            )
+            Spacer(Modifier.width(2.dp))
+            BlockTextField(block, state, vm, Modifier.weight(1f), focusRequestFor, onFocusHandled, readOnly)
         }
         NoteDocBlockType.DIVIDER -> Box(
             Modifier.fillMaxWidth().padding(vertical = 10.dp).height(1.dp).background(Border)
                 .semantics { contentDescription = "Divider" },
         )
 
-        NoteDocBlockType.TABLE -> NoteTableBlock(block, vm)
+        NoteDocBlockType.TABLE -> NoteTableBlock(block, state, vm, readOnly)
 
         NoteDocBlockType.PROMPT -> CopyableBlock(
             blockId = block.id,
@@ -254,9 +629,11 @@ private fun NoteBlockRow(
                 .clip(RoundedCornerShape(12.dp)).background(Mint).padding(12.dp),
             header = {
                 // A user-authored callout. Nothing here is generated for the user.
-                BasicTextField(
+                if (readOnly) Text(block.promptTitle.orEmpty(), color = Green, fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                else BasicTextField(
                     value = block.promptTitle.orEmpty(),
-                    onValueChange = { vm.onPromptTitleChanged(block.id, it) },
+                    onValueChange = { vm?.onPromptTitleChanged(block.id, it) },
                     readOnly = state.pasting,
                     textStyle = TextStyle(color = Green, fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
                     cursorBrush = SolidColor(Green),
@@ -271,7 +648,7 @@ private fun NoteBlockRow(
             },
         ) {
             Spacer(Modifier.height(6.dp))
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled, readOnly)
         }
 
         NoteDocBlockType.QUOTE -> Box(
@@ -281,7 +658,7 @@ private fun NoteBlockRow(
                 .background(quoteAccent.copy(alpha = .045f))
                 .drawBehind { drawRect(quoteAccent.copy(alpha = .65f), size = Size(3.dp.toPx(), size.height)) }
                 .padding(horizontal = 17.dp, vertical = 15.dp)) {
-                BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+                BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled, readOnly)
             }
         }
 
@@ -307,21 +684,21 @@ private fun NoteBlockRow(
                     mutableStateOf(block.text == "\\( \\)")
                 }
                 NoteEquationView(block.text)
-                Spacer(Modifier.height(6.dp))
-                Text(
+                if (!readOnly) Spacer(Modifier.height(6.dp))
+                if (!readOnly) Text(
                     if (editingEquation) "Hide LaTeX source" else "Edit LaTeX source",
                     color = Green,
                     fontSize = 12.sp,
                     modifier = Modifier.clickable { editingEquation = !editingEquation }
                         .testTag("notes_equation_source_${block.id}"),
                 )
-                if (editingEquation) {
+                if (editingEquation && !readOnly) {
                     Spacer(Modifier.height(6.dp))
-                    BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+                    BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled, readOnly)
                 }
             } else {
                 BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled,
-                    syntax = syntax)
+                    readOnly, syntax = syntax)
             }
             }
         }
@@ -332,33 +709,36 @@ private fun NoteBlockRow(
         ) {
             NoteCheckBox(
                 checked = block.checked,
-                onToggle = { vm.onChecklistToggled(block.id) },
+                onToggle = { if (!readOnly) vm?.onChecklistToggled(block.id) },
                 modifier = Modifier.padding(top = 3.dp).testTag("notes_check_${block.id}"),
             )
             Spacer(Modifier.width(10.dp))
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled, readOnly)
         }
 
         NoteDocBlockType.BULLET -> Row(
             Modifier.fillMaxWidth().padding(start = indent, top = 2.dp, bottom = 2.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            Text("•", color = Ink, fontSize = 16.sp, modifier = Modifier.padding(top = 1.dp))
+            val marker = NoteListStyles.marker(block.type, block.listStyle)
+            Text(marker, color = Ink, fontSize = if (marker == "•") 16.sp else 14.sp,
+                modifier = Modifier.padding(top = if (marker == "•") 1.dp else 3.dp).testTag("notes_marker_${block.id}"))
             Spacer(Modifier.width(10.dp))
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled, readOnly)
         }
 
         NoteDocBlockType.NUMBERED -> Row(
             Modifier.fillMaxWidth().padding(start = indent, top = 2.dp, bottom = 2.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            Text("$numberIndex.", color = Ink, fontSize = 15.sp, modifier = Modifier.padding(top = 1.dp))
+            Text(NoteListStyles.marker(block.type, block.listStyle, numberIndex), color = Ink, fontSize = 15.sp,
+                modifier = Modifier.padding(top = 1.dp).testTag("notes_marker_${block.id}"))
             Spacer(Modifier.width(8.dp))
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled, readOnly)
         }
 
         else -> Box(Modifier.fillMaxWidth().padding(start = indent, top = 2.dp, bottom = 2.dp)) {
-            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled)
+            BlockTextField(block, state, vm, Modifier.fillMaxWidth(), focusRequestFor, onFocusHandled, readOnly)
         }
     }
 }
@@ -400,17 +780,27 @@ private fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = this.cli
 private fun BlockTextField(
     block: NoteDocBlock,
     state: NotesUiState,
-    vm: NotesViewModel,
+    vm: NotesViewModel?,
     modifier: Modifier = Modifier,
     focusRequestFor: String?,
     onFocusHandled: () -> Unit,
+    readOnly: Boolean = false,
     syntax: CodeHighlight? = null,
 ) {
+    if (readOnly || vm == null) {
+        ReadOnlyBlockText(block, modifier, syntax)
+        return
+    }
     val context = LocalContext.current
     val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
     val focused = state.focusedBlockId == block.id
     val requester = remember(block.id) { FocusRequester() }
     val hasInputFocus = remember(block.id) { mutableStateOf(false) }
+    val blockFocus = LocalBlockFocus.current
+    DisposableEffect(block.id, blockFocus) {
+        blockFocus?.put(block.id, requester)
+        onDispose { if (blockFocus?.get(block.id) === requester) blockFocus.remove(block.id) }
+    }
     LaunchedEffect(focusRequestFor, block.id) {
         if (focused && focusRequestFor == block.id) {
             // Only a newly selected block needs programmatic focus. A style or block-type edit
@@ -419,20 +809,8 @@ private fun BlockTextField(
             onFocusHandled()
         }
     }
-    val size = NotesViewModel.defaultSizeFor(block.type).sp
     val accent = Green
-    val style = TextStyle(
-        color = if (block.type == NoteDocBlockType.QUOTE) Muted else Ink,
-        fontSize = size,
-        lineHeight = NoteDocumentLayout.lineHeightSp(block).sp,
-        fontWeight = if (block.type.isHeading) FontWeight.SemiBold else FontWeight.Normal,
-        fontFamily = if (block.type == NoteDocBlockType.CODE) FontFamily.Monospace else null,
-        textAlign = when (block.align) {
-            NoteDocAlign.CENTER -> TextAlign.Center
-            NoteDocAlign.RIGHT -> TextAlign.End
-            NoteDocAlign.LEFT -> TextAlign.Start
-        },
-    )
+    val style = blockTextStyle(block)
     val value = TextFieldValue(
         text = block.text,
         selection = if (focused) {
@@ -451,20 +829,29 @@ private fun BlockTextField(
                 val (_, _, insertedCount) = NoteRuns.diff(block.text, next.text)
                 // A single typed character is never a structured paste; skip copying a possibly
                 // huge clipboard across the binder on every keystroke.
-                val item = if (insertedCount < 2) null
-                    else clipboard?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)
+                val clip = if (insertedCount < 2) null
+                    else clipboard?.primaryClip?.takeIf { it.itemCount > 0 }
+                val item = clip?.getItemAt(0)
                 val pasted = item?.text?.toString() ?: item?.coerceToText(context)?.toString()
-                val richHtml = item?.htmlText ?: (item?.text as? Spanned)?.let {
-                    Html.toHtml(it, Html.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE)
-                }
+                val richHtml = item?.htmlText ?: item?.let { googleDocsProviderHtml(context, clip, it) }
+                    ?: (item?.text as? Spanned)?.let {
+                        Html.toHtml(it, Html.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE)
+                    }
                 if (!vm.pasteStructured(block.id, next.text,
                         pasted.orEmpty(), richHtml, imageResolver = { source ->
                             runCatching {
-                                val uri = Uri.parse(source)
-                                if (uri.scheme == "content") NoteImageStore.import(context, uri)
-                                else null
+                                when {
+                                    source.startsWith("data:image/", ignoreCase = true) ->
+                                        NoteImageStore.importDataUri(context, source)
+                                    Uri.parse(source).scheme == "content" ->
+                                        NoteImageStore.import(context, Uri.parse(source))
+                                    GoogleDocsPaste.isDocsImageUrl(source) &&
+                                        Looper.myLooper() != Looper.getMainLooper() ->
+                                        NoteImageStore.importRemote(context, source)
+                                    else -> null
+                                }
                             }.getOrNull()
-                        })) {
+                        }, clipSummary = clip?.let { clipSummary(context, it) })) {
                     vm.onTextChanged(block.id, next.text, next.selection)
                 }
             } else {
@@ -500,12 +887,54 @@ private fun BlockTextField(
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Backspace &&
                     focused && state.selection.collapsed && state.selection.start == 0
                 ) {
-                    vm.onBackspaceAtStart(block.id)
+                    val above = vm.backspaceMergeTarget(block.id)
+                    val handled = vm.onBackspaceAtStart(block.id)
+                    // This field is still on screen: hand focus to the block it merged into now,
+                    // so the keyboard stays up instead of closing and reopening on every press.
+                    if (handled && above != null) blockFocus?.get(above)?.let { runCatching { it.requestFocus() } }
+                    handled
                 } else {
                     false
                 }
             }
             .testTag("notes_block_${block.id}"),
+    )
+}
+
+/** The block's text field style; shared by the editor and the reading view so both match. */
+@Composable
+private fun blockTextStyle(block: NoteDocBlock) = TextStyle(
+    color = if (block.type == NoteDocBlockType.QUOTE) Muted else Ink,
+    fontSize = NotesViewModel.defaultSizeFor(block.type).sp,
+    lineHeight = NoteDocumentLayout.lineHeightSp(block).sp,
+    fontWeight = if (block.type.isHeading) FontWeight.SemiBold else FontWeight.Normal,
+    fontFamily = if (block.type == NoteDocBlockType.CODE) FontFamily.Monospace else null,
+    textAlign = when (block.align) {
+        NoteDocAlign.CENTER -> TextAlign.Center
+        NoteDocAlign.RIGHT -> TextAlign.End
+        NoteDocAlign.LEFT -> TextAlign.Start
+    },
+)
+
+/**
+ * A block's text in the reading view: the editor's own field, styles and colours, read only.
+ * Text can be selected and copied; the selection lives here and never reaches the note.
+ */
+@Composable
+private fun ReadOnlyBlockText(block: NoteDocBlock, modifier: Modifier, syntax: CodeHighlight?) {
+    val accent = Green
+    var selection by remember(block.id) { mutableStateOf(TextRange(block.text.length)) }
+    BasicTextField(
+        value = TextFieldValue(block.text, TextRange(
+            selection.start.coerceIn(0, block.text.length), selection.end.coerceIn(0, block.text.length))),
+        onValueChange = { next -> if (next.text == block.text) selection = next.selection },
+        readOnly = true,
+        textStyle = blockTextStyle(block),
+        visualTransformation = remember(block.runs, block.text, block.type, accent, syntax) {
+            if (syntax != null && syntax.tokens.isNotEmpty()) CodeSyntaxTransformation(syntax.tokens, block.runs, accent)
+            else NoteRunTransformation(block.runs, accent)
+        },
+        modifier = modifier.testTag("notes_block_${block.id}"),
     )
 }
 
@@ -557,8 +986,7 @@ internal fun NotePasteIndicator(pasting: Boolean, modifier: Modifier = Modifier)
 }
 
 private val NoteDocBlockType.isHeading: Boolean
-    get() = this == NoteDocBlockType.HEADING_1 || this == NoteDocBlockType.HEADING_2 ||
-        this == NoteDocBlockType.HEADING_3
+    get() = headingLevel > 0
 
 private fun placeholderFor(block: NoteDocBlock, state: NotesUiState): String = when {
     block.type == NoteDocBlockType.PARAGRAPH && state.blocks.indexOfFirst { it.id == block.id }
@@ -709,38 +1137,168 @@ internal fun NoteDocRun.toSpanStyle(accent: Color): SpanStyle {
         background = highlight?.let { Color(it.toULong().toLong()) } ?: Color.Unspecified,
         fontFamily = when {
             NoteDocMark.CODE in marks -> FontFamily.Monospace
-            fontFamily == "Serif" -> FontFamily.Serif
-            fontFamily == "Mono" -> FontFamily.Monospace
-            fontFamily == "Inter" -> FontFamily.SansSerif
-            else -> null
+            else -> NoteFonts.familyFor(fontFamily)
         },
         fontSize = fontSizeSp?.sp ?: androidx.compose.ui.unit.TextUnit.Unspecified,
     )
 }
 
-/** A real, editable grid. Each cell is its own text field writing straight into the document. */
+/**
+ * A real, editable grid. Each cell is its own text field writing straight into the document; the
+ * focused cell is the target of the text-style tools and the table tools strip.
+ */
 @Composable
-private fun NoteTableBlock(block: NoteDocBlock, vm: NotesViewModel) {
+private fun NoteTableBlock(block: NoteDocBlock, state: NotesUiState, vm: NotesViewModel?, readOnly: Boolean = false) {
     val table = block.table ?: return
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        val cellWidth = (maxWidth / table.cols).coerceAtLeast(112.dp)
+    if (readOnly || vm == null) {
+        ReadOnlyTable(block, table)
+        return
+    }
+    val activeCell = state.activeCell?.takeIf { it.blockId == block.id }
+    // Edge "+" controls show while a cell is focused, or briefly after tapping a faint edge, so a
+    // stray tap beside the table never changes its shape.
+    var inputCell by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val focusedCell = inputCell ?: activeCell?.let { it.row to it.col }
+    var revealed by remember { mutableStateOf(false) }
+    var pendingFocus by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val request = state.cellFocusRequest?.takeIf { it.blockId == block.id }
+    val active = focusedCell != null || revealed
+    LaunchedEffect(revealed, focusedCell) {
+        if (revealed && focusedCell == null) { kotlinx.coroutines.delay(5_000); revealed = false }
+    }
+    val edge = 22.dp
+    val accent = Green
+    val lineColor = if (table.gridLines) Border else Border.copy(alpha = .3f)
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        val tableWidth = maxWidth - edge - 4.dp
+        val explicit = (0 until table.cols).mapNotNull { table.widthAt(it) }
+        val autoCount = table.cols - explicit.size
+        val autoWidth = if (autoCount == 0) 0.dp
+            else ((tableWidth - explicit.sumOf { it }.dp) / autoCount).coerceAtLeast(112.dp)
+        Column {
+            TableEdgeAdd(active, table.rows < NoteDocTable.MAX_ROWS, "Add row above",
+                "notes_table_add_top_${block.id}", onReveal = { revealed = true },
+                onAdd = { vm.addTableRow(block.id, atTop = true); pendingFocus = 0 to (focusedCell?.second ?: 0) },
+                modifier = Modifier.width(tableWidth).height(20.dp))
+            Box(Modifier.width(tableWidth + edge + 4.dp)) {
+                Column(Modifier.width(tableWidth).horizontalScroll(rememberScrollState())
+                    .clip(RoundedCornerShape(10.dp)).background(Color.White)) {
+                    repeat(table.rows) { r ->
+                        // A shared intrinsic row height keeps every cell border aligned even when one
+                        // cell wraps to several lines on a narrow phone.
+                        Row(Modifier.height(IntrinsicSize.Min)) {
+                            repeat(table.cols) { c ->
+                                val requester = remember { FocusRequester() }
+                                if (pendingFocus == r to c) LaunchedEffect(Unit) {
+                                    runCatching { requester.requestFocus() }
+                                    pendingFocus = null
+                                }
+                                if (request != null && request.row == r && request.col == c) LaunchedEffect(request) {
+                                    runCatching { requester.requestFocus() }
+                                    vm.onCellFocusRequestHandled()
+                                }
+                                val text = table.cell(r, c)
+                                val runs = table.runsAt(r, c)
+                                val header = table.isHeader(r, c)
+                                val fill = table.fillAt(r, c)?.let { Color(it) } ?: if (header) Mint else Color.White
+                                val isActive = activeCell != null && activeCell.row == r && activeCell.col == c
+                                val value = TextFieldValue(
+                                    text = text,
+                                    selection = if (isActive) TextRange(
+                                        state.selection.start.coerceIn(0, text.length),
+                                        state.selection.end.coerceIn(0, text.length),
+                                    ) else TextRange(text.length),
+                                )
+                                Box(Modifier.width(table.widthAt(c)?.dp ?: autoWidth).fillMaxHeight()
+                                    .background(lineColor).padding(1.dp)
+                                    .background(fill).padding(horizontal = 8.dp, vertical = 8.dp)) {
+                                    BasicTextField(
+                                        value = value,
+                                        onValueChange = { next ->
+                                            vm.onTableCellEdited(block.id, r, c, next.text, next.selection)
+                                        },
+                                        textStyle = LocalTextStyle.current.copy(
+                                            color = Ink, fontSize = TABLE_CELL_TEXT_SP.sp,
+                                            fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
+                                        ),
+                                        cursorBrush = SolidColor(Green),
+                                        visualTransformation = remember(runs, accent) { NoteRunTransformation(runs, accent) },
+                                        modifier = Modifier.fillMaxWidth()
+                                            .focusRequester(requester)
+                                            .onFocusChanged { focus ->
+                                                if (focus.isFocused) {
+                                                    inputCell = r to c
+                                                    vm.onTableCellFocused(block.id, r, c)
+                                                } else if (inputCell == r to c) inputCell = null
+                                            }
+                                            .semantics {
+                                                contentDescription = "Table cell, row ${r + 1}, column ${c + 1}" +
+                                                    if (header) ", header" else ""
+                                            }
+                                            .testTag("notes_cell_${block.id}_${r}_$c"),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Box(Modifier.matchParentSize().padding(start = tableWidth + 4.dp)) {
+                    TableEdgeAdd(active, table.cols < NoteDocTable.MAX_COLS, "Add column",
+                        "notes_table_add_right_${block.id}", onReveal = { revealed = true },
+                        onAdd = {
+                            vm.addTableColumn(block.id)
+                            pendingFocus = (focusedCell?.first ?: 0) to table.cols
+                        },
+                        modifier = Modifier.fillMaxSize())
+                }
+            }
+            TableEdgeAdd(active, table.rows < NoteDocTable.MAX_ROWS, "Add row below",
+                "notes_table_add_bottom_${block.id}", onReveal = { revealed = true },
+                onAdd = { vm.addTableRow(block.id, atTop = false); pendingFocus = table.rows to (focusedCell?.second ?: 0) },
+                modifier = Modifier.width(tableWidth).height(20.dp))
+        }
+    }
+}
+
+/** The editor's grid in the reading view: same cells, fills, widths and styles; no editing. */
+@Composable
+private fun ReadOnlyTable(block: NoteDocBlock, table: NoteDocTable) {
+    val accent = Green
+    val lineColor = if (table.gridLines) Border else Border.copy(alpha = .3f)
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 2.dp).testTag("notes_table_${block.id}")) {
+        val explicit = (0 until table.cols).mapNotNull { table.widthAt(it) }
+        val autoCount = table.cols - explicit.size
+        val autoWidth = if (autoCount == 0) 0.dp
+            else ((maxWidth - explicit.sumOf { it }.dp) / autoCount).coerceAtLeast(112.dp)
         Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
             .clip(RoundedCornerShape(10.dp)).background(Color.White)) {
             repeat(table.rows) { r ->
-                // A shared intrinsic row height keeps every cell border aligned even when one
-                // cell wraps to several lines on a narrow phone.
                 Row(Modifier.height(IntrinsicSize.Min)) {
                     repeat(table.cols) { c ->
-                        Box(Modifier.width(cellWidth).fillMaxHeight()
-                            .background(Border).padding(1.dp)
-                            .background(Color.White).padding(horizontal = 8.dp, vertical = 8.dp)) {
-                            BasicTextField(
-                                value = table.cell(r, c),
-                                onValueChange = { vm.onTableCellChanged(block.id, r, c, it) },
-                                textStyle = LocalTextStyle.current.copy(color = Ink, fontSize = 14.sp),
-                                cursorBrush = SolidColor(Green),
-                                modifier = Modifier.fillMaxWidth()
-                                    .testTag("notes_cell_${block.id}_${r}_$c"),
+                        val text = table.cell(r, c)
+                        val runs = table.runsAt(r, c)
+                        val header = table.isHeader(r, c)
+                        val fill = table.fillAt(r, c)?.let { Color(it) } ?: if (header) Mint else Color.White
+                        Box(Modifier.width(table.widthAt(c)?.dp ?: autoWidth).fillMaxHeight()
+                            .background(lineColor).padding(1.dp)
+                            .background(fill).padding(horizontal = 8.dp, vertical = 8.dp)) {
+                            Text(
+                                buildAnnotatedString {
+                                    append(text)
+                                    runs.forEach { run ->
+                                        val s = run.start.coerceIn(0, text.length)
+                                        val e = run.end.coerceIn(s, text.length)
+                                        if (e > s) addStyle(run.toSpanStyle(accent), s, e)
+                                    }
+                                },
+                                style = LocalTextStyle.current.copy(
+                                    color = Ink, fontSize = TABLE_CELL_TEXT_SP.sp,
+                                    fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
+                                ),
+                                modifier = Modifier.fillMaxWidth().semantics {
+                                    contentDescription = "Table cell, row ${r + 1}, column ${c + 1}" +
+                                        if (header) ", header" else ""
+                                },
                             )
                         }
                     }
@@ -748,4 +1306,67 @@ private fun NoteTableBlock(block: NoteDocBlock, vm: NotesViewModel) {
             }
         }
     }
+}
+
+/** What a block row may do: the editor's own actions, or the reading view's view-only ones. */
+private class NoteRowActions(
+    val readOnly: Boolean,
+    val toggleCollapsed: (String) -> Unit,
+    val playVideo: (String?) -> Unit,
+)
+
+@Composable
+private fun TableEdgeAdd(
+    active: Boolean,
+    enabled: Boolean,
+    label: String,
+    tag: String,
+    onReveal: () -> Unit,
+    onAdd: () -> Unit,
+    modifier: Modifier,
+) {
+    if (!enabled) { Box(modifier); return }
+    Box(
+        modifier.clip(RoundedCornerShape(6.dp))
+            .background(if (active) Mint else Color.Transparent)
+            .clickable(role = Role.Button) { if (active) onAdd() else onReveal() }
+            .semantics { contentDescription = if (active) label else "$label, tap to show" }
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Outlined.Add, contentDescription = null,
+            tint = Green.copy(alpha = if (active) 1f else .28f),
+            modifier = Modifier.size(if (active) 16.dp else 12.dp))
+    }
+}
+
+private const val PROVIDER_HTML_MAX_BYTES = 4 * 1024 * 1024
+
+/**
+ * The Google Docs app copies a content: URI to its own clipboard provider instead of inline
+ * HTML; the formatted copy (headings, styles, picture URLs) is only served as its text/html
+ * stream. Anything that is not Google Docs HTML is ignored so other apps paste as before.
+ */
+internal fun googleDocsProviderHtml(context: android.content.Context, clip: ClipData?, item: ClipData.Item): String? {
+    val uri = item.uri?.takeIf { it.scheme == "content" } ?: return null
+    return runCatching {
+        val resolver = context.contentResolver
+        val offersHtml = clip?.description?.hasMimeType("text/html") == true ||
+            resolver.getStreamTypes(uri, "text/html")?.isNotEmpty() == true
+        if (!offersHtml) return@runCatching null
+        val bytes = resolver.openTypedAssetFileDescriptor(uri, "text/html", null)?.use { fd ->
+            fd.createInputStream().use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    out.write(buffer, 0, read)
+                    if (out.size() > PROVIDER_HTML_MAX_BYTES) return@runCatching null
+                }
+                out.toByteArray()
+            }
+        } ?: return@runCatching null
+        String(bytes, Charsets.UTF_8).takeIf { GoogleDocsPaste.isGoogleDocsHtml(it) }
+    }.getOrNull()
 }

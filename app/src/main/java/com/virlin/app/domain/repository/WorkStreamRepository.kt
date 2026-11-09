@@ -164,6 +164,8 @@ interface WorkStreamWriter : CaptureWriter {
      */
     suspend fun noteDocOf(ownerKey: String): VirlinNoteDoc?
     suspend fun saveNoteDoc(doc: VirlinNoteDoc)
+    /** Removes one Notes-page document (and its chunks); its owner may write a new one later. */
+    suspend fun deleteNoteDoc(ownerKey: String)
     suspend fun mapNodePreviewOf(ownerId: String): com.virlin.app.domain.mappreview.MapNodePreview?
     suspend fun saveMapNodePreview(preview: com.virlin.app.domain.mappreview.MapNodePreview)
     suspend fun deleteMapNodePreview(ownerId: String)
