@@ -46,8 +46,10 @@ import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.outlined.Print
 import androidx.compose.material.icons.outlined.Visibility
@@ -74,6 +76,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,7 +99,8 @@ enum class NoteTool {
     STRIKE, TEXT_COLOR, HIGHLIGHT, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT,
     BULLETS, NUMBERING, INDENT, OUTDENT, LINE_SPACING, LINK,
     QUOTE, PROMPT, CODE, FLASHCARD, SELECT_DOCUMENT, HEADING_FOLD, CHECKLIST, TABLE, DIVIDER, IMAGE, TOGGLE,
-    DELETE, CHANGE_CASE, WORD_COUNT, YOUTUBE, AUDIO, TEXT_TO_AUDIO, ARRANGE_BLOCKS, RENAME, DUPLICATE, PRINT, EXPORT, FORMATTING
+    DELETE, CHANGE_CASE, WORD_COUNT, YOUTUBE, AUDIO, TEXT_TO_AUDIO, ARRANGE_BLOCKS, RENAME, DUPLICATE, PRINT, EXPORT, FORMATTING,
+    IMPORT, PASTE_FROM
 }
 
 /** Callbacks for the inline text-size stepper that replaces the size chip. */
@@ -111,6 +115,7 @@ data class NoteToolState(
     val fontLabel: String = "Inter",
     val sizeLabel: String = "16",
     val spacingLabel: String = "Single",
+    val duplicateLabel: String = "Duplicate note",
     val active: Set<NoteTool> = emptySet(),
     val enabled: Set<NoteTool> = NoteTool.entries.toSet(),
 )
@@ -152,6 +157,7 @@ fun VirlinNotesScreen(
     printStrip: NotePrintStripState? = null,
     exportStrip: NoteExportStripState? = null,
     formattingStrip: NoteFormattingStripState? = null,
+    pasteSourceStrip: NotePasteSourceStripState? = null,
     /** The editor shows the note as formatted pages on a desk, edge to edge. */
     pageView: Boolean = false,
 ) {
@@ -244,6 +250,7 @@ fun VirlinNotesScreen(
         renameStrip?.let { NoteRenameStrip(it) }
         printStrip?.let { NotePrintStrip(it) }
         exportStrip?.let { NoteExportStrip(it) }
+        pasteSourceStrip?.let { NotePasteSourceStrip(it) }
         // Let the editor use the entire area above the footer. The add control floats over its
         // bottom corner; the editor supplies end-of-document scroll clearance for the last line.
         // No top padding here: the document's opening space scrolls with it, so text reaches the
@@ -284,6 +291,7 @@ private val toolSpecs = listOf(
     ToolSpec(NoteTool.UNDO, Icons.AutoMirrored.Outlined.Undo),
     ToolSpec(NoteTool.REDO, Icons.AutoMirrored.Outlined.Redo),
     ToolSpec(NoteTool.DELETE, Icons.Outlined.Delete),
+    ToolSpec(NoteTool.PASTE_FROM, Icons.Outlined.ContentPaste),
     ToolSpec(NoteTool.PARAGRAPH, groupStart = true), ToolSpec(NoteTool.FONT), ToolSpec(NoteTool.SIZE),
     ToolSpec(NoteTool.BOLD, Icons.Outlined.FormatBold, groupStart = true),
     ToolSpec(NoteTool.ITALIC, Icons.Outlined.FormatItalic),
@@ -312,6 +320,7 @@ private val toolSpecs = listOf(
     ToolSpec(NoteTool.TOGGLE, text = "▸"),
     ToolSpec(NoteTool.RENAME, Icons.Outlined.DriveFileRenameOutline, groupStart = true),
     ToolSpec(NoteTool.DUPLICATE, Icons.Outlined.ContentCopy),
+    ToolSpec(NoteTool.IMPORT, Icons.Outlined.UploadFile),
     ToolSpec(NoteTool.FORMATTING, Icons.Outlined.Article),
     ToolSpec(NoteTool.PRINT, Icons.Outlined.Print),
     ToolSpec(NoteTool.EXPORT, Icons.Outlined.IosShare),
@@ -360,10 +369,12 @@ fun NoteFormattingRail(
                     NoteTool.TEXT_TO_AUDIO -> "Text to audio"
                     NoteTool.ARRANGE_BLOCKS -> "Arrange blocks"
                     NoteTool.RENAME -> "Rename note"
-                    NoteTool.DUPLICATE -> "Duplicate note"
+                    NoteTool.DUPLICATE -> state.duplicateLabel
                     NoteTool.PRINT -> "Print or save as PDF"
                     NoteTool.EXPORT -> "Export as PDF, Word, Markdown or image"
                     NoteTool.FORMATTING -> "Page formatting"
+                    NoteTool.IMPORT -> "Import Word or Google Docs"
+                    NoteTool.PASTE_FROM -> "Paste from ChatGPT, Gemini, Google Docs, Word, PDF and more"
                     else -> spec.tool.name.lowercase().replace('_', ' ')
                 }
                 val enabled = spec.tool in state.enabled
@@ -378,9 +389,9 @@ fun NoteFormattingRail(
                     Modifier.height(40.dp)
                         .clip(pill)
                         .background(if (selected) Mint else Color.White)
-                        .border(1.dp, if (selected) Green.copy(alpha = .38f) else Border, pill)
+                        .border(if (selected) 2.dp else 1.dp, if (selected) Green.copy(alpha = .85f) else Border, pill)
                         .clickable(enabled = enabled, role = Role.Button) { onTool(spec.tool) }
-                        .semantics { contentDescription = label }
+                        .semantics { contentDescription = label; this.selected = selected }
                         .testTag("notes_tool_${spec.tool.name.lowercase()}")
                         .then(if (spec.tool == NoteTool.PARAGRAPH || spec.tool == NoteTool.LINE_SPACING)
                             Modifier.onGloballyPositioned { coords ->
@@ -404,7 +415,7 @@ fun NoteFormattingRail(
                             modifier = Modifier.size(19.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("${state.spacingLabel}  ▾", color = tint, fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium, maxLines = 1)
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, maxLines = 1)
                     } else if (spec.tool == NoteTool.TOGGLE) NoteToggleArrow(
                         collapsed = true, textSizeSp = 16, lineHeightSp = 20f,
                         color = if (enabled) (if (selected) Green else Ink) else Muted,
@@ -417,7 +428,7 @@ fun NoteFormattingRail(
                             label.take(13).trimEnd() + "…" else label) +
                             if (spec.tool in setOf(NoteTool.PARAGRAPH, NoteTool.FONT, NoteTool.SIZE)) "  ▾" else "",
                         color = if (enabled) (if (selected) Green else Ink) else Muted,
-                        fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                     )
                 }

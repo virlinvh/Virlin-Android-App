@@ -25,6 +25,7 @@ import com.virlin.app.domain.notedoc.NoteRuns
 import com.virlin.app.domain.notedoc.NoteTextCases
 import com.virlin.app.domain.notedoc.NoteWordCount
 import com.virlin.app.domain.notedoc.NotePasteParser
+import com.virlin.app.domain.notedoc.GoogleDocsPaste
 import com.virlin.app.domain.notedoc.NotePasteReport
 import com.virlin.app.domain.notedoc.NotePasteSafety
 import com.virlin.app.domain.notedoc.VirlinNoteCodec
@@ -82,6 +83,10 @@ sealed interface NoteDialog {
     data object PasteDetails : NoteDialog
     /** The clipboard holds a picture: paste it, or choose one from the device. */
     data object ImageSource : NoteDialog
+    /** Explains document import before the system file picker opens. */
+    data object ImportDocument : NoteDialog
+    /** The "Paste from" strip under the rail: the clipboard pasted the way the chosen source formats copies. */
+    data object PasteFrom : NoteDialog
     /** Words and characters in the whole note. */
     data object WordCount : NoteDialog
     /**
@@ -324,7 +329,15 @@ class NotesViewModel(
         if (insertedText.isEmpty()) return false
         val clipboardMatches = sameText(insertedText, plainText)
         val largeHtml = (htmlText?.length ?: 0) > NotePasteSafety.BACKGROUND_HTML_CHARS
-        if (insertedText.length > NotePasteSafety.BACKGROUND_CHARS || largeHtml && clipboardMatches) {
+        // Google Docs' copy can differ from the inserted text in spacing and chips; its HTML is
+        // trusted when the letters match. Its pictures are downloaded, so that runs off the main thread.
+        val docsMatches = !clipboardMatches && htmlText != null && insertedText.length >= 2 &&
+            GoogleDocsPaste.isGoogleDocsHtml(htmlText) && GoogleDocsPaste.textMatches(htmlText, insertedText)
+        val docsPictures = htmlText != null && (clipboardMatches || docsMatches) &&
+            htmlText.contains("googleusercontent.com", ignoreCase = true) &&
+            GoogleDocsPaste.isGoogleDocsHtml(htmlText) && GoogleDocsPaste.hasRemoteImages(htmlText)
+        if (insertedText.length > NotePasteSafety.BACKGROUND_CHARS || largeHtml && (clipboardMatches || docsMatches) ||
+            docsPictures) {
             pasteInBackground(original, from, removed, insertedText, plainText, htmlText, imageResolver, clipSummary)
             return true
         }
@@ -332,7 +345,7 @@ class NotesViewModel(
         // Only trust that HTML when its visible text is the text the IME actually inserted.
         // HTML far larger than the insertion cannot be its source (a typed word while a long
         // answer sits on the clipboard), so it is not parsed for that edit.
-        val htmlMatches = !clipboardMatches && htmlText != null && !largeHtml &&
+        val htmlMatches = docsMatches || !clipboardMatches && htmlText != null && !largeHtml &&
             htmlText.length <= insertedText.length * 50 + 8_192 && htmlTextMatches(htmlText, insertedText)
         val structuredInsertion = insertedText.length > 3 &&
             (insertedText.length > 20 && '\n' in insertedText ||
@@ -524,6 +537,19 @@ class NotesViewModel(
             save = NoteSaveState.EDITED,
         )
         scheduleSave()
+    }
+
+    /**
+     * The block that [onBackspaceAtStart] would merge [blockId] into, or null when it would
+     * restyle the block, remove a non-text block above, or do nothing. Reads only.
+     */
+    fun backspaceMergeTarget(blockId: String): String? {
+        val blocks = _state.value.blocks
+        val index = blocks.indexOfFirst { it.id == blockId }
+        if (index <= 0) return null
+        val block = blocks[index]
+        if (block.type != NoteDocBlockType.PARAGRAPH || block.indent > 0) return null
+        return blocks[index - 1].takeIf { it.type.isTextual }?.id
     }
 
     /**
@@ -830,6 +856,8 @@ class NotesViewModel(
             NoteTool.HEADING_FOLD -> Unit // Local presentation mode belongs to the screen.
             NoteTool.ARRANGE_BLOCKS -> Unit // Arrange mode belongs to the route; moves come through moveBlock.
             NoteTool.FORMATTING -> Unit // Page formatting is view state kept by the route beside the note.
+            NoteTool.IMPORT -> openDialog(NoteDialog.ImportDocument)
+            NoteTool.PASTE_FROM -> if (s.dialog == NoteDialog.PasteFrom) closeDialog() else openDialog(NoteDialog.PasteFrom)
             NoteTool.TEXT_COLOR ->
                 if (s.dialog == NoteDialog.TextColor) closeDialog() else openDialog(NoteDialog.TextColor)
             NoteTool.HIGHLIGHT ->
@@ -1199,6 +1227,38 @@ class NotesViewModel(
         )
         scheduleSave()
         return true
+    }
+
+    /**
+     * Copies the selected blocks, each run of neighbouring blocks landing right after itself, as
+     * one undo step. Pictures and recordings are shared, never deleted with a block. Returns the
+     * copies' ids, or null (with a message, nothing changed) when the note could not store them.
+     */
+    fun duplicateBlocks(blockIds: Set<String>): List<String>? {
+        val s = _state.value
+        if (s.pasting || s.loading || s.damaged || s.blocks.none { it.id in blockIds }) return null
+        val copies = mutableListOf<String>()
+        val next = mutableListOf<NoteDocBlock>()
+        val run = mutableListOf<NoteDocBlock>()
+        fun flushRun() {
+            run.forEach { block -> next += block.copy(id = ids.newId("nb")).also { copies += it.id } }
+            run.clear()
+        }
+        s.blocks.forEach { block ->
+            if (block.id in blockIds) run += block else flushRun()
+            next += block
+        }
+        flushRun()
+        if (!richDocumentAccepts(next)) {
+            ui = s.copy(dialog = NoteDialog.Message(
+                "These blocks can't be duplicated here (they sit inside a nested part of this note). Nothing was changed."))
+            return null
+        }
+        pushUndo()
+        ui = s.copy(blocks = next, focusedBlockId = null, selection = TextRange.Zero, caretMarks = emptySet(),
+            save = NoteSaveState.EDITED)
+        scheduleSave()
+        return copies
     }
 
     /**
@@ -1904,6 +1964,43 @@ class NotesViewModel(
         scheduleSave()
     }
 
+    /**
+     * Places blocks read from an imported document as one undo step, with fresh ids: they replace
+     * a blank note, go after the line being edited, or else at the end (also when the stored rich
+     * document can't hold them after that line). False, with a message and nothing changed, when
+     * they can't be placed.
+     */
+    fun insertImportedBlocks(imported: List<NoteDocBlock>, fillBlankLine: Boolean = false): Boolean {
+        val s = _state.value
+        if (s.loading || s.damaged || s.pasting || imported.isEmpty()) return false
+        val fresh = imported.map { it.copy(id = ids.newId("nb")) }
+        val blank = s.blocks.all { it.type == NoteDocBlockType.PARAGRAPH && it.text.isEmpty() }
+        val focused = s.focusedBlock
+        val candidates = when {
+            blank -> listOf(fresh)
+            focused != null -> {
+                val at = insertionPoint(s).first.coerceIn(0, s.blocks.size)
+                val line = s.blocks.indexOf(focused)
+                val fill = if (fillBlankLine && line >= 0 && focused.type == NoteDocBlockType.PARAGRAPH &&
+                    focused.text.isEmpty()) s.blocks.take(line) + fresh + s.blocks.drop(line + 1) else null
+                listOfNotNull(fill, s.blocks.take(at) + fresh + s.blocks.drop(at), s.blocks + fresh)
+            }
+            else -> listOf(s.blocks + fresh)
+        }
+        val next = candidates.firstOrNull { richDocumentAccepts(it) }
+        if (next == null) {
+            ui = s.copy(dialog = NoteDialog.Message(
+                "This note's structure can't take the imported document. Nothing was changed; try a new note."))
+            return false
+        }
+        pushUndo()
+        ui = _state.value.copy(blocks = next, focusedBlockId = null, focusedCell = null,
+            selection = TextRange.Zero, caretMarks = emptySet(), selectedImageId = null,
+            save = NoteSaveState.EDITED, dialog = null)
+        scheduleSave()
+        return true
+    }
+
     // ---------------------------------------------------------------- image tools (selected image)
 
     /** A tap on an image selects it and opens its tools strip. */
@@ -2500,7 +2597,8 @@ private fun htmlTextMatches(html: String, inserted: String): Boolean =
 /** Off the main thread. Null means the paste's formatting could not be imported. */
 private fun formatLargePaste(insertedText: String, plainText: String, htmlText: String?,
     imageResolver: ((String) -> String?)?): List<NoteDocBlock>? {
-    val usableHtml = htmlText?.takeIf { sameText(insertedText, plainText) || htmlTextMatches(it, insertedText) }
+    val usableHtml = htmlText?.takeIf { sameText(insertedText, plainText) || htmlTextMatches(it, insertedText) ||
+        GoogleDocsPaste.isGoogleDocsHtml(it) && GoogleDocsPaste.textMatches(it, insertedText) }
     val rich = usableHtml?.let { html ->
         runCatching { NotePasteParser.parse(insertedText, html, imageResolver) }.getOrNull()?.takeIf { it.isNotEmpty() }
     }

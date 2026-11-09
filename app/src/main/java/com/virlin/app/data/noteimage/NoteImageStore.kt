@@ -73,6 +73,57 @@ object NoteImageStore {
         return bounds.outMimeType in setOf("image/png", "image/webp", "image/gif")
     }
 
+    /** Saves a picture taken from an imported document; refused unless it decodes as an image. */
+    fun importBytes(context: Context, bytes: ByteArray): String {
+        require(bytes.isNotEmpty() && bytes.size <= MAX_BYTES) { "Image is too large" }
+        val root = File(context.filesDir, "note_images").also { it.mkdirs() }
+        val name = UUID.randomUUID().toString()
+        val file = File(root, name)
+        try {
+            file.outputStream().use { it.write(bytes) }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Unsupported image" }
+            return name
+        } catch (error: Exception) {
+            file.delete()
+            throw error
+        }
+    }
+
+    /**
+     * Downloads a picture a pasted Google Docs selection points at. Blocking network: never call
+     * on the main thread. Only https, bounded in size and time, and kept only if it decodes.
+     */
+    fun importRemote(context: Context, url: String): String {
+        val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        require(connection is javax.net.ssl.HttpsURLConnection) { "Only secure picture links are downloaded" }
+        try {
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 20_000
+            connection.instanceFollowRedirects = true
+            connection.setRequestProperty("Accept", "image/*")
+            require(connection.responseCode in 200..299) { "Picture download failed" }
+            require(connection.contentLengthLong <= MAX_BYTES) { "Image is too large" }
+            val bytes = connection.inputStream.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    total += n
+                    require(total <= MAX_BYTES) { "Image is too large" }
+                    out.write(buffer, 0, n)
+                }
+                out.toByteArray()
+            }
+            return importBytes(context, bytes)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     /** Saves a clipboard-embedded bitmap to the same private store as picker images. */
     fun importDataUri(context: Context, source: String): String {
         val comma = source.indexOf(',')

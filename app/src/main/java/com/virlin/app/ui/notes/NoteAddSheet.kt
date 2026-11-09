@@ -55,8 +55,10 @@ import androidx.compose.material.icons.outlined.Numbers
 import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.outlined.Print
 import androidx.compose.material.icons.outlined.Style
@@ -113,6 +115,7 @@ private val formatTools = listOf(
     AddToolSpec(NoteTool.UNDO, "Undo", Icons.AutoMirrored.Outlined.Undo),
     AddToolSpec(NoteTool.REDO, "Redo", Icons.AutoMirrored.Outlined.Redo),
     AddToolSpec(NoteTool.DELETE, "Delete", Icons.Outlined.Delete),
+    AddToolSpec(NoteTool.PASTE_FROM, "Paste from", Icons.Outlined.ContentPaste),
     AddToolSpec(NoteTool.PARAGRAPH, "Text style", Icons.Outlined.TextFields),
     AddToolSpec(NoteTool.FONT, "Font", Icons.Outlined.FontDownload),
     AddToolSpec(NoteTool.SIZE, "Text size", Icons.Outlined.FormatSize),
@@ -138,6 +141,7 @@ private val formatTools = listOf(
     AddToolSpec(NoteTool.ARRANGE_BLOCKS, "Arrange blocks", Icons.Outlined.DragIndicator),
     AddToolSpec(NoteTool.RENAME, "Rename", Icons.Outlined.DriveFileRenameOutline),
     AddToolSpec(NoteTool.DUPLICATE, "Duplicate", Icons.Outlined.ContentCopy),
+    AddToolSpec(NoteTool.IMPORT, "Import doc", Icons.Outlined.UploadFile),
     AddToolSpec(NoteTool.PRINT, "Print / PDF", Icons.Outlined.Print),
     AddToolSpec(NoteTool.FORMATTING, "Formatting", Icons.Outlined.Article),
     AddToolSpec(NoteTool.EXPORT, "Export", Icons.Outlined.IosShare),

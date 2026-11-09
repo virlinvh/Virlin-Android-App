@@ -4,6 +4,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import android.content.ClipboardManager
 import android.content.ClipData
 import android.net.Uri
@@ -11,6 +13,8 @@ import android.text.Html
 import android.text.Spanned
 import com.virlin.app.data.noteimage.NoteImageStore
 import com.virlin.app.domain.notedoc.NoteMath
+import com.virlin.app.domain.notedoc.GoogleDocsPaste
+import android.os.Looper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -253,6 +257,8 @@ fun NoteBlockEditor(
         }
     }
     val measured = remember { mutableStateMapOf<String, Int>() }
+    val blockFocus = remember { HashMap<String, FocusRequester>() }
+    CompositionLocalProvider(LocalBlockFocus provides blockFocus) {
     NotePageScale(if (paged) pageView else null, modifier) { pageModifier, deskGap ->
     LazyColumn(pageModifier.fillMaxWidth().fillMaxHeight().testTag("notes_editor_scroll"),
         state = scroll, contentPadding = PaddingValues(top = if (paged) deskGap else NoteDocumentTopSpace)) {
@@ -309,7 +315,15 @@ fun NoteBlockEditor(
         item { Spacer(Modifier.height(if (paged) deskGap * 6 else 76.dp)) }
     }
     }
+    }
 }
+
+/**
+ * Each editable block field's focus handle while it is on screen. Backspace uses it to move focus
+ * to the block above before a merge removes the focused field: focus that vanishes together with
+ * its field closes the keyboard until the next field asks for it again.
+ */
+private val LocalBlockFocus = staticCompositionLocalOf<MutableMap<String, FocusRequester>?> { null }
 
 /** Select-across controls, pinned above the note: count, Select all / Clear and Copy. */
 @Composable
@@ -782,6 +796,11 @@ private fun BlockTextField(
     val focused = state.focusedBlockId == block.id
     val requester = remember(block.id) { FocusRequester() }
     val hasInputFocus = remember(block.id) { mutableStateOf(false) }
+    val blockFocus = LocalBlockFocus.current
+    DisposableEffect(block.id, blockFocus) {
+        blockFocus?.put(block.id, requester)
+        onDispose { if (blockFocus?.get(block.id) === requester) blockFocus.remove(block.id) }
+    }
     LaunchedEffect(focusRequestFor, block.id) {
         if (focused && focusRequestFor == block.id) {
             // Only a newly selected block needs programmatic focus. A style or block-type edit
@@ -814,9 +833,10 @@ private fun BlockTextField(
                     else clipboard?.primaryClip?.takeIf { it.itemCount > 0 }
                 val item = clip?.getItemAt(0)
                 val pasted = item?.text?.toString() ?: item?.coerceToText(context)?.toString()
-                val richHtml = item?.htmlText ?: (item?.text as? Spanned)?.let {
-                    Html.toHtml(it, Html.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE)
-                }
+                val richHtml = item?.htmlText ?: item?.let { googleDocsProviderHtml(context, clip, it) }
+                    ?: (item?.text as? Spanned)?.let {
+                        Html.toHtml(it, Html.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE)
+                    }
                 if (!vm.pasteStructured(block.id, next.text,
                         pasted.orEmpty(), richHtml, imageResolver = { source ->
                             runCatching {
@@ -825,6 +845,9 @@ private fun BlockTextField(
                                         NoteImageStore.importDataUri(context, source)
                                     Uri.parse(source).scheme == "content" ->
                                         NoteImageStore.import(context, Uri.parse(source))
+                                    GoogleDocsPaste.isDocsImageUrl(source) &&
+                                        Looper.myLooper() != Looper.getMainLooper() ->
+                                        NoteImageStore.importRemote(context, source)
                                     else -> null
                                 }
                             }.getOrNull()
@@ -864,7 +887,12 @@ private fun BlockTextField(
                 if (event.type == KeyEventType.KeyDown && event.key == Key.Backspace &&
                     focused && state.selection.collapsed && state.selection.start == 0
                 ) {
-                    vm.onBackspaceAtStart(block.id)
+                    val above = vm.backspaceMergeTarget(block.id)
+                    val handled = vm.onBackspaceAtStart(block.id)
+                    // This field is still on screen: hand focus to the block it merged into now,
+                    // so the keyboard stays up instead of closing and reopening on every press.
+                    if (handled && above != null) blockFocus?.get(above)?.let { runCatching { it.requestFocus() } }
+                    handled
                 } else {
                     false
                 }
@@ -1310,4 +1338,35 @@ private fun TableEdgeAdd(
             tint = Green.copy(alpha = if (active) 1f else .28f),
             modifier = Modifier.size(if (active) 16.dp else 12.dp))
     }
+}
+
+private const val PROVIDER_HTML_MAX_BYTES = 4 * 1024 * 1024
+
+/**
+ * The Google Docs app copies a content: URI to its own clipboard provider instead of inline
+ * HTML; the formatted copy (headings, styles, picture URLs) is only served as its text/html
+ * stream. Anything that is not Google Docs HTML is ignored so other apps paste as before.
+ */
+internal fun googleDocsProviderHtml(context: android.content.Context, clip: ClipData?, item: ClipData.Item): String? {
+    val uri = item.uri?.takeIf { it.scheme == "content" } ?: return null
+    return runCatching {
+        val resolver = context.contentResolver
+        val offersHtml = clip?.description?.hasMimeType("text/html") == true ||
+            resolver.getStreamTypes(uri, "text/html")?.isNotEmpty() == true
+        if (!offersHtml) return@runCatching null
+        val bytes = resolver.openTypedAssetFileDescriptor(uri, "text/html", null)?.use { fd ->
+            fd.createInputStream().use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    out.write(buffer, 0, read)
+                    if (out.size() > PROVIDER_HTML_MAX_BYTES) return@runCatching null
+                }
+                out.toByteArray()
+            }
+        } ?: return@runCatching null
+        String(bytes, Charsets.UTF_8).takeIf { GoogleDocsPaste.isGoogleDocsHtml(it) }
+    }.getOrNull()
 }

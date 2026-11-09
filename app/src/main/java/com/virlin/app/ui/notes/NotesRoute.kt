@@ -74,6 +74,8 @@ import com.virlin.app.domain.notedoc.NoteDocBlock
 import com.virlin.app.domain.notedoc.NoteDocBlockType
 import com.virlin.app.domain.notedoc.NoteDocMark
 import com.virlin.app.domain.notedoc.NoteListStyles
+import com.virlin.app.domain.notedoc.NotePasteSource
+import com.virlin.app.domain.notedoc.NoteSourcePaste
 import com.virlin.app.domain.notedoc.VirlinNoteCodec
 import com.virlin.app.domain.model.TaskPageTypeKeys
 import com.virlin.app.domain.VirlinGraph
@@ -183,6 +185,38 @@ fun NotesRoute(
         }
     }
     val pickImage = { pendingImagePicker = true }
+    var pendingDocumentPicker by remember { mutableStateOf(false) }
+    // The name of the document being read; the note is untouched until reading succeeds.
+    var importingDocument by remember { mutableStateOf<String?>(null) }
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null && importingDocument == null) scope.launch {
+            val name = NoteDocumentImport.displayName(context, uri) ?: "document"
+            importingDocument = name
+            val result = runCatching { withContext(Dispatchers.IO) { NoteDocumentImport.import(context, uri) } }
+            importingDocument = null
+            result.onSuccess { imported ->
+                when {
+                    imported.blocks.isEmpty() ->
+                        vm.openDialog(NoteDialog.Message("\u201C$name\u201D has no text or pictures to import."))
+                    vm.insertImportedBlocks(imported.blocks) ->
+                        vm.openDialog(NoteDialog.Message(NoteDocumentImport.summary(name, imported)))
+                    else -> withContext(Dispatchers.IO) {
+                        NoteDocumentImport.discardImages(context, NoteDocumentImport.storedImages(imported))
+                    }
+                }
+            }.onFailure {
+                vm.openDialog(NoteDialog.Message((it as? NoteDocxReader.Refused)?.message
+                    ?: "This document couldn't be imported. Nothing was changed."))
+            }
+        }
+    }
+    LaunchedEffect(pendingDocumentPicker, state.dialog) {
+        if (pendingDocumentPicker && state.dialog == null) {
+            pendingDocumentPicker = false
+            runCatching { documentPicker.launch(NoteDocumentImport.PICKER_TYPES) }
+                .onFailure { vm.openDialog(NoteDialog.Message("No file picker is available on this device.")) }
+        }
+    }
     val pasteClipboardImage: () -> Unit = {
         vm.closeDialog()
         val uris = runCatching { NoteClipboardImages.uris(context) }.getOrDefault(emptyList())
@@ -249,7 +283,14 @@ fun NotesRoute(
                 focusManager.clearFocus(); keyboard?.hide()
             }
             NoteTool.IMAGE -> if (state.selectedImage != null) vm.toggleImageTools() else chooseImage()
-            NoteTool.DUPLICATE -> vm.duplicateNote { source ->
+            NoteTool.DUPLICATE -> if (documentSelectionMode && state.blocks.any { it.id in selectedBlockIds }) {
+                vm.duplicateBlocks(selectedBlockIds)?.let { copies ->
+                    selectedBlockIds = copies.toSet()
+                    android.widget.Toast.makeText(context,
+                        if (copies.size == 1) "Block duplicated" else "${copies.size} blocks duplicated",
+                        android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } else vm.duplicateNote { source ->
                 com.virlin.app.domain.action.TaskPageActions(VirlinGraph.repository, VirlinGraph.clock, VirlinGraph.ids)
                     .duplicateNote(source)
             }
@@ -555,10 +596,59 @@ fun NotesRoute(
             onClose = { setFormatting(false) },
         )
     } else null
+    val pasteFromOpen = state.dialog == NoteDialog.PasteFrom
+    var pasteFromBusy by remember { mutableStateOf<NotePasteSource?>(null) }
+    var pasteFromLast by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+    val pasteFromSource: (NotePasteSource) -> Unit = { source ->
+        if (pasteFromBusy == null) scope.launch {
+            pasteFromBusy = source
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    NoteSourceClipboard.read(context)?.let { copy ->
+                        NoteSourcePaste.parse(source, copy.plain, copy.html, NoteSourceClipboard.imageResolver(context))
+                    }
+                }
+            }
+            pasteFromBusy = null
+            result.onSuccess { blocks ->
+                when {
+                    blocks == null ->
+                        if (runCatching { NoteClipboardImages.available(context) }.getOrDefault(false)) pasteClipboardImage()
+                        else vm.openDialog(NoteDialog.Message(
+                            "The clipboard is empty. Copy something first, then choose where it came from."))
+                    blocks.isEmpty() -> vm.openDialog(NoteDialog.Message(
+                        "Nothing on the clipboard could be pasted as ${source.label}. Nothing was changed."))
+                    vm.insertImportedBlocks(blocks, fillBlankLine = true) -> {
+                        pasteFromLast = source.name
+                        android.widget.Toast.makeText(context, "Pasted from ${source.label}",
+                            android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    else -> withContext(Dispatchers.IO) {
+                        NoteDocumentImport.discardImages(context, blocks.mapNotNull { it.imagePath })
+                    }
+                }
+            }.onFailure {
+                vm.openDialog(NoteDialog.Message("The clipboard couldn't be pasted. Nothing was changed."))
+            }
+        }
+    }
+    val pasteSourceStrip = if (pasteFromOpen) NotePasteSourceStripState(
+        busy = pasteFromBusy,
+        last = pasteFromLast?.let { name -> NotePasteSource.entries.firstOrNull { it.name == name } },
+        onSource = pasteFromSource,
+        onClose = vm::closeDialog,
+    ) else null
     NoteAudioPlaybackHost()
     val toolState = vm.toolState().let { tools -> tools.copy(
+        duplicateLabel = if (documentSelectionMode && state.blocks.any { it.id in selectedBlockIds })
+            "Duplicate selected blocks" else tools.duplicateLabel,
         active = tools.active + when (val dialog = state.dialog) {
             NoteDialog.Paragraph -> setOf(NoteTool.PARAGRAPH)
+            NoteDialog.Font -> setOf(NoteTool.FONT)
+            NoteDialog.Size -> setOf(NoteTool.SIZE)
+            is NoteDialog.Link -> setOf(NoteTool.LINK)
+            NoteDialog.WordCount -> setOf(NoteTool.WORD_COUNT)
+            NoteDialog.ImageSource, is NoteDialog.ImageEditor -> setOf(NoteTool.IMAGE)
             is NoteDialog.ListStyle ->
                 setOf(if (dialog.type == NoteDocBlockType.NUMBERED) NoteTool.NUMBERING else NoteTool.BULLETS)
             NoteDialog.TextColor -> setOf(NoteTool.TEXT_COLOR)
@@ -571,16 +661,21 @@ fun NotesRoute(
             NoteDialog.Rename -> setOf(NoteTool.RENAME)
             NoteDialog.Print -> setOf(NoteTool.PRINT)
             NoteDialog.Export -> setOf(NoteTool.EXPORT)
+            NoteDialog.ImportDocument -> setOf(NoteTool.IMPORT)
+            NoteDialog.PasteFrom -> setOf(NoteTool.PASTE_FROM)
             NoteDialog.LineSpacing -> setOf(NoteTool.LINE_SPACING)
             else -> emptySet()
         } + (if (arrangeMode) setOf(NoteTool.ARRANGE_BLOCKS) else emptySet()) +
+            (if (documentSelectionMode) setOf(NoteTool.SELECT_DOCUMENT) else emptySet()) +
             if (formattingOn) setOf(NoteTool.FORMATTING) else emptySet(),
         // While selecting across blocks, Delete acts on that selection, not the hidden field's.
         enabled = if (state.damaged) emptySet() else
             (if (documentSelectionMode) tools.enabled - NoteTool.DELETE - NoteTool.CHANGE_CASE else tools.enabled) +
             NoteTool.SELECT_DOCUMENT + NoteTool.ARRANGE_BLOCKS + NoteTool.FORMATTING +
+            (if (importingDocument == null) setOf(NoteTool.IMPORT) else emptySet()) +
+            (if (state.pasting) emptySet() else setOf(NoteTool.PASTE_FROM)) +
             if (documentSelectionMode && state.blocks.any { it.id in selectedBlockIds })
-                setOf(NoteTool.FLASHCARD, NoteTool.DELETE, NoteTool.CHANGE_CASE) else emptySet(),
+                setOf(NoteTool.FLASHCARD, NoteTool.DELETE, NoteTool.CHANGE_CASE, NoteTool.DUPLICATE) else emptySet(),
     ) }
     VirlinNotesScreen(
         taskTitle = state.title.ifBlank { title },
@@ -670,6 +765,7 @@ fun NotesRoute(
         printStrip = printStrip,
         exportStrip = exportStrip,
         formattingStrip = formattingStrip,
+        pasteSourceStrip = pasteSourceStrip,
         pageView = pageViewActive && !state.loading,
     )
     formatFirst?.let { pending ->
@@ -693,12 +789,23 @@ fun NotesRoute(
 
     state.dialog?.let { dialog ->
         NoteDialogHost(dialog, state, vm, chooseImage, projectId, pickFromDevice = pickImage,
-            pasteImage = pasteClipboardImage,
+            pasteImage = pasteClipboardImage, pickDocument = { pendingDocumentPicker = true },
             // The selection the flashcard reads is still in the editor, so offer it here too.
             tools = toolState.copy(enabled = if (state.damaged) emptySet() else toolState.enabled + NoteTool.FLASHCARD),
             onTool = { tool -> if (!state.damaged) handleTool(tool) },
             paragraphAnchor = paragraphAnchor, sizeControl = sizeControl,
             spacingAnchor = spacingAnchor) { navController.popBackStack() }
+    }
+    importingDocument?.let { name ->
+        PickerDialog("Importing document", onDismiss = {}) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("notes_import_progress")) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    Modifier.size(20.dp), color = Green, strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text("Reading \u201C$name\u201D\u2026", color = Ink, fontSize = 14.sp,
+                    maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            }
+        }
     }
     pendingFlashcard?.let { content ->
         FlashcardCreateDialog(content, flashcardSaving, flashcardError,
@@ -733,6 +840,7 @@ fun NotesRoute(
 private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesViewModel,
                            pickImage: () -> Unit, projectId: String? = null,
                            pickFromDevice: () -> Unit = pickImage, pasteImage: () -> Unit = {},
+                           pickDocument: () -> Unit = {},
                            tools: NoteToolState = NoteToolState(), onTool: (NoteTool) -> Unit = {},
                            paragraphAnchor: NoteChipAnchor? = null,
                            sizeControl: NoteSizeControl? = null,
@@ -790,6 +898,7 @@ private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesVie
         // Print options are a strip under the formatting rail (NotePrintStrip).
         NoteDialog.Print -> Unit
         NoteDialog.Export -> Unit
+        NoteDialog.PasteFrom -> Unit
         NoteDialog.TextToAudio -> NoteTextToAudioDialog(remember(vm) {
             NoteTextToAudioState(onInsert = vm::insertAudio, onClose = vm::closeDialog)
         })
@@ -806,16 +915,22 @@ private fun NoteDialogHost(dialog: NoteDialog, state: NotesUiState, vm: NotesVie
 
         is NoteDialog.Link -> LinkDialog(dialog, vm)
 
-        is NoteDialog.Message -> PickerDialog("Note", vm::closeDialog) {
-            Text(dialog.text, color = Ink, fontSize = 14.sp)
-            Spacer(Modifier.height(14.dp))
-            PickerRow("OK", false) { vm.closeDialog() }
-        }
+        is NoteDialog.Message -> NoteMessagePopup(dialog.text, vm::closeDialog)
         is NoteDialog.PasteDetails -> PickerDialog("Paste details", vm::closeDialog) {
             Text(vm.lastPasteReport ?: "Nothing has been pasted into this note since it was opened.",
                 color = Ink, fontSize = 14.sp, modifier = Modifier.testTag("notes_paste_details"))
             Spacer(Modifier.height(14.dp))
             PickerRow("OK", false) { vm.closeDialog() }
+        }
+        is NoteDialog.ImportDocument -> PickerDialog("Import a document", vm::closeDialog) {
+            Text("Choose a Word (.docx) or Google Docs file on this device. Its headings, lists, text " +
+                "styles, links, tables and pictures become sections of this note, after the line you're " +
+                "editing or at the end.",
+                color = Ink, fontSize = 14.sp, modifier = Modifier.testTag("notes_import_explainer"))
+            Spacer(Modifier.height(14.dp))
+            PickerRow("Choose file", false) { vm.closeDialog(); pickDocument() }
+            Spacer(Modifier.height(8.dp))
+            PickerRow("Cancel", false) { vm.closeDialog() }
         }
         is NoteDialog.WordCount -> NoteWordCountPopup(remember(state.blocks) { vm.wordCount() }, vm::closeDialog)
         is NoteDialog.ImageSource -> PickerDialog("Add image", vm::closeDialog) {

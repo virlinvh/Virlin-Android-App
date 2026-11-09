@@ -1806,3 +1806,64 @@ Done - extend that table column-wise and row-wise - I don't want to see the popu
 - NotesViewModel.kt: NotesUiState.blockSelection (never stored), set by NotesRoute from the multi-select. While non-empty, toolbar tools act on every picked block as one undo step: font, size (stepper moves each block from its own size; typed size sets one size), bold/italic/underline/strike, text colour, highlight, alignment, line spacing, paragraph style (Normal/Headings), bullets/numbering (+ list style strip, None), checklist, quote. Code keeps its own look; prompts/toggles/tables/media are skipped; type changes are proved against the rich document first (refused with a message, nothing changed). Toolbar shows shared state (e.g. Mixed styles). Empty selection = unchanged single-block behaviour. paragraphLabelFor extracted (same labels).
 - NotesRoute.kt: LaunchedEffect passes the multi-select to the VM.
 - Test: NotesMultiSelectFormattingTest (4). Notes suites 248/248. Verified on emulator-5556 (releases\Virlin-multiformat2-20261108-2122.apk); emulator DB backed up and restored byte-exact.
+
+## 2026-11-08 - Notes: import Word / Google Docs documents
+- New toolbar tool NoteTool.IMPORT (upload-file icon, document group after Duplicate; also "Import doc" in the + tool grid).
+- Tap opens an explaining popup (NoteDialog.ImportDocument) -> Choose file -> system picker (docx, Google Docs, octet-stream/zip; legacy .doc refused with a save-as-docx message).
+- NoteDocumentImport (Android glue): Google Docs virtual files requested as .docx via openTypedAssetFileDescriptor; copy to cache temp (50 MB cap, OLE header check); stored pictures removed again if the import is refused.
+- NoteDocxReader (new, pure streaming pull parser): headings via style names / Title / Subtitle / outlineLvl (basedOn chain), bullets vs numbering from numbering.xml with levels as indent, quote/code styles, alignment, bold/italic/underline/strike, colours, highlights, fonts, relative sizes, http/https/mailto links only, tables -> TABLE blocks (header row kept), pictures -> IMAGE blocks via NoteImageStore.importBytes. Skips deleted tracked changes, hidden text, fallbacks. No DOCTYPE processing; all parts size-bounded.
+- NotesViewModel.insertImportedBlocks: fresh ids; replaces a blank note, else after the line being edited, else at the end; checked with richDocumentAccepts; one undo step; save scheduled. No schema change.
+- Tests: NoteDocxReaderTest (8), NotesDocumentImportTest (5). Notes suites 261/261.
+- Verified on emulator-5556 with a generated test .docx (APK releases\Virlin-docimport-20261108-2148.apk); DB restored byte-exact, test picture and test file removed.
+
+## 2026-11-08 Google Docs paste
+- New domain/notedoc/GoogleDocsPaste.kt: parses Google Docs clipboard HTML (docs-internal-guid) into note blocks: headings (h1-h6 and large-size Title/Subtitle), bold/italic/underline/strike, colour, highlight, font, relative size, links (google.com/url unwrapped), nested bullet/numbered/checklist lists, quotes, code, dividers, tables, pictures.
+- NotePasteParser.parse tries GoogleDocsPaste first only for Docs HTML; other sources unchanged.
+- NotesViewModel.pasteStructured: trusts Docs HTML when letters match (docsMatches); Docs pictures paste in the background path.
+- NoteImageStore.importRemote: https download (25MB cap) used only for googleusercontent/docs.google.com picture URLs off the main thread.
+- NoteBlockEditor: googleDocsProviderHtml reads text/html from the Docs app clipboard content: URI (Docs app shares a provider URI, not inline HTML); ignored unless it is Docs HTML.
+- Tests: GoogleDocsPasteTest (7), GoogleDocsClipboardProviderTest (3). APK releases\Virlin-docspaste-20261108-2215.apk.
+
+## 2026-11-08 Google Search (AI Mode) paste
+- NotePasteParser.fromHtml: an inline wrapper (span, p, div without direct block children) that contains nested paragraphs/headings/tables, or display:block styled spans, is now split into blocks instead of glued into one paragraph; consecutive inline siblings stay one paragraph. Links (a), headings, pre, blockquote, math and li keep the old single-block behaviour; direct-block-children containers unchanged.
+- mark with an explicit background shorthand colour keeps that colour (Google's light blue #D3E3FD); a plain mark keeps the default yellow.
+- Test fixture app/src/test/resources/paste/google-ai-mode.(html|txt) captured from Google AI Mode's Copy text button; GoogleSearchPasteTest (6).
+- APK releases\Virlin-searchpaste-20261108-2243.apk.
+
+## 2026-11-08 - Notes: 'Paste from...' source strip
+- New toolbar tool PASTE_FROM (clipboard icon after Delete; also in the + Add sheet) opens a strip under the toolbar listing copy sources: AI chats (ChatGPT, Gemini, Claude, Grok, DeepSeek, NotebookLM, Perplexity, Copilot, Meta AI, Other), Web (Google Search, Website), Documents (Google Docs, Word, PDF), Text (Markdown, Plain text).
+- Tapping a source reads the clipboard (HTML incl. Google Docs provider HTML, else text) and parses it with that source's rules (domain/notedoc/NoteSourcePaste.kt): AI/Search formatted copy or Markdown; Docs HTML or one paragraph per line; Word mso-list paragraphs -> nested lists, Title/Subtitle -> headings; PDF hard-wrapped lines rejoined, hyphenation fixed, capital headings, bullets/numbers; Markdown ignores HTML; Plain text interprets nothing.
+- Inserted via NotesViewModel.insertImportedBlocks(blocks, fillBlankLine = true): one undo step, fills an empty current line, else after the current line, else at the end. Import keeps fillBlankLine = false (unchanged).
+- Normal long-press Paste is unchanged. Files: NoteSourcePaste.kt, NoteSourceClipboard.kt, NotePasteSourceStrip.kt, VirlinNotesScreen.kt, NoteAddSheet.kt, NotesViewModel.kt, NotesRoute.kt; tests NoteSourcePasteTest (13). Notes suites 481/481. APK releases\Virlin-pastefrom2-20261108-2305.apk.
+
+## 2026-11-08 - Notes: compact 'Paste from' strip
+- NotePasteSourceStrip is now one 52dp row like the colour strip: source name chips only (thin dividers between groups, feathered scroll edges) and a close X. Removed the 'Paste from...' title, the clipboard description line and the group labels; removed the now-unused clipboard-label listener in NotesRoute and NoteSourceClipboard.describe. Paste behaviour unchanged. Notes tests 456/456. APK releases\Virlin-pastestrip-20261108-2327.apk.
+
+## 2026-11-08 - Notes toolbar: clear selected state
+- Selected toolbar tools now draw a 2dp accent outline (was 1dp at 38% alpha) on the existing wash fill with accent icon, bold label text, and expose semantics selected=true/false.
+- Tools now reported active: SELECT_DOCUMENT while multi-select is on, FONT/SIZE/LINK/WORD_COUNT while their panel is open, IMAGE while the image source/editor is open (NotesRoute active set). One-tap actions (undo, redo, delete, duplicate, indent, divider...) have no on state.
+- Test NoteToolSelectedStateTest. Notes tests 457/457. APK releases\Virlin-toolselected-20261108-2336.apk.
+
+## 2026-11-08 - Notes: duplicate selected blocks + message popup restyle
+- Multi-select with blocks picked: Duplicate now calls NotesViewModel.duplicateBlocks(ids) - every run of neighbouring picked blocks is copied right after itself (fresh ids, formatting kept, image/audio files shared; nothing deletes media with a block), one undo step, refused with a message if richDocumentAccepts rejects. The copies become the selection; toast 'Block duplicated' / 'N blocks duplicated'. Duplicate is enabled whenever blocks are picked; label 'Duplicate selected blocks'. Without picked blocks Duplicate still duplicates the note (unchanged).
+- NoteDialog.Message now renders NoteMessagePopup (word-count card style: icon circle, title, text, filled accent OK button) instead of PickerDialog + outlined PickerRow.
+- Tests NoteDuplicateBlocksTest (4), NoteMessagePopupTest (1). Notes tests 487/487. APK releases\Virlin-dupblocks2-20261108-2351.apk.
+
+## 2026-11-09 Mind map pinch-zoom smoothing (Cursor)
+- ui/map/VirlinMindMap.kt: pan offset now read inside the canvas draw block (pinch frames repaint only the canvas, no full-screen recomposition in focus mode); map text paint uses LINEAR_TEXT_FLAG + SUBPIXEL_TEXT_FLAG so glyphs scale continuously instead of snapping per zoom frame; title/detail typefaces created once and title StaticLayouts cached in an LruCache(600) keyed by colour/style/width/title; removed an unused per-frame ellipsize. Layout, colours, gestures unchanged.
+- test: map/MapPinchZoomUiTest (pinch out/in keeps the centroid fixed). Map suite 124/124.
+- APK: releases/Virlin-mapzoom-20261109-0008.apk (emulator-5556 only).
+
+## 2026-11-09 Smooth open from Page (Cursor)
+- ui/navigation/PageOpenTransitions.kt (new): PAGE_ROUTES = task_page/{taskId} and map_container_page/{projectId}/{scope}. Anything opened from a Page slides in from the right while the Page slides out left (340 ms, emphasized easing, both full width so nothing is drawn translucent); Back reverses it.
+- ui/navigation/VirlinApp.kt: NavHost enter/exit/popEnter/popExit use those slides only when leaving/returning to a Page; every other navigation keeps the library default fadeIn/fadeOut tween(700); reduced motion keeps the default. The bottom bar fades in (220 ms alpha in a graphicsLayer) only when it appears right after a Page route (note / to-do), instead of popping in under the old page. Route tracked in a plain holder updated in SideEffect.
+- Cause found: the 700 ms cross-fade drew both full screens translucent while the editor built its first frame; the tapped Open button's pressed ripple stayed visible during that freeze (the grey flash).
+- test: navigation/PageOpenTransitionTest (3). ScaffoldScreenshotTest golden was already stale (old Now design), not re-recorded.
+- APK: releases/Virlin-pageopen-20261109-1110.apk (emulator-5556 only).
+
+## 2026-11-09 Notes: keyboard stays up when Backspace merges lines (Cursor)
+- Cause: Backspace at the start of a plain line merges it into the line above, which removes the focused BasicTextField. Focus vanished with it (soft keyboard hides) and was only re-requested two frames later via LaunchedEffect(focusedBlockId) -> focusRequestFor -> field LaunchedEffect (keyboard shows again). Every press in a run of empty lines closed and reopened the keyboard.
+- ui/notes/NotesViewModel.kt: new read-only backspaceMergeTarget(blockId) with the same rules as onBackspaceAtStart's merge branch. onBackspaceAtStart unchanged.
+- ui/notes/NoteBlockEditor.kt: editor-scoped LocalBlockFocus map (blockId -> FocusRequester) registered by each editable BlockTextField via DisposableEffect; the Backspace key handler runs the merge, then requests focus on the line it merged into while the old field is still composed, so focus moves field-to-field and the IME session restarts without hiding. If that line is not composed (folded/off screen) the old delayed request still applies.
+- test: ui/notes/NoteBackspaceKeepsFocusUiTest (fails without the fix: editor focus went false,true,false,true). Notes suite 463/463.
+- APK: releases/Virlin-backspace-20261109-1143.apk (emulator-5556 only; emulator too overloaded to exercise the keyboard by hand).

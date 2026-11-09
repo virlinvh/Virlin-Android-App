@@ -12,6 +12,10 @@ import org.jsoup.nodes.TextNode
 object NotePasteParser {
     fun parse(plainText: String, htmlText: String? = null,
         imageResolver: ((String) -> String?)? = null): List<NoteDocBlock> {
+        if (htmlText != null && GoogleDocsPaste.isGoogleDocsHtml(htmlText)) {
+            runCatching { GoogleDocsPaste.parse(htmlText, imageResolver) }.getOrNull()
+                ?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
         val htmlBlocks = htmlText?.takeIf { it.isNotBlank() }?.let {
             runCatching { fromHtml(it, imageResolver) }.getOrNull()
         }.orEmpty()
@@ -445,7 +449,9 @@ object NotePasteParser {
                         val next = InlineStyle(marks, href ?: inherited.link,
                             color = cssColor(cssValue(css, "color")) ?: inherited.color,
                             highlight = cssColor(cssValue(css, "background-color"))
-                                ?: if (node.normalName() == "mark") 0xFFFFEB8AL else inherited.highlight,
+                                ?: if (node.normalName() == "mark")
+                                    cssColor(cssValue(css, "background")) ?: 0xFFFFEB8AL
+                                else inherited.highlight,
                             fontSizeSp = fontSize ?: inherited.fontSizeSp,
                             fontFamily = family ?: inherited.fontFamily)
                         node.childNodes().forEach { walk(it, next) }
@@ -474,8 +480,35 @@ object NotePasteParser {
                 mathMode = if (element.normalName() == "math") true else null)
             nestedMedia.forEach(::media)
         }
-        fun visit(parent: Element, listType: NoteDocBlockType? = null, indent: Int = 0) {
+        // Chrome's clipboard copy of a page (Google Search's AI answer) can wrap whole paragraphs,
+        // headings and tables inside inline elements; those must not be glued into one paragraph.
+        val nestedBlockSelector = "p, div, h1, h2, h3, h4, h5, h6, blockquote, pre, li, ul, ol, table, hr, " +
+            "[style~=(?i)display\\s*:\\s*(block|flex|grid|list-item|table)(?![\\w-])]"
+        fun hasNestedBlocks(element: Element): Boolean =
+            element.children().any { it.selectFirst(nestedBlockSelector) != null }
+        val styledBlock = Regex("display\\s*:\\s*(block|flex|grid|list-item|table)(?![\\w-])",
+            RegexOption.IGNORE_CASE)
+        fun isStyledBlock(element: Element): Boolean = styledBlock.containsMatchIn(element.attr("style"))
+        val inlineOnlyTags = setOf("pre", "blockquote", "a", "h1", "h2", "h3", "h4", "h5", "h6", "math")
+        fun visit(parent: Element, listType: NoteDocBlockType? = null, indent: Int = 0,
+            groupInline: Boolean = false) {
+            val inline = mutableListOf<Node>()
+            fun flushInline() {
+                if (inline.isEmpty()) return
+                val run = Element("p")
+                inline.forEach { run.appendChild(it.clone()) }
+                inline.clear()
+                collect(run, listType ?: NoteDocBlockType.PARAGRAPH, indent)
+            }
             parent.childNodes().forEach { node ->
+                if (groupInline && (node is TextNode || node is Element &&
+                        node.normalName() !in blockTags && node.normalName() !in
+                        setOf("svg", "script", "style", "iframe", "canvas") && !isStyledBlock(node) &&
+                        !hasNestedBlocks(node))) {
+                    inline += node
+                    return@forEach
+                }
+                flushInline()
                 if (node is TextNode && node.wholeText.isNotBlank()) {
                     collect(Element("p").text(node.wholeText), listType ?: NoteDocBlockType.PARAGRAPH, indent)
                 } else if (node is Element) {
@@ -506,6 +539,7 @@ object NotePasteParser {
                                 result += block(NoteDocBlockType.PARAGRAPH,
                                     children[0].text().trim() + "\n" + children[1].text().trim())
                             } else if (children.any { it.normalName() in blockTags }) visit(node, listType, indent)
+                            else if (hasNestedBlocks(node)) visit(node, listType, indent, groupInline = true)
                             else collect(node, listType ?: NoteDocBlockType.PARAGRAPH, indent)
                         }
                         "li" -> {
@@ -533,11 +567,14 @@ object NotePasteParser {
                             }
                             if (node.children().any { it.normalName() in blockTags } &&
                                 tag !in setOf("pre", "blockquote")) visit(node, listType, indent)
+                            else if (tag !in inlineOnlyTags && hasNestedBlocks(node))
+                                visit(node, listType, indent, groupInline = true)
                             else collect(node, type, indent)
                         }
                     }
                 }
             }
+            flushInline()
         }
         visit(document.body())
         return result

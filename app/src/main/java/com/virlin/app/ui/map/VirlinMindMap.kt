@@ -638,8 +638,6 @@ fun VirlinProjectMindMap(
         // The task it was opened for has gone (moved out of this project, or removed).
         if (addPaletteTaskId != null && paletteTask == null) addPaletteTaskId = null
     }
-    val offset = Offset(if (offsetX.isNaN()) 0f else offsetX, if (offsetY.isNaN()) 0f else offsetY)
-
     fun fit() {
         if (viewport == IntSize.Zero) return
         val margin = 72f * density
@@ -966,6 +964,9 @@ fun VirlinProjectMindMap(
                     }
             ) {
                 drawIntoCanvas { composeCanvas ->
+                    // Pan and zoom are read here, in the draw phase, so a pinch frame repaints the
+                    // canvas without recomposing the whole map screen.
+                    val offset = Offset(if (offsetX.isNaN()) 0f else offsetX, if (offsetY.isNaN()) 0f else offsetY)
                     val native = composeCanvas.nativeCanvas
                     native.save()
                     native.translate(offset.x, offset.y)
@@ -2003,6 +2004,12 @@ private fun drawLayoutNode(
     else canvas.drawPath(path, paint)
 }
 
+private val MapTitleTypeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+private val MapDetailTypeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+
+/** Title layouts by colour, width and text; a pan or zoom frame redraws them without re-measuring. */
+private val MapTitleLayouts = android.util.LruCache<String, android.text.StaticLayout>(600)
+
 internal fun paintMap(
     canvas: android.graphics.Canvas, g: MapGeometry, appearance: MapAppearance,
     viewport: RectF, selectedId: String?,
@@ -2014,7 +2021,9 @@ internal fun paintMap(
     expandedId: String? = null,
     showPreviewControls: Boolean = true,
 ) {
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    // Linear, subpixel text scales continuously with the canvas. Hinted text snaps each glyph
+    // to whole pixels at every zoom step, so labels shimmer while pinching.
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.LINEAR_TEXT_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
     val branchTint = mapBranchTints(g, appearance)
     val boxTint = mapBoxTints(g, appearance, branchTint)
     val tint = mutableMapOf<String, Int>()
@@ -2309,17 +2318,20 @@ internal fun paintMap(
                 drawCraftEndpoint(canvas, paint, appearance.layout, f, connectorAccent(topic), if (dimmed) 90 else 230)
         } else canvas.drawCircle(f.x, f.y + f.h / 2f, 3f, paint)
         paint.color = boxColors.title
-        paint.typeface =
-            android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+        paint.typeface = MapTitleTypeface
         paint.textSize = 15f
-        val titleLayout = android.text.StaticLayout.Builder.obtain(topic.title, 0, topic.title.length,
-            android.text.TextPaint(paint), (f.w - 66f).toInt())
+        val titleWidth = (f.w - 66f).toInt()
+        val titleKey = if (paint.shader != null) null else
+            "${paint.color}|${paint.style.ordinal}|${paint.strokeWidth}|$titleWidth|${topic.title}"
+        val titleLayout = titleKey?.let(MapTitleLayouts::get) ?: android.text.StaticLayout.Builder
+            .obtain(topic.title, 0, topic.title.length, android.text.TextPaint(paint), titleWidth)
             .setMaxLines(3).setEllipsize(TextUtils.TruncateAt.END).setIncludePad(false).build()
+            .also { layout -> titleKey?.let { MapTitleLayouts.put(it, layout) } }
         canvas.save()
         canvas.translate(f.x + 16f, f.y + (f.h - titleLayout.height) / 2f)
         titleLayout.draw(canvas)
         canvas.restore()
-        paint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        paint.typeface = MapDetailTypeface
         paint.textSize = 11f
         // Colour is never the only signal: every status also carries a word and a glyph.
         paint.color = boxColors.detail ?: when (topic.status) {
@@ -2327,11 +2339,6 @@ internal fun paintMap(
             MapStatus.DONE -> android.graphics.Color.rgb(34, 126, 63)
             else -> android.graphics.Color.rgb(99, 114, 131)
         }
-        val detail = listOf(topic.detail, statusLabel(topic.status))
-            .filter { it.isNotBlank() }.joinToString(" · ")
-        val sub = TextUtils.ellipsize(
-            detail, android.text.TextPaint(paint), f.w - 28f, TextUtils.TruncateAt.END
-        ).toString()
 
         // Disclosure is visible by default; the edit icon appears only on the selected node.
         if (showPreviewControls) drawPreviewAffordances(canvas, paint, f, topic.id in previewOwners, false, selected)

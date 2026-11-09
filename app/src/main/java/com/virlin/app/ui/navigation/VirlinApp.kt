@@ -107,6 +107,10 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
     }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: "now"
+    // The route shown before this composition; a plain holder so updating it never recomposes.
+    val lastRoute = remember { arrayOf(currentRoute) }
+    val routeBefore = lastRoute[0]
+    androidx.compose.runtime.SideEffect { lastRoute[0] = currentRoute }
     var mapFocusMode by remember { mutableStateOf(false) }
     val noteScope = rememberCoroutineScope()
     val noteRepository = com.virlin.app.domain.VirlinGraph.repository
@@ -265,8 +269,15 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 Color.White else Color(0xFFF8F7F4),
             // Bottom-attached root navigation (Now · Streams · Pulse · Inbox). The bar owns the
             // navigation-bar inset itself; nothing else pads the bottom, so there is no gap.
-            bottomBar = { if (barOnThisRoute && !(currentRoute == com.virlin.app.ui.map.ProjectMapRoute && mapFocusMode)) VirlinBottomNav(barRoute, inboxCount, navController,
-                modifier = Modifier.onSizeChanged { footerHeightPx = it.height }) }
+            bottomBar = { if (barOnThisRoute && !(currentRoute == com.virlin.app.ui.map.ProjectMapRoute && mapFocusMode)) {
+                // Arriving from a Page, the footer fades in under the sliding item instead of popping.
+                val fadeIn = remember { isPageRoute(routeBefore) && routeBefore != currentRoute && !reducedMotion }
+                val barAlpha = remember { Animatable(if (fadeIn) 0f else 1f) }
+                LaunchedEffect(Unit) { barAlpha.animateTo(1f, tween(220)) }
+                VirlinBottomNav(barRoute, inboxCount, navController,
+                    modifier = Modifier.onSizeChanged { footerHeightPx = it.height }
+                        .graphicsLayer { alpha = barAlpha.value })
+            } }
         ) { innerPadding ->
             // Content ends above the bar (innerPadding); the Orb slot is an overlay in the
             // bottom-right of that content area, so it floats above the bar and never over Inbox.
@@ -288,7 +299,21 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
             NavHost(
                 navController = navController,
                 startDestination = "now",
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                // Opening an item from a Page slides it in; everything else keeps the
+                // library default (a 700 ms cross-fade), as does reduced motion.
+                enterTransition = {
+                    (if (reducedMotion) null else pageOpenEnter()) ?: fadeIn(animationSpec = tween(700))
+                },
+                exitTransition = {
+                    (if (reducedMotion) null else pageOpenExit()) ?: fadeOut(animationSpec = tween(700))
+                },
+                popEnterTransition = {
+                    (if (reducedMotion) null else pageOpenPopEnter()) ?: fadeIn(animationSpec = tween(700))
+                },
+                popExitTransition = {
+                    (if (reducedMotion) null else pageOpenPopExit()) ?: fadeOut(animationSpec = tween(700))
+                }
             ) {
                 composable("now") { NowScreen(navController) }
                 composable("streams") { StreamsScreen(navController) }
