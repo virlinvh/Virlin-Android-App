@@ -52,6 +52,8 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
     val itemType = if (taskDestination != null) {
         if (taskDestination.parentTaskId != null) "subtasks" else "tasks"
     } else if (projectId == null) "projects" else "workstreams"
+    // Projects: the second mode imports a .virlin project file instead of bulk names.
+    val projectImport = projectId == null && taskDestination == null && !embedded
     val formatExample = """{"version":2,"items":[{"name":"PHASE 0 Architecture & Baseline"},{"name":"PHASE 1 Application Shell"}]}"""
     val aiPrompt = PhaseImportPrompt.text
     val accent = if (projectId == null) Color(0xFF007B58)
@@ -84,7 +86,7 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
                         }
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("Add ${if (bulk) itemType else itemType.removeSuffix("s")}",
+                            Text(if (projectImport && bulk) "Import project" else "Add ${if (bulk) itemType else itemType.removeSuffix("s")}",
                                 fontSize = 15.sp, fontWeight = FontWeight.Normal, color = ink)
                             Text(if (taskDestination != null) "In $title" else if (projectId == null) "In Projects" else "In ${title.substringAfter(" in ", title)}",
                                 fontSize = 12.sp, color = muted)
@@ -95,7 +97,7 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
                     }
                     Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFFF5F6F9), border = BorderStroke(1.dp, line)) {
                         Row(Modifier.fillMaxWidth().padding(2.dp)) {
-                            listOf(false to "Single", true to "Bulk").forEach { (mode, label) ->
+                            (if (projectImport) listOf(false to "New", true to "Import") else listOf(false to "Single", true to "Bulk")).forEach { (mode, label) ->
                                 Surface(onClick = { if (!busy) { bulk = mode; preview = null; error = null } },
                                     modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp),
                                     color = if (bulk == mode) wash else Color.Transparent) {
@@ -107,6 +109,9 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
                         }
                     }
                     }
+                    if (projectImport && bulk) ProjectVirlinImportPane(accent, wash, ink, muted, line, actionColor, actionInk,
+                        fieldColors, busy, onBusyChanged = { busy = it; onBusyChanged(it) }, onDismiss = onDismiss)
+                    else {
                     // The form alone scrolls; actions stay attached to the card above the IME.
                     Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
                         .testTag("bulk_creation_form"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -171,6 +176,7 @@ internal fun BulkCreationDialog(title: String, placeholder: String, projectId: S
                                 busy = false; onBusyChanged(false)
                             }
                         }) { Text(if (busy) "Adding…" else if (!bulk) "Create" else if (preview == null) "Preview" else "Add ${preview!!.size} items") }
+                    }
                     }
                 }
             }

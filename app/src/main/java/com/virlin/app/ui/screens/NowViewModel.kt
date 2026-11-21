@@ -165,8 +165,9 @@ class NowViewModel(
     fun setNeedsYouSort(mode: NeedsYouSortMode) { _needsYouSort.value = mode }
 
     /** The ids to render, in DISPLAY order. Each card still takes its rank from [needsYouQueue]. */
-    val needsYouDisplay: StateFlow<List<String>> = combine(executionRepository.streams, _needsYouSort) { streams, mode ->
-        NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(streams), mode).map { it.stream.id }
+    val needsYouDisplay: StateFlow<List<String>> = combine(executionRepository.streams, executionRepository.projects, _needsYouSort) { streams, projects, mode ->
+        NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(streams), mode,
+            projects.associate { it.id to it.title }).map { it.stream.id }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
         NeedsYouSort.display(com.virlin.app.domain.attention.NeedsYouOrder.queue(executionRepository.streams.value), NeedsYouSortMode.PRIORITY).map { it.stream.id })
 
@@ -265,6 +266,8 @@ class NowViewModel(
     override fun openCustom(streamId: String, intent: TimedIntent) = intents.openCustom(streamId, intent)
     override fun dismissChooser() = intents.dismissChooser()
     override fun leave(streamId: String, minutes: Long?) = intents.leave(streamId, minutes)
+    override fun pauseFocus(streamId: String) = intents.pauseFocus(streamId)
+    fun resumeFocus(streamId: String) = intents.resumeFocus(streamId)
     override fun handOff(streamId: String, minutes: Long?) = intents.handOff(streamId, minutes)
     override fun stillRunning(streamId: String, minutes: Long) = intents.stillRunning(streamId, minutes)
     override fun resultReadyNow(streamId: String) = intents.resultReadyNow(streamId)

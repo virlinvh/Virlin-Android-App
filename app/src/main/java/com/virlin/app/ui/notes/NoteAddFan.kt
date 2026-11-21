@@ -70,16 +70,19 @@ internal const val ADD_FAN_TAP_RUN_MS = 600L
  * same [NoteTool]s as the toolbar and close the fan, unless [keepOpenAfter] says the tool is
  * mid-sequence (heading fold steps through its levels with the fan still out). Tapping outside
  * or Back closes the fan. Screen readers get an "Add block" action instead of the triple tap.
+ * With [onAddBlock] null (the reading view) the + only opens and closes the fan.
  */
 @Composable
 internal fun NoteAddFan(
     tools: NoteToolState,
     headingFoldLabel: String,
     onTool: (NoteTool) -> Unit,
-    onAddBlock: () -> Unit,
+    onAddBlock: (() -> Unit)?,
     modifier: Modifier = Modifier,
     keepOpenAfter: (NoteTool) -> Boolean = { false },
     now: () -> Long = SystemClock::uptimeMillis,
+    /** Extra space under the + (and its fan) above the bottom edge. */
+    bottomLift: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     var open by remember { mutableStateOf(false) }
     var tapRun by remember { mutableIntStateOf(0) }
@@ -129,7 +132,7 @@ internal fun NoteAddFan(
                 border = BorderStroke(1.dp, if (selected) Green else Border),
                 shadowElevation = 3.dp,
                 modifier = Modifier.align(Alignment.BottomEnd)
-                    .padding(end = 22.dp, bottom = 14.dp)
+                    .padding(end = 22.dp, bottom = 14.dp + bottomLift)
                     .offset {
                         IntOffset(
                             (cos(rad) * radiusPx * progress).roundToInt(),
@@ -161,7 +164,7 @@ internal fun NoteAddFan(
                 val at = now()
                 tapRun = if (lastTapAt != Long.MIN_VALUE && at - lastTapAt in 0..ADD_FAN_TAP_RUN_MS) tapRun + 1 else 1
                 lastTapAt = at
-                if (tapRun >= 3) {
+                if (tapRun >= 3 && onAddBlock != null) {
                     tapRun = 0
                     open = false
                     onAddBlock()
@@ -169,11 +172,11 @@ internal fun NoteAddFan(
             },
             shape = CircleShape, color = Mint,
             modifier = Modifier.align(Alignment.BottomEnd)
-                .padding(end = 20.dp, bottom = 12.dp)
+                .padding(end = 20.dp, bottom = 12.dp + bottomLift)
                 .size(48.dp)
                 .semantics {
                     contentDescription = if (open) "Hide quick tools" else "Show quick tools"
-                    customActions = listOf(CustomAccessibilityAction("Add block") {
+                    if (onAddBlock != null) customActions = listOf(CustomAccessibilityAction("Add block") {
                         open = false; tapRun = 0; onAddBlock(); true
                     })
                 }

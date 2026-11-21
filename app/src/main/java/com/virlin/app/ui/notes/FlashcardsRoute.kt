@@ -207,14 +207,14 @@ internal fun groupedFlashcards(cards: List<SavedFlashcard>, group: FlashcardGrou
     val selected = cards.filter { card ->
         if (group == FlashcardGroup.ARCHIVED) card.isArchived
         else !card.isArchived && when (group) {
-            FlashcardGroup.DUE -> card.reviewCount > 0 && card.nextReviewAt <= now
-            FlashcardGroup.NEW -> card.reviewCount == 0
-            FlashcardGroup.FUTURE -> card.reviewCount > 0 && card.nextReviewAt > now
+        FlashcardGroup.DUE -> card.reviewCount > 0 && card.nextReviewAt <= now
+        FlashcardGroup.NEW -> card.reviewCount == 0
+        FlashcardGroup.FUTURE -> card.reviewCount > 0 && card.nextReviewAt > now
             else -> true
         }
     }
     val scheduled = compareBy<SavedFlashcard> {
-        if (it.reviewCount == 0) Long.MIN_VALUE else it.nextReviewAt
+            if (it.reviewCount == 0) Long.MIN_VALUE else it.nextReviewAt
     }.thenBy { it.createdAt }
     return when (sort) {
         FlashcardSort.SCHEDULED -> selected.sortedWith(scheduled)
@@ -379,11 +379,15 @@ fun FlashcardsRoute(navController: NavController, kind: String, id: String) {
         })
     editingCard?.let { card ->
         val start = remember(card.id) { flashcardEditStart(card) }
+        var updateNote by remember(card.id) { mutableStateOf(false) }
+        var editedFaces by remember(card.id) { mutableStateOf<Pair<List<NoteDocBlock>, List<NoteDocBlock>>?>(null) }
         FlashcardCreateDialog(emptyList(), editSaving, editError,
             onDismiss = { if (!editSaving) { editingCard = null; editError = null } }, edit = start,
+            noteUpdate = FlashcardNoteUpdate(updateNote, { updateNote = it }) { f, b -> editedFaces = f to b },
             onSave = { front, back, difficulty, _, frontCardStyle ->
                 if (!editSaving) scope.launch {
                     editSaving = true
+                    val faces = editedFaces.takeIf { updateNote }
                     runCatching {
                         val question = flashcardSummaryBlock(front)
                         val prompt = question.text.trim().take(300)
@@ -394,12 +398,39 @@ fun FlashcardsRoute(navController: NavController, kind: String, id: String) {
                         .onSuccess { updated ->
                             cards = cards.map { if (it.id == updated.id) updated else it }
                             editingCard = null; editError = null
+                            if (faces != null) android.widget.Toast.makeText(context,
+                                updateFlashcardNote(card, start, faces), android.widget.Toast.LENGTH_LONG).show()
                         }
                         .onFailure { editError = "Could not save changes: ${it.message}" }
                     editSaving = false
                 }
             })
     }
+    }
+}
+
+/**
+ * Carries a saved card edit into its note when the editor's "update the note too" was on, and says
+ * what happened. The note is written once, against the revision it was read at, so a note changed
+ * meanwhile (or a structure it cannot take) is refused and left exactly as it was.
+ */
+private suspend fun updateFlashcardNote(card: SavedFlashcard, start: FlashcardEditStart,
+    faces: Pair<List<NoteDocBlock>, List<NoteDocBlock>>): String {
+    val doc = runCatching { VirlinGraph.actions.loadNoteDoc(card.ownerKey) }.getOrNull()
+        ?: return "Card saved. Its note was not found, so the note is unchanged."
+    if (doc.loadError != null) return "Card saved. The note could not be read, so it is unchanged."
+    val plan = planFlashcardNoteSync(doc.blocks, card.sourceBlockId, listOf(start.back, start.front),
+        listOf(faces.second, faces.first)) { "fc-${java.util.UUID.randomUUID()}" }
+    if (!plan.hasChanges) return if (plan.skipped > 0)
+        "Card saved. Those parts are not in the note as they are, so the note is unchanged."
+    else "Card saved. Nothing on it needed to change in the note."
+    return when (val result = VirlinGraph.actions.saveNoteDoc(card.ownerKey, doc.title, plan.blocks,
+        expectedRevision = doc.revision)) {
+        is com.virlin.app.domain.action.ActionResult.Success -> buildString {
+            append("Card and note updated.")
+            if (plan.skipped > 0) append(" Some parts are not in the note and stayed on the card only.")
+        }
+        else -> "Card saved. The note is unchanged: ${result.refusalText()}"
     }
 }
 
@@ -740,13 +771,13 @@ private fun DeckGroupStrip(group: FlashcardGroup, counts: Map<FlashcardGroup, In
         .padding(vertical = 2.dp, horizontal = if (compact) 16.dp else 0.dp),
         horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp)) {
         GroupOrder.forEach { value ->
-            val selected = group == value
+                val selected = group == value
             val shape = RoundedCornerShape(19.dp)
             Row(Modifier.height(if (compact) 32.dp else 38.dp).clip(shape)
                 .background(if (selected) accent else Color.White)
                 .border(1.dp, if (selected) accent else StudyInk.copy(alpha = .08f), shape)
                 .clickable(role = Role.Tab) { onGroup(value) }
-                .testTag("flashcard_group_${value.name.lowercase()}")
+                    .testTag("flashcard_group_${value.name.lowercase()}")
                 .padding(start = 12.dp, end = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(groupIcon(value), contentDescription = null, modifier = Modifier.size(15.dp),
                     tint = if (selected) Color.White else StudyMuted)
@@ -817,10 +848,10 @@ private fun DeckEmpty(message: String) {
 
 private fun emptyGroupMessage(counts: Map<FlashcardGroup, Int>, group: FlashcardGroup): String = when {
     counts.values.sum() == 0 -> "No flashcards yet. Select text in a note and tap Flashcard."
-    group == FlashcardGroup.DUE -> "Nothing due right now. Your next review is on its way."
-    group == FlashcardGroup.NEW -> "You've introduced all your new cards."
+                    group == FlashcardGroup.DUE -> "Nothing due right now. Your next review is on its way."
+                    group == FlashcardGroup.NEW -> "You've introduced all your new cards."
     group == FlashcardGroup.ARCHIVED -> "No archived cards. Archive a card to keep it out of practice."
-    else -> "No cards in this group yet."
+                    else -> "No cards in this group yet."
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -1194,7 +1225,7 @@ private fun FlashcardPracticePage(title: String, group: FlashcardGroup, counts: 
                         },
                         onHorizontalDrag = { change, amount ->
                             if (dragging || queued) {
-                                change.consume()
+                            change.consume()
                                 tracker.addPosition(change.uptimeMillis, change.position)
                                 travel += amount
                             }

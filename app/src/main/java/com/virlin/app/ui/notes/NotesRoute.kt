@@ -54,6 +54,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -111,6 +113,27 @@ fun notesRoute(ownerKey: String, title: String): String =
 fun notesReaderRoute(ownerKey: String, title: String): String =
     "note_reader/" + android.net.Uri.encode(ownerKey) + "?title=" + android.net.Uri.encode(title)
 
+/** The reader over [editorRoute]'s note, or null when the route is not a note editor. */
+internal fun notePreviewRouteFor(editorRoute: String): String? {
+    val uri = android.net.Uri.parse(editorRoute)
+    val segments = uri.pathSegments
+    if (segments.size != 2) return null
+    return when (segments[0]) {
+        "notes" -> notesReaderRoute(segments[1], uri.getQueryParameter("title").orEmpty())
+        "capture_note" -> notesReaderRoute(com.virlin.app.domain.notedoc.CaptureNoteBridge.owner(segments[1]), "Note")
+        else -> null
+    }
+}
+
+/**
+ * Opens a note read-only first. The editor sits beneath the reader (the reader shares its
+ * view model), so Back from the preview lands in the editor. Other routes open unchanged.
+ */
+fun NavController.openForReading(route: String) {
+    navigate(route)
+    notePreviewRouteFor(route)?.let { navigate(it) }
+}
+
 fun notesForTask(taskId: String, title: String): String =
     notesRoute(TaskPageTypeKeys.noteOwner(taskId), title)
 
@@ -156,8 +179,6 @@ fun NotesRoute(
     var imageBusy by remember { mutableStateOf(false) }
     var pendingFlashcard by remember { mutableStateOf<List<NoteDocBlock>?>(null) }
     var pendingFlashcardSource by remember { mutableStateOf<String?>(null) }
-    var flashcardSaving by remember { mutableStateOf(false) }
-    var flashcardError by remember { mutableStateOf<String?>(null) }
     var documentSelectionMode by remember { mutableStateOf(false) }
     var arrangeMode by remember { mutableStateOf(false) }
     var headingFoldRequest by remember { androidx.compose.runtime.mutableIntStateOf(0) }
@@ -175,6 +196,7 @@ fun NotesRoute(
         }
     }
     val state by vm.state.collectAsState()
+    RefreshNoteOnResume(vm)
     // Launch only after the add-block dialog has left composition. Launching from its click
     // callback can race the dialog window being dismissed on Android devices.
     LaunchedEffect(pendingImagePicker, state.dialog) {
@@ -301,7 +323,7 @@ fun NotesRoute(
                 if (selected == null) vm.openDialog(NoteDialog.Message(
                     if (documentSelectionMode) "Select blocks first." else "Select note text first."))
                 else {
-                    pendingFlashcard = selected; flashcardError = null
+                    pendingFlashcard = selected
                     pendingFlashcardSource = if (documentSelectionMode)
                         state.blocks.firstOrNull { it.id in selectedBlockIds }?.id
                     else state.focusedBlockId
@@ -808,30 +830,9 @@ fun NotesRoute(
         }
     }
     pendingFlashcard?.let { content ->
-        FlashcardCreateDialog(content, flashcardSaving, flashcardError,
-            onDismiss = { pendingFlashcard = null; flashcardError = null },
-            onSave = { front, back, difficulty, days, frontCardStyle ->
-                if (!flashcardSaving) scope.launch {
-                    flashcardSaving = true
-                    runCatching {
-                        val question = flashcardSummaryBlock(front)
-                        val prompt = question.text.trim().take(300)
-                        com.virlin.app.data.flashcard.FlashcardStore.add(context, ownerKey,
-                            state.title.ifBlank { title }, flashcardSummaryBlock(back), prompt,
-                            difficulty, days,
-                            frontContent = question.takeIf { it.text.trim() == prompt },
-                            frontBlocks = front, backBlocks = back,
-                            sourceBlockId = pendingFlashcardSource?.takeIf { it.length <= 256 },
-                            frontCardStyle = frontCardStyle)
-                    }
-                        .onSuccess {
-                            pendingFlashcard = null; flashcardError = null
-                            android.widget.Toast.makeText(context, "Flashcard saved", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                        .onFailure { flashcardError = "Could not save flashcard: ${it.message}" }
-                    flashcardSaving = false
-                }
-            })
+        NoteFlashcardSaveDialog(ownerKey, state.title.ifBlank { title }, content, pendingFlashcardSource, scope) {
+            pendingFlashcard = null
+        }
     }
     } }
 }
@@ -1064,6 +1065,19 @@ private fun rememberNoteProjectId(ownerKey: String): String? {
     }
 }
 
+/** Coming back to the note (for example from its flashcards) shows what was stored meanwhile. */
+@Composable
+private fun RefreshNoteOnResume(vm: NotesViewModel) {
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(owner, vm) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) vm.refreshIfStoredChanged()
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+}
+
 /** A real full-screen destination. No dimmed editor, app footer, or dialog inset can show through. */
 @Composable
 fun NotesReaderRoute(navController: NavController, ownerKey: String, title: String) {
@@ -1074,6 +1088,7 @@ fun NotesReaderRoute(navController: NavController, ownerKey: String, title: Stri
         factory = NotesViewModel.factory(ownerKey, title),
     )
     val state by vm.state.collectAsState()
+    RefreshNoteOnResume(vm)
     NoteAudioPlaybackHost()
     val context = LocalContext.current
     val view = LocalView.current
@@ -1095,23 +1110,94 @@ fun NotesReaderRoute(navController: NavController, ownerKey: String, title: Stri
     }
     val back: () -> Unit = { navController.popBackStack(); Unit }
     BackHandler(onBack = back)
+    // The editor's quick tools (flashcard, select across blocks, heading fold) for studying
+    // without a keyboard. All of it is this screen's view state; the note itself never changes.
+    val focusManager = LocalFocusManager.current
+    val scope = rememberCoroutineScope()
+    val readerSelection = remember { NoteReaderTextSelection() }
+    var selecting by remember { mutableStateOf(false) }
+    var selectedBlockIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var foldStep by remember { mutableStateOf(-1) }
+    var readerFold by remember { mutableStateOf<NoteReaderFold?>(null) }
+    var pendingFlashcard by remember { mutableStateOf<List<NoteDocBlock>?>(null) }
+    var pendingFlashcardSource by remember { mutableStateOf<String?>(null) }
+    val headingLevels = state.blocks.mapNotNull { block -> block.type.headingLevel.takeIf { it > 0 } }
+        .distinct().sortedDescending()
+    val textFlashcard: () -> Pair<NoteDocBlock, NoteDocBlock>? = {
+        val range = readerSelection.range
+        state.blocks.firstOrNull { it.id == readerSelection.blockId }?.takeIf { !range.collapsed }?.let { block ->
+            com.virlin.app.domain.notedoc.flashcardSelection(block, range.min, range.max)?.let { block to it }
+        }
+    }
+    val canFlashcard = if (selecting) state.blocks.any { it.id in selectedBlockIds } else textFlashcard() != null
+    val readerTools = NoteToolState(
+        active = (if (selecting) setOf(NoteTool.SELECT_DOCUMENT) else emptySet()) +
+            if (foldStep >= 0) setOf(NoteTool.HEADING_FOLD) else emptySet(),
+        enabled = setOf(NoteTool.SELECT_DOCUMENT, NoteTool.HEADING_FOLD) +
+            if (canFlashcard) setOf(NoteTool.FLASHCARD) else emptySet(),
+    )
+    val foldLabel = when {
+        foldStep < 0 -> "Show heading controls"
+        foldStep < headingLevels.size -> "Fold level ${headingLevels[foldStep]} headings"
+        else -> "Expand all headings"
+    }
+    val readerTool: (NoteTool) -> Unit = { tool ->
+        when (tool) {
+            NoteTool.SELECT_DOCUMENT -> {
+                selecting = !selecting
+                selectedBlockIds = emptySet()
+                readerSelection.clear()
+                focusManager.clearFocus()
+            }
+            NoteTool.HEADING_FOLD -> when {
+                foldStep < 0 -> foldStep = 0
+                foldStep < headingLevels.size -> {
+                    readerFold = NoteReaderFold(headingLevels[foldStep], (readerFold?.seq ?: 0) + 1)
+                    foldStep++
+                }
+                else -> {
+                    readerFold = NoteReaderFold(null, (readerFold?.seq ?: 0) + 1)
+                    foldStep = -1
+                }
+            }
+            NoteTool.FLASHCARD -> {
+                val picked = if (selecting) {
+                    flashcardBlocks(state.blocks.filter { it.id in selectedBlockIds }).takeIf { it.isNotEmpty() }
+                        ?.let { it to state.blocks.firstOrNull { b -> b.id in selectedBlockIds }?.id }
+                } else textFlashcard()?.let { (block, content) -> listOf(content) to block.id }
+                if (picked == null) android.widget.Toast.makeText(context,
+                    if (selecting) "Select blocks first." else "Select note text first.",
+                    android.widget.Toast.LENGTH_SHORT).show()
+                else { pendingFlashcard = picked.first; pendingFlashcardSource = picked.second }
+            }
+            else -> Unit
+        }
+    }
     // The editor's own renderer, colours and fonts, read only: what the note really looks like.
-    CompositionLocalProvider(LocalNotesPalette provides rememberProjectPalette(rememberNoteProjectId(ownerKey))) {
+    CompositionLocalProvider(LocalNotesPalette provides rememberProjectPalette(rememberNoteProjectId(ownerKey)),
+        LocalNoteReaderSelection provides readerSelection) {
+        val headerScroll = remember(context) {
+            NoteReaderHeaderScroll(reducedMotion = android.provider.Settings.Global.getFloat(
+                context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f)
+        }
         Surface(modifier = Modifier.fillMaxSize(), color = NotesPaper) {
             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout)
-                .testTag("notes_preview")) {
-                Row(
-                    Modifier.fillMaxWidth().height(56.dp).background(Color.White)
-                        .padding(start = 8.dp, end = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("← Edit", color = Green, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { back() }
-                            .padding(horizontal = 12.dp, vertical = 10.dp).testTag("notes_preview_close"))
-                    Spacer(Modifier.weight(1f))
-                    Text("Reading view", color = Muted, fontSize = 13.sp)
+                .nestedScroll(headerScroll).testTag("notes_preview")) {
+                Column(Modifier.fillMaxWidth().noteReaderHeader(headerScroll).testTag("notes_preview_header")) {
+                    Row(
+                        Modifier.fillMaxWidth().height(56.dp).background(Color.White)
+                            .padding(start = 8.dp, end = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("← Edit", color = Green, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { back() }
+                                .padding(horizontal = 12.dp, vertical = 10.dp).testTag("notes_preview_close"))
+                        Spacer(Modifier.weight(1f))
+                        Text("Reading view", color = Muted, fontSize = 13.sp)
+                    }
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
                 }
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
+                Box(Modifier.fillMaxSize().clipToBounds()) {
                 Box(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
                     when {
                         state.loading -> Unit
@@ -1120,8 +1206,13 @@ fun NotesReaderRoute(navController: NavController, ownerKey: String, title: Stri
                             modifier = Modifier.padding(top = NoteDocumentTopSpace))
                         else -> NoteBlockEditor(
                             state = state, vm = vm,
+                            headingFoldMode = foldStep >= 0,
+                            documentSelectionMode = selecting,
+                            selectedBlockIds = selectedBlockIds,
+                            onSelectedBlockIdsChange = { selectedBlockIds = it },
                             modifier = Modifier.fillMaxSize(),
                             readOnly = true,
+                            readerFold = readerFold,
                             readerHeader = {
                                 Column(Modifier.fillMaxWidth().padding(bottom = 22.dp)) {
                                     Text(state.title.ifBlank { "Untitled note" }, color = Ink,
@@ -1138,6 +1229,23 @@ fun NotesReaderRoute(navController: NavController, ownerKey: String, title: Stri
                         )
                     }
                 }
+                // No triple tap here: the reading view adds nothing to the note.
+                if (!state.loading && !state.damaged) NoteAddFan(
+                    tools = readerTools,
+                    headingFoldLabel = foldLabel,
+                    onTool = readerTool,
+                    onAddBlock = null,
+                    modifier = Modifier.matchParentSize(),
+                    // Higher than the editor's, where the thumb rests while reading.
+                    bottomLift = 44.dp,
+                    keepOpenAfter = { tool -> tool == NoteTool.HEADING_FOLD && foldStep < headingLevels.size },
+                )
+                }
+            }
+        }
+        pendingFlashcard?.let { content ->
+            NoteFlashcardSaveDialog(ownerKey, state.title.ifBlank { title }, content, pendingFlashcardSource, scope) {
+                pendingFlashcard = null
             }
         }
     }
@@ -1158,6 +1266,20 @@ internal fun NoteDocumentPreview(
         NoteAudioPlaybackHost()
         NoteReadOnlyBlocks(blocks, modifier)
     }
+}
+
+/**
+ * [NoteDocumentPreview] laid out lazily inside the caller's list: one item per block. The
+ * caller keeps a [NoteAudioPlaybackHost] composed while any such preview is open.
+ */
+internal fun androidx.compose.foundation.lazy.LazyListScope.noteDocumentPreviewItems(
+    keyPrefix: String,
+    blocks: List<NoteDocBlock>,
+    palette: com.virlin.app.ui.hierarchy.ProjectPalette?,
+    preview: NoteReadOnlyPreviewState,
+    wrap: @Composable (content: @Composable () -> Unit) -> Unit,
+) = noteReadOnlyBlockItems(keyPrefix, blocks, preview) { content ->
+    wrap { CompositionLocalProvider(LocalNotesPalette provides palette) { content() } }
 }
 
 @Composable

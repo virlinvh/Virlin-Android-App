@@ -60,7 +60,7 @@ object ProjectArchive {
             "prompts" to JSONArray(s.prompts.map { n -> json("id" to n.id, "captureItemId" to n.captureItemId,
                 "title" to n.title, "description" to n.description, "tags" to JSONArray(n.tags),
                 "payload" to JSONObject(NoteDocumentCodec.encodePayload(n.blocks)), "sourceText" to n.sourceText,
-                "mode" to n.mode, "language" to n.language, "responseText" to n.responseText,
+                "mode" to n.mode, "language" to n.language, "responseText" to n.responseText, "codeText" to n.codeText,
                 "createdAt" to n.createdAt, "updatedAt" to n.updatedAt) }),
             "attachments" to JSONArray(s.attachments.map { a -> json("id" to a.id, "captureItemId" to a.captureItemId,
                 "displayName" to a.displayName, "mimeType" to a.mimeType, "sizeBytes" to a.sizeBytes,
@@ -131,7 +131,7 @@ object ProjectArchive {
             appendLine()
         }
         s.richNotes.forEach { n -> appendLine("### ${label(n.title ?: "Notes")}"); n.blocks.forEach { content(it.text); it.table?.cells?.forEach(::content) } }
-        s.previews.forEach { p -> appendLine("### Map preview · ${label(p.ownerId)}"); content(p.description.text); appendLine("${p.images.size} images (originals included in ZIP archive)") }
-        appendLine(); appendLine("Text summary. PDF/Markdown do not embed media originals or restore the project. Use the ZIP archive to keep managed media and structured data.")
+        s.previews.forEach { p -> appendLine("### Map preview · ${label(p.ownerId)}"); content(p.description.text); appendLine("${p.images.size} images (originals included in the .virlin file)") }
+        appendLine(); appendLine("Readable summary only. The project itself, with every original media file, is the .virlin file this summary came with.")
     }
 }

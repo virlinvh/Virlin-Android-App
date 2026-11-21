@@ -207,6 +207,30 @@ class NotesViewModel(
         )
     }
 
+    /**
+     * Picks up a newer stored version (for example a flashcard edit carried into this note) when
+     * this editor holds nothing unsaved. Any unsaved change, or a save in flight, leaves the editor
+     * exactly as it is; the usual stale-save protection then still applies.
+     */
+    fun refreshIfStoredChanged() {
+        viewModelScope.launch {
+            saveMutex.withLock {
+                val s = _state.value
+                if (s.loading || s.damaged || s.save == NoteSaveState.EDITED || s.save == NoteSaveState.SAVING ||
+                    s.save == NoteSaveState.FAILED || baseBlocks.isEmpty() || s.blocks != baseBlocks) return@withLock
+                val stored = runCatching { actions.loadNoteDoc(ownerKey) }.getOrNull() ?: return@withLock
+                if (stored.loadError != null || stored.revision == baseRevision) return@withLock
+                if (_state.value.blocks != s.blocks || _state.value.title != s.title) return@withLock
+                rememberBase(stored)
+                undoStack.clear()
+                redoStack.clear()
+                lastTypedBlock = null
+                ui = _state.value.copy(title = stored.title ?: s.title,
+                    blocks = stored.blocks.ifEmpty { listOf(newBlock()) }, save = NoteSaveState.NO_CHANGES)
+            }
+        }
+    }
+
     private fun rememberBase(doc: com.virlin.app.domain.notedoc.VirlinNoteDoc?) {
         baseRevision = doc?.revision ?: 0
         baseBlocks = doc?.blocks.orEmpty()
@@ -2568,7 +2592,7 @@ private fun ActionResult<*>.isStale(): Boolean = this is ActionResult.Rejected &
     com.virlin.app.domain.action.NoteDocMessages.STALE
 
 /** Why a save was refused, in words the user can act on. */
-private fun ActionResult<*>.refusalText(): String = when (this) {
+internal fun ActionResult<*>.refusalText(): String = when (this) {
     is ActionResult.Success -> ""
     is ActionResult.Rejected -> when (val r = reason) {
         is com.virlin.app.domain.action.DomainError.PlacementRejected ->

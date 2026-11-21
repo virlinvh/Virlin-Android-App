@@ -43,6 +43,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.navigation.NavController
+import com.virlin.app.ui.navigation.navigateRoot
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import kotlinx.coroutines.launch
 import com.virlin.app.debug.VirlinStartup
 import com.virlin.app.domain.StartupReadiness
 import com.virlin.app.domain.VirlinGraph
@@ -197,15 +202,31 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
 
     val nowTick = rememberSecondTicker()
     var control by remember { mutableStateOf<Pair<String, NeedsYouControlTab>?>(null) }
-    Box(Modifier.fillMaxSize()) {
+    // The Focus card must fit the first screen: it gets the height left under the header and
+    // summary (measured, read only during layout) and its timer gives way to make it fit.
+    val viewportPx = remember { mutableIntStateOf(0) }
+    val headerBlockPx = remember { mutableIntStateOf(0) }
+    val cardGapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 10.dp.roundToPx() }
+    val focusCardBudget: () -> Int? = remember(cardGapPx) {
+        { if (viewportPx.intValue > 0 && headerBlockPx.intValue > 0) viewportPx.intValue - headerBlockPx.intValue - cardGapPx else null }
+    }
+    // CHOOSE A TASK scrolls Now itself to "When you're free"; its top is kept from layout.
+    val nowScroll = rememberScrollState()
+    val whenFreeTopPx = remember { mutableIntStateOf(-1) }
+    val nowScope = rememberCoroutineScope()
+    val whenFreeInsetPx = with(androidx.compose.ui.platform.LocalDensity.current) { 12.dp.roundToPx() }
+    Box(Modifier.fillMaxSize().onSizeChanged { viewportPx.intValue = it.height }, contentAlignment = Alignment.TopCenter) {
+    NowApprovedBackground(Modifier.matchParentSize())
     Column(
         modifier = Modifier
+            .widthIn(max = 600.dp)
             .fillMaxSize()
-            .background(Pearl)
+            .background(Color.Transparent)
             .padding(horizontal = 16.dp)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(nowScroll)
     ) {
-        Spacer(modifier = Modifier.height(10.dp))
+        Column(Modifier.fillMaxWidth().onSizeChanged { headerBlockPx.intValue = it.height }) {
+        Spacer(modifier = Modifier.height(6.dp))
 
         // 1. GREETING + TODAY'S SUMMARY (the old Virlin/progress-pill header was removed)
         // Presentation only — see NowDaySummaryValues.
@@ -217,17 +238,26 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                 modifier = Modifier.padding(top = 8.dp).testTag("master_pause_message"))
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(14.dp))
+        }
 
         // 2. FOCUS HERO CARD
         if (focusStream != null) {
             FocusHeroCard(
                 focusStream, navController,
                 hierarchy = currentFocus?.takeIf { it.streamId == focusStream.id },
-                onLeave = nowViewModel::openLeave, onHandOff = nowViewModel::openHandOff, onComplete = nowViewModel::complete
+                onLeave = nowViewModel::openLeave, onHandOff = nowViewModel::openHandOff, onComplete = nowViewModel::complete,
+                maxHeightPx = focusCardBudget, onResume = nowViewModel::resumeFocus
             )
         } else {
-            Text("Your attention is free.", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = CharcoalMuted)
+            val hasReady = readyStreams.isNotEmpty()
+            NowEmptyFocusCard(maxHeightPx = focusCardBudget,
+                chooseTaskLabel = if (hasReady) "Show tasks ready to focus" else "Choose a task in Projects") {
+                val top = whenFreeTopPx.intValue
+                // Nothing ready on Now: Projects is still the place to pick from.
+                if (hasReady && top >= 0) nowScope.launch { nowScroll.animateScrollTo((top - whenFreeInsetPx).coerceAtLeast(0)) }
+                else navController.navigateRoot("streams")
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -288,13 +318,21 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
                 // Unchanged behaviour: the action opens the unified sheet on its tab.
                 onCheck = { id -> control = id to NeedsYouControlTab.CHECK },
                 onRank = { id -> control = id to NeedsYouControlTab.PRIORITY },
-                onFilterClick = { sortOpen = true },
-                // The app's real sort control, with its own dropdown anchor.
+                onFilterClick = { sortOpen = !sortOpen },
+                // The app's real sort control; its options open as a strip under the header.
                 filterContent = {
                     NeedsYouSortControl(
                         mode = needsYouSort, expanded = sortOpen,
                         onExpandedChange = { sortOpen = it },
-                        onSelect = nowViewModel::setNeedsYouSort
+                        tint = Vivid.Purple
+                    )
+                },
+                belowHeader = {
+                    NeedsYouSortStrip(
+                        visible = sortOpen, mode = needsYouSort,
+                        onSelect = nowViewModel::setNeedsYouSort,
+                        onClose = { sortOpen = false },
+                        accent = Vivid.Purple
                     )
                 }
             )
@@ -340,7 +378,9 @@ fun NowScreen(navController: NavController, nowViewModel: NowViewModel = viewMod
         // 5. WHEN YOU'RE FREE
         if (readyStreams.isNotEmpty()) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                modifier = Modifier.fillMaxWidth()
+                    .onGloballyPositioned { whenFreeTopPx.intValue = it.positionInParent().y.toInt() }
+                    .padding(horizontal = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -447,7 +487,9 @@ fun FocusHeroCard(
     hierarchy: CurrentFocusProjection? = null,
     onLeave: (String) -> Unit = {},
     onHandOff: (String) -> Unit = {},
-    onComplete: (String) -> Unit = {}
+    onComplete: (String) -> Unit = {},
+    maxHeightPx: (() -> Int?)? = null,
+    onResume: (String) -> Unit = {}
 ) {
     // The card is `VirlinCurrentFocusCard`; this function stays the one place that maps domain
     // state onto it. LEAVE = human attention exit; the right-hand action is HAND OFF only when
@@ -461,9 +503,33 @@ fun FocusHeroCard(
     )
     // A task-less focus session still has real elapsed attention time. Do not
     // replace its duration with the generic FOCUS ACTIVE fallback.
+    // Both include every earlier Focus period, so the saved total shows even when the flap
+    // starts a new period at 00:00.
     val focusDurationLabel = if (hierarchy?.activeTaskId != null)
         "Task total · ${com.virlin.app.domain.model.DailyFocus.label(totalInvestedSec)}"
-    else "${com.virlin.app.domain.model.DailyFocus.label(stream.focusInvestedSec.toLong())} focused"
+    else "${com.virlin.app.domain.model.DailyFocus.label(totalInvestedSec)} focused"
+
+    // Completing a task asks first (a whole WorkStream already has its own dialog), then the
+    // button turns green before the existing completion runs.
+    val activeTaskId = hierarchy?.activeTaskId
+    val confirmsTask = !external && activeTaskId != null
+    var askComplete by remember(stream.id, activeTaskId) { mutableStateOf(false) }
+    var completing by remember(stream.id, activeTaskId) { mutableStateOf(false) }
+    val completeNow by rememberUpdatedState { onComplete(stream.id) }
+    LaunchedEffect(completing) {
+        if (!completing) return@LaunchedEffect
+        kotlinx.coroutines.delay(if (android.animation.ValueAnimator.areAnimatorsEnabled()) 850 else 150)
+        completeNow()
+        kotlinx.coroutines.delay(4_000)
+        completing = false
+    }
+    if (askComplete) {
+        CompleteTaskDialog(
+            title = hierarchy?.activeTaskTitle ?: stream.title,
+            onConfirm = { askComplete = false; completing = true },
+            onDismiss = { askComplete = false },
+        )
+    }
 
     VirlinCurrentFocusCard(
         projectName = hierarchy?.projectTitle.orEmpty(),
@@ -476,8 +542,18 @@ fun FocusHeroCard(
         nextAction = (hierarchy?.nextHumanAction ?: stream.nextAction).orEmpty(),
           nextEstimate = "",
         onLeave = { onLeave(stream.id) },
-        onComplete = { if (external) onHandOff(stream.id) else onComplete(stream.id) },
+        isFocusActive = !stream.focusPaused,
+        onResume = { onResume(stream.id) },
+        onComplete = {
+            when {
+                external -> onHandOff(stream.id)
+                confirmsTask -> askComplete = true
+                else -> onComplete(stream.id)
+            }
+        },
         primaryLabel = if (external) "HAND OFF" else "COMPLETE",
+        maxHeightPx = maxHeightPx,
+        completing = completing,
           onContextClick = {
               val owner = hierarchy?.ownerWorkStreamId ?: stream.id
               val path = hierarchy?.taskIdPath.orEmpty()
@@ -486,28 +562,28 @@ fun FocusHeroCard(
         timerContent = {
             // THE existing animated split-flap, unchanged: same FocusSession, same per-digit
             // animation, and the same tap into the fullscreen landscape Focus Clock.
-            val timerInteractionSource = remember { MutableInteractionSource() }
-            val timerPressed by timerInteractionSource.collectIsPressedAsState()
-            val timerPressScale by animateFloatAsState(
-                targetValue = if (timerPressed) 0.98f else 1f,
-                animationSpec = tween(120),
-                label = "focusTimerPress"
-            )
-            Box(
-                modifier = Modifier
-                    .scale(timerPressScale)
-                    .clip(RoundedCornerShape(22.dp))
-                    .clickable(
-                        interactionSource = timerInteractionSource,
-                        indication = null,
-                        onClickLabel = "Open fullscreen focus clock"
-                    ) {
-                        navController.navigate(FocusClockRoute) { launchSingleTop = true }
-                    }
-            ) {
+                val timerInteractionSource = remember { MutableInteractionSource() }
+                val timerPressed by timerInteractionSource.collectIsPressedAsState()
+                val timerPressScale by animateFloatAsState(
+                    targetValue = if (timerPressed) 0.98f else 1f,
+                    animationSpec = tween(120),
+                    label = "focusTimerPress"
+                )
+                Box(
+                    modifier = Modifier
+                        .scale(timerPressScale)
+                        .clip(RoundedCornerShape(22.dp))
+                        .clickable(
+                            interactionSource = timerInteractionSource,
+                            indication = null,
+                            onClickLabel = "Open fullscreen focus clock"
+                        ) {
+                            navController.navigate(FocusClockRoute) { launchSingleTop = true }
+                        }
+                ) {
                 // Key by WorkStream id so flap state never leaks across focus identity.
                 key(stream.id) {
-                    SplitFlapTimer(stream.focusInvestedSec)
+                    NowApprovedTimer(stream.focusInvestedSec)
                 }
             }
         }
@@ -669,6 +745,12 @@ fun ReadyRecommendationCard(stream: WorkStream, onFocus: (String) -> Unit = {}) 
 
 const val FocusContextTag = "focus_context"
 const val FocusLeaveTag = "focus_leave"
+const val FocusResumeTag = "focus_resume"
+const val FocusPillRowTag = "focus_pill_row"
+const val FocusLivePillTag = "focus_live_pill"
+const val FocusMetricPillTag = "focus_metric_pill"
+const val CompleteTaskConfirmTag = "complete_task_confirm"
+const val CompleteTaskCancelTag = "complete_task_cancel"
 const val FocusHandOffTag = "focus_hand_off"
 const val FocusProjectTag = "focus_project"
 const val FocusTaskTag = "focus_task"
@@ -698,6 +780,32 @@ fun CompleteWorkStreamDialog(title: String, onConfirm: () -> Unit, onDismiss: ()
                 Text("COMPLETE WORKSTREAM", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, letterSpacing = 0.4.sp,
                     modifier = Modifier.background(Charcoal, RoundedCornerShape(50)).testTag(CompleteWorkStreamConfirmTag)
                         .clickable(onClick = onConfirm).padding(horizontal = 16.dp, vertical = 12.dp))
+            }
+        }
+    }
+}
+
+/** Warning before the focused task is marked done from the Now card. */
+@Composable
+fun CompleteTaskDialog(title: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    com.virlin.app.ui.components.SafeDialog(onDismissRequest = onDismiss, scrollContent = true) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Pearl, RoundedCornerShape(24.dp))
+                .padding(24.dp)
+        ) {
+            Text("Complete $title?", fontSize = 18.sp, fontWeight = FontWeight.Black, color = Charcoal)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("This marks the task as done.", fontSize = 13.sp, color = Charcoal.copy(alpha = 0.7f))
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                Text("Cancel", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Charcoal.copy(alpha = 0.7f),
+                    modifier = Modifier.testTag(CompleteTaskCancelTag).clickable(onClick = onDismiss).padding(horizontal = 12.dp, vertical = 12.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("COMPLETE", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, letterSpacing = 0.4.sp,
+                    modifier = Modifier.background(Color(0xFF0E7F48), RoundedCornerShape(50)).testTag(CompleteTaskConfirmTag)
+                        .clickable(onClick = onConfirm).padding(horizontal = 18.dp, vertical = 12.dp))
             }
         }
     }

@@ -10,6 +10,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Surface
@@ -18,8 +20,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
@@ -56,6 +65,7 @@ private val Outline = Color(0xFFDCE7DE)
 private val FrontPaper = Color(0xFFFFF3E0)
 private val BackPaper = Color(0xFFF3EAFE)
 private val ErrorInk = Color(0xFFAA4940)
+private val PickedWord = Color(0xFFFFDDA8)
 
 /** Plain-summary limit the card file has always enforced for one face. */
 private const val MAX_SIDE_CHARS = 20_000
@@ -85,13 +95,36 @@ internal fun FlashcardCreateDialog(
     source: List<NoteDocBlock>, saving: Boolean, error: String?, onDismiss: () -> Unit,
     /** Edits an existing card: its faces open ready to change and its schedule is left alone. */
     edit: FlashcardEditStart? = null,
+    /** Offers "update the note too"; null when the card has no note to carry edits into. */
+    noteUpdate: FlashcardNoteUpdate? = null,
     onSave: (front: List<NoteDocBlock>, back: List<NoteDocBlock>, difficulty: String, intervalDays: Int,
              frontCardStyle: Boolean) -> Unit,
 ) {
     val editing = edit != null
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    // Pictures copied into the note image store while this editor is open; any the card does not
+    // end up keeping are removed again when the editor closes.
+    val imported = remember { mutableStateListOf<String>() }
+    var keptImages by remember { mutableStateOf(emptySet<String>()) }
+    var imageError by remember { mutableStateOf<String?>(null) }
+    var imageBusy by remember { mutableStateOf(false) }
+    // Which face the picker result goes to, and the part it goes after (null: the end).
+    var imageTarget by remember { mutableStateOf<Pair<Boolean, String?>?>(null) }
+    DisposableEffect(Unit) {
+        onDispose {
+            val orphans = imported.filter { it !in keptImages }
+            if (orphans.isNotEmpty()) kotlin.concurrent.thread {
+                orphans.forEach { runCatching { com.virlin.app.data.noteimage.NoteImageStore.resolve(context, it)?.delete() } }
+            }
+        }
+    }
     val passageBlocks = remember(source) { flashcardBlocks(source) }
     val passage = remember(passageBlocks) { flashcardPassageText(passageBlocks, Accent) }
     var selection by remember(source) { mutableStateOf(TextRange.Zero) }
+    // Words tapped in the passage, in tap order; a long-press selection replaces them.
+    var picks by remember(source) { mutableStateOf(emptyList<TextRange>()) }
+    var lastTap by remember(source) { mutableStateOf<Pair<TextRange, Long>?>(null) }
     var front by remember(source, edit) { mutableStateOf(edit?.front ?: emptyList()) }
     var back by remember(source, edit) { mutableStateOf(edit?.back ?: passageBlocks) }
     var editFront by remember(source, edit) { mutableStateOf(editing) }
@@ -108,11 +141,71 @@ internal fun FlashcardCreateDialog(
         frontChars <= MAX_SIDE_CHARS && backChars <= MAX_SIDE_CHARS && days in 1..365
 
     fun send(toFront: Boolean) {
-        val picked = if (selection.collapsed) passageBlocks
-            else sliceProjectedRange(passageBlocks, selection.min, selection.max)
+        val picked = when {
+            !selection.collapsed -> sliceProjectedRange(passageBlocks, selection.min, selection.max)
+            picks.isNotEmpty() -> flashcardPickedBlocks(passageBlocks, picks)
+            else -> passageBlocks
+        }
         if (picked.isEmpty()) return
         if (toFront) { front = picked; editFront = false } else { back = picked; editBack = false }
         selection = TextRange(selection.max)
+        picks = emptyList()
+    }
+
+    fun touchWord(offset: Int) {
+        flashcardWordAt(passage.text, offset)?.let { lastTap = it to android.os.SystemClock.uptimeMillis() }
+    }
+
+    fun tapWord(offset: Int) {
+        val word = flashcardWordAt(passage.text, offset) ?: return
+        picks = togglePickedWord(passageBlocks, picks, word)
+        lastTap = word to android.os.SystemClock.uptimeMillis()
+        selection = TextRange(word.max)
+    }
+
+    fun select(next: TextRange) {
+        val tap = lastTap
+        // A quick second tap on a word is also the field's double tap, which selects that word;
+        // that is the tap toggling the word, not a long-press selection (which takes longer).
+        if (!next.collapsed && tap != null && tap.first == next &&
+            android.os.SystemClock.uptimeMillis() - tap.second < 300) {
+            selection = TextRange(next.max)
+            return
+        }
+        selection = next
+        if (!next.collapsed) picks = emptyList()
+    }
+
+    val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        val target = imageTarget
+        imageTarget = null
+        if (uri == null || target == null) return@rememberLauncherForActivityResult
+        imageBusy = true
+        scope.launch {
+            runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.virlin.app.data.noteimage.NoteImageStore.import(context, uri)
+                }
+            }.onSuccess { name ->
+                imported += name
+                imageError = null
+                val image = NoteDocBlock("card-img-$name", NoteDocBlockType.IMAGE, imagePath = name)
+                val (toFront, after) = target
+                fun place(blocks: List<NoteDocBlock>): List<NoteDocBlock> {
+                    val at = blocks.indexOfFirst { it.id == after }
+                    return if (at < 0) blocks + image else blocks.toMutableList().apply { add(at + 1, image) }
+                }
+                if (toFront) { front = place(front); editFront = true } else { back = place(back); editBack = true }
+            }.onFailure { imageError = it.message ?: "Could not add the picture" }
+            imageBusy = false
+        }
+    }
+    fun addImage(toFront: Boolean, after: String?) {
+        if (imageBusy) return
+        imageTarget = toFront to after
+        runCatching { imagePicker.launch(arrayOf("image/*")) }
+            .onFailure { imageTarget = null; imageError = "No picture picker is available on this device." }
     }
 
     SafeDialog(onDismissRequest = { if (!saving) onDismiss() }, scrollContent = false) {
@@ -132,7 +225,8 @@ internal fun FlashcardCreateDialog(
                 Column(Modifier.weight(1f, fill = false).fillMaxWidth()
                     .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(11.dp)) {
-                    if (!editing) PassageCard(passage, selection, onSelect = { selection = it },
+                    if (!editing) PassageCard(passage, selection, picks, onSelect = { select(it) },
+                        onTouchWord = { touchWord(it) }, onTapWord = { tapWord(it) }, onClearPicks = { picks = emptyList() },
                         onSend = { send(it) })
                     SideCard("FRONT", FrontPaper, front, editFront,
                         if (editing) "Empty. Tap ✎ to write the question."
@@ -140,6 +234,9 @@ internal fun FlashcardCreateDialog(
                         "flashcard_prompt", onEdit = { editFront = !editFront },
                         onClear = if (editing) null else ({ front = emptyList(); editFront = false }),
                         onChange = { front = it },
+                        onAddImage = { addImage(true, it) },
+                        // A chosen font only shows when the front keeps its own formatting.
+                        onFontPicked = { frontCardStyle = false },
                         cardStyle = frontCardStyle && frontFitsCardStyle,
                         styleToggle = {
                             CardStyleToggle(frontCardStyle, frontFitsCardStyle) { frontCardStyle = it }
@@ -149,7 +246,11 @@ internal fun FlashcardCreateDialog(
                         else "Select the answer above, then tap Back", "flashcard_answer",
                         onEdit = { editBack = !editBack },
                         onClear = if (editing) null else ({ back = emptyList(); editBack = false }),
-                        onChange = { back = it })
+                        onChange = { back = it },
+                        onAddImage = { addImage(false, it) })
+                    if (imageBusy) Text("Adding picture…", color = Secondary, fontSize = 12.sp,
+                        modifier = Modifier.testTag("flashcard_image_busy"))
+                    imageError?.let { Text(it, color = ErrorInk, fontSize = 12.sp) }
                     SectionLabel("DIFFICULTY")
                     Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         listOf("EASY" to "Easy", "NORMAL" to "Moderate", "HARD" to "Hard")
@@ -159,6 +260,7 @@ internal fun FlashcardCreateDialog(
                                 }
                             }
                     }
+                    if (noteUpdate != null) NoteUpdateSwitch(noteUpdate.on, noteUpdate.onToggle)
                     if (!editing) SectionLabel("REVIEW AGAIN")
                     if (!editing) Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         listOf(1 to "1d", 3 to "3d", 7 to "7d", 0 to "Custom")
@@ -187,7 +289,13 @@ internal fun FlashcardCreateDialog(
                     Spacer(Modifier.height(4.dp))
                 }
                 Button(onClick = {
-                    days?.let { onSave(flashcardBlocks(front), flashcardBlocks(back), difficulty, it, frontCardStyle) }
+                    days?.let {
+                        val savedFront = flashcardBlocks(front)
+                        val savedBack = flashcardBlocks(back)
+                        keptImages = (savedFront + savedBack).mapNotNullTo(HashSet()) { block -> block.imagePath }
+                        noteUpdate?.onEditedFaces(front, back)
+                        onSave(savedFront, savedBack, difficulty, it, frontCardStyle)
+                    }
                 },
                     enabled = valid && !saving,
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
@@ -203,30 +311,64 @@ internal fun FlashcardCreateDialog(
 }
 
 @Composable
-private fun PassageCard(passage: AnnotatedString, selection: TextRange,
-    onSelect: (TextRange) -> Unit, onSend: (toFront: Boolean) -> Unit) {
+private fun PassageCard(passage: AnnotatedString, selection: TextRange, picks: List<TextRange>,
+    onSelect: (TextRange) -> Unit, onTouchWord: (Int) -> Unit, onTapWord: (Int) -> Unit,
+    onClearPicks: () -> Unit, onSend: (toFront: Boolean) -> Unit) {
+    val picking = selection.collapsed && picks.isNotEmpty()
     Column(Modifier.fillMaxWidth().border(1.dp, Outline, RoundedCornerShape(18.dp))
         .background(Color(0xFFF6FAF5), RoundedCornerShape(18.dp)).padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionLabel("SELECTED PASSAGE", Modifier.weight(1f), Accent)
-            Text(if (selection.collapsed) "Whole passage"
-                else "${selection.length} selected", color = Secondary,
+            Text(when {
+                !selection.collapsed -> "${selection.length} selected"
+                picking -> if (picks.size == 1) "1 word picked" else "${picks.size} words picked"
+                else -> "Whole passage"
+            }, color = Secondary,
                 fontSize = 11.sp, modifier = Modifier.testTag("flashcard_selection_status"))
         }
         Spacer(Modifier.height(8.dp))
+        val shown = remember(passage, picks) {
+            if (picks.isEmpty()) passage else buildAnnotatedString {
+                append(passage)
+                picks.forEach { addStyle(SpanStyle(background = PickedWord), it.min, it.max) }
+            }
+        }
+        var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+        val touch by rememberUpdatedState(onTouchWord)
+        val tap by rememberUpdatedState(onTapWord)
         // The system Copy / Select all bar would sit over the passage; Front and Back below replace it.
         CompositionLocalProvider(LocalTextToolbar provides NoTextToolbar) {
             Box(Modifier.fillMaxWidth().heightIn(min = 72.dp, max = 200.dp)
                 .background(Color.White, RoundedCornerShape(12.dp))
                 .verticalScroll(rememberScrollState()).padding(12.dp)) {
                 BasicTextField(
-                    value = TextFieldValue(passage, selection),
+                    value = TextFieldValue(shown, selection),
                     onValueChange = { onSelect(it.selection) },
                     readOnly = true,
                     textStyle = TextStyle(color = Ink, fontSize = 15.sp, lineHeight = 22.sp),
-                    modifier = Modifier.fillMaxWidth().testTag("flashcard_source"),
+                    onTextLayout = { layout = it },
+                    // Watches taps without taking them, so long-press selection works as before.
+                    modifier = Modifier.fillMaxWidth().testTag("flashcard_source").pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            layout?.let { touch(it.getOffsetForPosition(down.position)) }
+                            val up = waitForUpOrCancellation(PointerEventPass.Initial) ?: return@awaitEachGesture
+                            val quick = up.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis
+                            val still = (up.position - down.position).getDistance() < viewConfiguration.touchSlop
+                            if (quick && still) layout?.let { tap(it.getOffsetForPosition(up.position)) }
+                        }
+                    },
                 )
             }
+        }
+        if (picking) Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(picks.joinToString(" ") { passage.text.substring(it.min, it.max) },
+                color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).testTag("flashcard_picked_words"))
+            Text("Clear", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable(onClick = onClearPicks).padding(horizontal = 10.dp, vertical = 8.dp)
+                    .testTag("flashcard_picked_clear"))
         }
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -237,8 +379,11 @@ private fun PassageCard(passage: AnnotatedString, selection: TextRange,
                 onSend(false)
             }
         }
-        Text(if (selection.collapsed) "Select words to send only those, or send the whole passage."
-            else "Send the selected words to the Front or the Back.",
+        Text(when {
+            !selection.collapsed -> "Send the selected words to the Front or the Back."
+            picking -> "Send the picked words, in this order, to the Front or the Back."
+            else -> "Tap words to pick them in order, or select words, or send the whole passage."
+        },
             color = Secondary, fontSize = 11.sp, modifier = Modifier.padding(top = 7.dp))
     }
 }
@@ -246,7 +391,8 @@ private fun PassageCard(passage: AnnotatedString, selection: TextRange,
 @Composable
 private fun SideCard(label: String, paper: Color, blocks: List<NoteDocBlock>, editing: Boolean,
     hint: String, tag: String, onEdit: () -> Unit, onClear: (() -> Unit)?,
-    onChange: (List<NoteDocBlock>) -> Unit, cardStyle: Boolean = false,
+    onChange: (List<NoteDocBlock>) -> Unit, onAddImage: (after: String?) -> Unit = {},
+    onFontPicked: () -> Unit = {}, cardStyle: Boolean = false,
     styleToggle: (@Composable () -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().background(paper, RoundedCornerShape(18.dp))
         .padding(start = 15.dp, end = 6.dp, top = 6.dp, bottom = 12.dp)) {
@@ -260,7 +406,7 @@ private fun SideCard(label: String, paper: Color, blocks: List<NoteDocBlock>, ed
         }
         Box(Modifier.padding(end = 9.dp)) {
             when {
-                editing -> SideEditor(blocks, tag, onChange)
+                editing -> SideEditor(blocks, tag, onChange, onAddImage, onFontPicked)
                 blocks.isEmpty() -> Text(hint, color = Secondary, fontSize = 14.sp,
                     lineHeight = 20.sp, modifier = Modifier.fillMaxWidth().testTag(tag))
                 else -> Box(Modifier.fillMaxWidth().heightIn(max = 340.dp)
@@ -275,7 +421,8 @@ private fun SideCard(label: String, paper: Color, blocks: List<NoteDocBlock>, ed
 
 /** Edits a face block by block, so headings, code and media keep their type while text changes. */
 @Composable
-private fun SideEditor(blocks: List<NoteDocBlock>, tag: String, onChange: (List<NoteDocBlock>) -> Unit) {
+private fun SideEditor(blocks: List<NoteDocBlock>, tag: String, onChange: (List<NoteDocBlock>) -> Unit,
+    onAddImage: (after: String?) -> Unit = {}, onFontPicked: () -> Unit = {}) {
     val selections = remember { mutableStateMapOf<String, TextRange>() }
     var focusedId by remember { mutableStateOf<String?>(null) }
     var added by remember { mutableIntStateOf(0) }
@@ -292,7 +439,24 @@ private fun SideEditor(blocks: List<NoteDocBlock>, tag: String, onChange: (List<
         onChange(blocks.map { if (it.id == block.id) next else it })
     }
 
+    // Selected words take the font; with nothing selected the whole face does.
+    fun pickFont(font: String?) {
+        val block = focused
+        val next = if (block != null && !focusedSelection.collapsed)
+            blocks.map { if (it.id == block.id) withFlashcardFont(it, font, focusedSelection.min, focusedSelection.max) else it }
+        else blocks.map { withFlashcardFont(it, font) }
+        onChange(next)
+        onFontPicked()
+    }
+
+    fun move(index: Int, by: Int) {
+        val to = index + by
+        if (to !in blocks.indices) return
+        onChange(blocks.toMutableList().apply { add(to, removeAt(index)) })
+    }
+
     Column(Modifier.fillMaxWidth().testTag(tag), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        FlashcardFontStrip(remember(blocks) { flashcardFaceFont(blocks) }, tag, ::pickFont)
         blocks.forEachIndexed { index, block ->
             Row(verticalAlignment = Alignment.Top) {
                 Box(Modifier.weight(1f)) {
@@ -323,12 +487,19 @@ private fun SideEditor(blocks: List<NoteDocBlock>, tag: String, onChange: (List<
                         }
                     } else NoteDocumentPreview(listOf(block), LocalNotesPalette.current)
                 }
-                IconText("×", Secondary, 18.sp, "Remove this part", "${tag}_block_remove_$index") {
+                if (block.type == NoteDocBlockType.IMAGE) Column {
+                    // Where the picture sits on the card is also where it lands in the note.
+                    if (index > 0) IconText("↑", Accent, 18.sp, "Move picture up", "${tag}_block_up_$index") { move(index, -1) }
+                    IconText("×", Secondary, 18.sp, "Remove this part", "${tag}_block_remove_$index") {
+                        onChange(blocks.filterNot { it.id == block.id })
+                    }
+                    if (index < blocks.lastIndex) IconText("↓", Accent, 18.sp, "Move picture down", "${tag}_block_down_$index") { move(index, 1) }
+                } else IconText("×", Secondary, 18.sp, "Remove this part", "${tag}_block_remove_$index") {
                     onChange(blocks.filterNot { it.id == block.id })
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             val canFormat = !focusedSelection.collapsed && focused != null
             ActionChip("B", canFormat, Modifier.testTag("${tag}_bold")) { format(NoteDocMark.BOLD) }
             ActionChip("I", canFormat, Modifier.testTag("${tag}_italic")) { format(NoteDocMark.ITALIC) }
@@ -337,6 +508,7 @@ private fun SideEditor(blocks: List<NoteDocBlock>, tag: String, onChange: (List<
                 onChange(blocks + NoteDocBlock("card-line-$added-${blocks.size}",
                     NoteDocBlockType.PARAGRAPH))
             }
+            ActionChip("+ Image", true, Modifier.testTag("${tag}_add_image")) { onAddImage(focused?.id) }
         }
     }
 }
@@ -414,6 +586,26 @@ private fun CardStyleToggle(on: Boolean, enabled: Boolean, onChange: (Boolean) -
                 fontWeight = if (shown) FontWeight.Medium else FontWeight.Normal,
                 fontSize = 14.sp, lineHeight = 14.sp)
         }
+    }
+}
+
+/** Off by default: the card changes alone unless the note should follow. */
+@Composable
+private fun NoteUpdateSwitch(on: Boolean, onChange: (Boolean) -> Unit) {
+    val shape = RoundedCornerShape(14.dp)
+    Row(Modifier.fillMaxWidth().background(if (on) Color(0xFFEAF7EF) else Color.White, shape)
+        .border(1.dp, if (on) Accent else Outline, shape)
+        .toggleable(value = on, role = Role.Switch, onValueChange = onChange)
+        .padding(start = 14.dp, end = 10.dp, top = 8.dp, bottom = 8.dp)
+        .testTag("flashcard_update_note"), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Update the note too", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (on) "Text, fonts and pictures changed here also change the note."
+                else "Only this card changes. The note stays as it is.",
+                color = Secondary, fontSize = 12.sp, lineHeight = 16.sp)
+        }
+        androidx.compose.material3.Switch(checked = on, onCheckedChange = null,
+            colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = Accent))
     }
 }
 

@@ -40,6 +40,7 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
@@ -140,6 +141,8 @@ fun VirlinNeedsYouSection(
     onRank: ((String) -> Unit)? = null,
     /** The app's real sort/filter control; the glyph below is only a fallback. */
     filterContent: (@Composable () -> Unit)? = null,
+    /** Shown directly under the header, e.g. the sort strip. */
+    belowHeader: (@Composable () -> Unit)? = null,
 ) {
     val transition = rememberInfiniteTransition(label = "Needs You shared motion")
     val gradientPhase by transition.animateFloat(
@@ -162,25 +165,42 @@ fun VirlinNeedsYouSection(
     )
 
     Column(modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Needs You", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp,
-                color = Color(0xFF182220))
-            Spacer(Modifier.width(9.dp))
-            Box(Modifier.size(24.dp).clip(CircleShape).background(Color(0xFFFFF2D1)),
+        val headerShape = RoundedCornerShape(50)
+        Row(
+            Modifier.fillMaxWidth()
+                .shadow(3.dp, headerShape, ambientColor = Color(0x247C3AED), spotColor = Color(0x247C3AED))
+                .clip(headerShape)
+                .background(Color.White)
+                .border(1.dp, Color(0xFFEFE8FF), headerShape)
+                .padding(start = 14.dp, end = 2.dp, top = 1.dp, bottom = 1.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Needs You", fontWeight = FontWeight.Bold, fontSize = 15.sp,
+                color = NowApprovedInk, fontFamily = NowApprovedFont, maxLines = 1)
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.size(23.dp).clip(CircleShape)
+                .background(Brush.verticalGradient(listOf(Color(0xFFFFE680), Color(0xFFFFC93C)))),
                 contentAlignment = Alignment.Center) {
-                Text(tasks.size.toString(), fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    color = Color(0xFF9A5A16))
+                Text(tasks.size.toString(), fontSize = 12.sp, fontWeight = FontWeight.ExtraBold,
+                    color = NowApprovedInk, fontFamily = NowApprovedFont)
             }
-            Spacer(Modifier.weight(1f))
-            Text("Review and respond", fontSize = 11.sp, color = Color(0xFF657077),
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+          }
+          Row(Modifier.weight(1f, fill = false).padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(width = 1.dp, height = 14.dp).background(Color(0xFFE6DEF7)))
             Spacer(Modifier.width(9.dp))
+            Text("Review and respond", fontSize = 13.5.sp, color = Vivid.PurpleText, fontFamily = NowApprovedFont,
+                fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false))
             if (filterContent != null) filterContent() else Box(
                 Modifier.size(40.dp).clip(CircleShape)
                     .clickable(role = Role.Button, onClickLabel = "Filter reminders", onClick = onFilterClick),
                 contentAlignment = Alignment.Center
-            ) { Text("☷", fontSize = 19.sp, color = Color(0xFF657077)) }
+            ) { Text("☷", fontSize = 19.sp, color = Vivid.Purple) }
+          }
         }
+        belowHeader?.invoke()
         Spacer(Modifier.height(12.dp))
         tasks.forEachIndexed { index, task ->
             key(task.id) {

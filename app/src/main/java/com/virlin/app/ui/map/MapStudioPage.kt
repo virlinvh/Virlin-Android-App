@@ -219,17 +219,17 @@ private fun StudioPreview(
             val graphWidth = (geometry.right - geometry.left).coerceAtLeast(1f)
             val graphHeight = (geometry.bottom - geometry.top).coerceAtLeast(1f)
             val scale = min(size.width / graphWidth, size.height / graphHeight).coerceIn(.01f, 1.1f)
-            drawIntoCanvas { composeCanvas ->
-                val native = composeCanvas.nativeCanvas
-                native.save()
+                        drawIntoCanvas { composeCanvas ->
+                            val native = composeCanvas.nativeCanvas
+                            native.save()
                 native.translate((size.width - graphWidth * scale) / 2f, (size.height - graphHeight * scale) / 2f)
-                native.scale(scale, scale)
-                native.translate(-geometry.left, -geometry.top)
-                paintMap(native, geometry, appearance,
+                            native.scale(scale, scale)
+                            native.translate(-geometry.left, -geometry.top)
+                            paintMap(native, geometry, appearance,
                     RectF(geometry.left - 20f, geometry.top - 20f, geometry.right + 20f, geometry.bottom + 20f),
                     selectedId = targetId?.takeIf { it in geometry.frames }, showPreviewControls = false)
-                native.restore()
-            }
+                            native.restore()
+                        }
         }
         val dark = appearance.backgroundColor?.let { luminance(it.toInt()) < .4 } == true
         Text("LIVE PREVIEW", Modifier.align(Alignment.TopStart).padding(10.dp),
@@ -481,7 +481,7 @@ private fun BranchesTab(
                 Surface(Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
                     .clickable { onAppearance(appearance.copy(branchMode = mode)) },
                     shape = RoundedCornerShape(14.dp),
-                    color = if (chosen) accent.copy(alpha = .1f) else Color.White,
+                            color = if (chosen) accent.copy(alpha = .1f) else Color.White,
                     border = BorderStroke(if (chosen) 2.dp else 1.dp, if (chosen) accent else textColor.copy(alpha = .12f))) {
                     Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         val sample = when (mode) {
@@ -623,7 +623,7 @@ private fun BoxesTab(
         }
     }
     StudioCard("Text", "Automatic text stays readable on light and dark boxes.", textColor) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StudioChip("Automatic", appearance.boxTextColor == null, accent, textColor) {
                 onAppearance(appearance.copy(boxTextColor = null))
             }
@@ -694,22 +694,22 @@ private fun MiniBox(colours: MapBoxColors) {
 @Composable
 private fun FinishTile(finish: MapBoxFinish, chosen: Boolean, accent: Color, textColor: Color, modifier: Modifier, onClick: () -> Unit) {
     Surface(modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick), shape = RoundedCornerShape(14.dp),
-        color = if (chosen) accent.copy(alpha = .1f) else Color.White,
+                                    color = if (chosen) accent.copy(alpha = .1f) else Color.White,
         border = BorderStroke(if (chosen) 2.dp else 1.dp, if (chosen) accent else textColor.copy(alpha = .12f))) {
         Column(Modifier.padding(8.dp)) {
-            val gradient = when (finish) {
-                MapBoxFinish.GLASS -> listOf(Color.White, Color(0xFF9BD8B8), Color(0xFFE6F8E9))
-                MapBoxFinish.PAPER -> listOf(Color(0xFFF7F3E7), Color(0xFFDFE9D7))
-                MapBoxFinish.EMBOSSED -> listOf(Color.White, Color(0xFFB9D8C7))
-                MapBoxFinish.FROSTED -> listOf(Color.White, Color(0xFFD9E7F4))
-                MapBoxFinish.OUTLINE -> listOf(Color.White, Color.White)
+                                        val gradient = when (finish) {
+                                            MapBoxFinish.GLASS -> listOf(Color.White, Color(0xFF9BD8B8), Color(0xFFE6F8E9))
+                                            MapBoxFinish.PAPER -> listOf(Color(0xFFF7F3E7), Color(0xFFDFE9D7))
+                                            MapBoxFinish.EMBOSSED -> listOf(Color.White, Color(0xFFB9D8C7))
+                                            MapBoxFinish.FROSTED -> listOf(Color.White, Color(0xFFD9E7F4))
+                                            MapBoxFinish.OUTLINE -> listOf(Color.White, Color.White)
                 else -> if (finish.isHandDrawn()) listOf(Color.White, Color.White) else listOf(Color(0xFFE7F5EA), Color(0xFFCDE8D6))
-            }
+                                        }
             Box(Modifier.fillMaxWidth().height(40.dp)
                 .background(Brush.linearGradient(gradient), RoundedCornerShape(9.dp))
-                .border(if (finish.isHandDrawn()) 0.dp else if (finish == MapBoxFinish.OUTLINE) 2.dp else 1.dp,
+                                            .border(if (finish.isHandDrawn()) 0.dp else if (finish == MapBoxFinish.OUTLINE) 2.dp else 1.dp,
                     accent.copy(alpha = .55f), RoundedCornerShape(9.dp))) {
-                if (finish.isHandDrawn()) Canvas(Modifier.fillMaxSize()) {
+                                            if (finish.isHandDrawn()) Canvas(Modifier.fillMaxSize()) {
                     drawIntoCanvas {
                         drawHandDrawnBox(it.nativeCanvas, RectF(3f, 3f, size.width - 3f, size.height - 3f),
                             android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG), finish,
@@ -727,32 +727,32 @@ private fun FinishTile(finish: MapBoxFinish, chosen: Boolean, accent: Color, tex
                             android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG), finish, accent.toArgb())
                         it.nativeCanvas.restore()
                     }
-                }
-                if (finish == MapBoxFinish.PENCIL_HATCH) Canvas(Modifier.fillMaxSize()) {
-                    val spacing = 7.dp.toPx()
-                    var x = -size.height
-                    while (x < size.width) {
+                                            }
+                                            if (finish == MapBoxFinish.PENCIL_HATCH) Canvas(Modifier.fillMaxSize()) {
+                                                val spacing = 7.dp.toPx()
+                                                var x = -size.height
+                                                while (x < size.width) {
                         drawLine(accent.copy(alpha = .24f), Offset(x, size.height), Offset(x + size.height, 0f), 1.dp.toPx())
-                        x += spacing
-                    }
-                }
+                                                    x += spacing
+                                                }
+                                            }
                 if (finish == MapBoxFinish.LINEN || finish == MapBoxFinish.GRAIN || finish == MapBoxFinish.PAPER)
                     Canvas(Modifier.fillMaxSize()) {
-                        val step = if (finish == MapBoxFinish.GRAIN) 8.dp.toPx() else 6.dp.toPx()
-                        var x = step
-                        while (x < size.width) {
-                            var y = step
-                            while (y < size.height) {
+                                                val step = if (finish == MapBoxFinish.GRAIN) 8.dp.toPx() else 6.dp.toPx()
+                                                var x = step
+                                                while (x < size.width) {
+                                                    var y = step
+                                                    while (y < size.height) {
                                 if (finish == MapBoxFinish.GRAIN) drawCircle(accent.copy(alpha = .22f), 1.dp.toPx(), Offset(x, y))
                                 else drawLine(accent.copy(alpha = .16f), Offset(x, y), Offset(x + 2.dp.toPx(), y), 1.dp.toPx())
-                                y += step
-                            }
-                            if (finish == MapBoxFinish.LINEN)
+                                                        y += step
+                                                    }
+                                                    if (finish == MapBoxFinish.LINEN)
                                 drawLine(accent.copy(alpha = .1f), Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
-                            x += step
-                        }
-                    }
-            }
+                                                    x += step
+                                                }
+                                            }
+                                        }
             Text(finish.label, Modifier.padding(top = 6.dp), color = if (chosen) accent else textColor,
                 fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -819,7 +819,7 @@ private fun ItemsTab(
             }
             MapBoxFinish.entries.forEach { finish ->
                 StudioChip(finish.label, appearance.nodeFinishes[target.id] == finish, accent, textColor) {
-                    onAppearance(appearance.copy(nodeFinishes = appearance.nodeFinishes + (target.id to finish)))
+                                        onAppearance(appearance.copy(nodeFinishes = appearance.nodeFinishes + (target.id to finish)))
                 }
             }
         }

@@ -6,6 +6,7 @@ import com.virlin.app.domain.model.TaskHierarchy
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -77,6 +78,15 @@ fun workStreamDetail(id: String) = "workstream_detail/$id"
 fun workStreamDetailAt(id: String, path: List<String>) =
     if (path.isEmpty()) workStreamDetail(id)
     else "workstream_detail/$id?path=" + path.joinToString(",")
+
+const val StreamProjectBadgeTag = "stream_project_badge"
+
+/** Back to [projectId]'s overview: reuses that page if it is already behind us, else opens it. */
+internal fun NavController.openProjectOverview(projectId: String) {
+    val behind = runCatching { getBackStackEntry(ProjectDetailRoute) }.getOrNull()
+    if (behind?.arguments?.getString("id") == projectId && popBackStack(ProjectDetailRoute, inclusive = false)) return
+    navigate(projectDetail(projectId)) { launchSingleTop = true }
+}
 
 fun projectTaskIndex(id: String) = "project_task_index/$id"
 fun taskDetail(id: String) = "task_detail/$id"
@@ -600,10 +610,19 @@ fun WorkStreamDetailScreen(
                     fontSize = 13.sp, color = VirlinColors.TextSecondary)
             }
         }
+        val owningProject = standaloneProject ?: project
         VirlinStreamTasks(
             ui = ui,
             initialPath = initialPath,
             modifier = Modifier.weight(1f),
+            projectBadge = owningProject?.let { p -> {
+                Box(Modifier.size(48.dp).clip(CircleShape)
+                    .clickable(onClickLabel = "Open project overview") { navController.openProjectOverview(p.id) }
+                    .semantics(mergeDescendants = true) { contentDescription = "${p.title} project overview" }
+                    .testTag(StreamProjectBadgeTag), contentAlignment = Alignment.Center) {
+                    com.virlin.app.ui.components.ProjectIcon(p, size = 32.dp, decorative = true)
+                }
+            } },
             actions = object : StreamTaskActions {
                 override fun back() { navController.popBackStack() }
                 override fun add(parentId: String?, title: String, afterId: String?, execution: StreamExecutionMode) {

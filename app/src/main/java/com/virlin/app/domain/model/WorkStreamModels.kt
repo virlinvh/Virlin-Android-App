@@ -154,7 +154,20 @@ data class FocusSession(
 
     /** Duration so far, or the closed duration. */
     fun duration(now: Instant): Duration = Duration.between(startedAt, endedAt ?: now)
+
+    /**
+     * One Focus period can be split by the app leaving the foreground. Each later piece is
+     * stored as `<first piece id>/<own id>`, so every piece of the period shares this root.
+     */
+    val periodRootId: String get() = id.substringBefore('/')
+
+    companion object {
+        fun continuationId(rootId: String, newId: String) = "$rootId/$newId"
+    }
 }
+
+/** What [com.virlin.app.domain.action.VirlinActions.suspendFocusClock] stopped, to continue it later. */
+data class FocusClockPause(val sessionId: String, val ownerId: String, val taskId: String?)
 
 /**
  * Reconstructs mental state on return:

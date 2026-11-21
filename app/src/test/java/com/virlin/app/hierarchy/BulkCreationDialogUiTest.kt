@@ -41,9 +41,9 @@ class BulkCreationDialogUiTest {
     }
     @Test fun redesignedModesHelpAndPreviewRemainUsable() {
         compose.setContent { MaterialTheme {
-            BulkCreationDialog("New project", "Project name", null, {}, {})
+            BulkCreationDialog("New workstream in Base", "Workstream name", "base", {}, {})
         } }
-        compose.onNodeWithText("Add project").assertIsDisplayed()
+        compose.onNodeWithText("Add workstream").assertIsDisplayed()
         compose.onNodeWithText("Bulk").performClick()
         compose.onNodeWithContentDescription("Import format and AI prompt").performClick()
         compose.onNodeWithText("Import format").assertIsDisplayed()
@@ -53,8 +53,8 @@ class BulkCreationDialogUiTest {
         compose.onNode(hasSetTextAction()).performTextInput("""{"version":1,"items":[{"name":"First"},{"name":"Second"}]}""")
         compose.onNodeWithText("Preview", useUnmergedTree = true).performClick()
         compose.onNodeWithText("2 new items · hierarchy shown below").assertIsDisplayed()
-        compose.onNodeWithText("Project: First").assertIsDisplayed()
-        compose.onNodeWithText("Project: Second").assertIsDisplayed()
+        compose.onNodeWithText("Workstream: First").assertIsDisplayed()
+        compose.onNodeWithText("Workstream: Second").assertIsDisplayed()
         compose.onNodeWithText("Edit input").performClick()
         compose.onNode(hasSetTextAction()).assertTextContains("First", substring = true)
     }

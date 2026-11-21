@@ -22,7 +22,7 @@ android {
     }
     buildTypes {
         debug {
-            versionNameSuffix = "-backspace-20261109-1143"
+            versionNameSuffix = "-import-20261114-1444"
         }
         release {
             isMinifyEnabled = false

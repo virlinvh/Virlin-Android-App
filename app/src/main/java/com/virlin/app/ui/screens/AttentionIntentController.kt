@@ -33,6 +33,8 @@ interface AttentionIntents {
     fun openCustom(streamId: String, intent: TimedIntent)
     fun dismissChooser()
     fun leave(streamId: String, minutes: Long?)
+    /** PAUSE: Focus stays on this item with its time held; RESUME continues it. */
+    fun pauseFocus(streamId: String)
     fun handOff(streamId: String, minutes: Long?)
     fun stillRunning(streamId: String, minutes: Long)
     fun resultReadyNow(streamId: String)
@@ -78,6 +80,8 @@ class AttentionIntentController(
     private suspend fun title(streamId: String) = activity(streamId)?.title ?: "WorkStream"
 
     override fun leave(streamId: String, minutes: Long?) { dismissChooser(); run(streamId, { t -> if (minutes == null) "Left $t" else "Left $t · back in ${minutes}m" }) { actions.leaveFocus(streamId, minutes?.let(::at)) } }
+    override fun pauseFocus(streamId: String) { dismissChooser(); run(streamId, { t -> "Paused $t" }) { actions.suspendFocusClock() } }
+    fun resumeFocus(streamId: String) = run(streamId, { t -> "Resumed $t" }) { actions.resumePausedFocus() }
     override fun handOff(streamId: String, minutes: Long?) { dismissChooser(); run(streamId, { t -> if (minutes == null) "Handed off $t" else "Handed off $t · check in ${minutes}m" }) { actions.handOffStream(streamId, checkAt = minutes?.let(::at)) } }
     override fun stillRunning(streamId: String, minutes: Long) { dismissChooser(); run(streamId, { t -> "$t still running · check in ${minutes}m" }) { actions.stillRunning(streamId, at(minutes)) } }
     override fun resultReadyNow(streamId: String) { dismissChooser(); run(streamId, { t -> "Focused $t" }) { actions.resultReadyNow(streamId) } }

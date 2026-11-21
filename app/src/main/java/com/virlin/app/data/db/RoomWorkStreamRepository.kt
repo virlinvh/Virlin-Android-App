@@ -409,6 +409,10 @@ class RoomWorkStreamRepository private constructor(
         override suspend fun saveStage(stage: ExternalStage) { db.externalStages().upsert(stage.toEntity()); touchedStages = true }
         override suspend fun saveSnapshot(snapshot: ContextSnapshot) { db.snapshots().insert(snapshot.toEntity(db.snapshots().maxSeq() + 1)) }
         override suspend fun appendEvent(event: WorkStreamEvent) { db.events().insert(event.toEntity(db.events().maxSeq() + 1)) }
+        override suspend fun saveExternalRun(run: com.virlin.app.domain.model.ExternalRunInterval) {
+            db.externalRuns().insert(ExternalRunEntity("${run.ownerId}:${run.start.toEpochMilli()}", run.ownerId, run.taskId,
+                run.start.toEpochMilli(), run.end.toEpochMilli()))
+        }
     }
 
     companion object {

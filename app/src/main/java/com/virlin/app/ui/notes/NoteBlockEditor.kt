@@ -154,6 +154,8 @@ fun NoteBlockEditor(
     readOnly: Boolean = false,
     /** Scrolls above the first block; only used with [readOnly]. */
     readerHeader: (@Composable () -> Unit)? = null,
+    /** The reading view's heading-fold step, applied to its view-only fold state; only with [readOnly]. */
+    readerFold: NoteReaderFold? = null,
     /**
      * Page formatting: the note is drawn on paper of the chosen size, at that paper's scale, with
      * its margins, title and page numbers, breaking where the printout and export break.
@@ -188,6 +190,13 @@ fun NoteBlockEditor(
             },
             playVideo = { readerPlaying = it },
         )
+    }
+    LaunchedEffect(readerFold) {
+        val fold = readerFold ?: return@LaunchedEffect
+        if (!readOnly) return@LaunchedEffect
+        readerCollapsed = readerCollapsed + vm.state.value.blocks
+            .filter { it.type.headingLevel > 0 && (fold.level == null || it.type.headingLevel == fold.level) }
+            .associate { it.id to (fold.level != null) }
     }
     var focusRequestFor by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(state.focusedBlockId) { focusRequestFor = state.focusedBlockId }
@@ -285,8 +294,9 @@ fun NoteBlockEditor(
                         onSelectedBlockIdsChange(selectedBlockIds + blockRange(state.blocks, visible, from, block.id))
                     },
                 ) {
+                    // The reading view's folds stay its own view state, never the note's.
                     NoteBlockRow(block, numbers[block.id] ?: 0, state, vm, headingFoldMode,
-                        null, {}, selectionRowActions)
+                        null, {}, if (readOnly) rowActions else selectionRowActions)
                 }
                 Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(visibleIndex + 1)).dp))
             }
@@ -312,7 +322,7 @@ fun NoteBlockEditor(
                 Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(visibleIndex + 1)).dp))
             }
         }
-        item { Spacer(Modifier.height(if (paged) deskGap * 6 else 76.dp)) }
+        item { Spacer(Modifier.height(if (paged) deskGap * 6 else if (readOnly) 124.dp else 76.dp)) }
     }
     }
     }
@@ -440,6 +450,50 @@ internal fun NoteReadOnlyBlocks(blocks: List<NoteDocBlock>, modifier: Modifier =
             key(block.id) {
                 Spacer(Modifier.height(NoteDocumentLayout.beforeDp(block, index).dp))
                 NoteBlockRow(block, numbers[block.id] ?: 0, state, null, false, null, {}, actions)
+                Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(index + 1)).dp))
+            }
+        }
+    }
+}
+
+/** View-only state of one [noteReadOnlyBlockItems] preview: its folds and the playing video. */
+internal class NoteReadOnlyPreviewState {
+    var collapsed by mutableStateOf<Map<String, Boolean>>(emptyMap())
+    var playing by mutableStateOf<String?>(null)
+    internal var blocks: List<NoteDocBlock> = emptyList()
+    internal val actions = NoteRowActions(
+        readOnly = true,
+        toggleCollapsed = { id ->
+            val current = collapsed[id] ?: blocks.firstOrNull { it.id == id }?.isCollapsed ?: false
+            collapsed = collapsed + (id to !current)
+        },
+        playVideo = { playing = it },
+    )
+}
+
+/**
+ * [NoteReadOnlyBlocks] as items of the caller's lazy list, one per block, so a long note only
+ * composes (and loads images for) the blocks on screen. [wrap] draws each block's surroundings.
+ */
+internal fun androidx.compose.foundation.lazy.LazyListScope.noteReadOnlyBlockItems(
+    keyPrefix: String,
+    blocks: List<NoteDocBlock>,
+    preview: NoteReadOnlyPreviewState,
+    wrap: @Composable (content: @Composable () -> Unit) -> Unit,
+) {
+    preview.blocks = blocks
+    val collapsed = preview.collapsed
+    val shown = if (collapsed.isEmpty()) blocks
+        else blocks.map { block -> collapsed[block.id]?.let { block.copy(isCollapsed = it) } ?: block }
+    val state = NotesUiState(loading = false, blocks = shown, playingVideoId = preview.playing)
+    val visible = visibleNoteBlocks(shown, foldHeadings = false)
+    val numbers = noteListNumbers(shown)
+    items(visible.size, key = { "$keyPrefix${visible[it].id}" }, contentType = { visible[it].type }) { index ->
+        val block = visible[index]
+        wrap {
+            Column(Modifier.fillMaxWidth()) {
+                Spacer(Modifier.height(NoteDocumentLayout.beforeDp(block, index).dp))
+                NoteBlockRow(block, numbers[block.id] ?: 0, state, null, false, null, {}, preview.actions)
                 Spacer(Modifier.height(NoteDocumentLayout.afterDp(block, visible.getOrNull(index + 1)).dp))
             }
         }
@@ -924,10 +978,16 @@ private fun blockTextStyle(block: NoteDocBlock) = TextStyle(
 private fun ReadOnlyBlockText(block: NoteDocBlock, modifier: Modifier, syntax: CodeHighlight?) {
     val accent = Green
     var selection by remember(block.id) { mutableStateOf(TextRange(block.text.length)) }
+    val readerSelection = LocalNoteReaderSelection.current
     BasicTextField(
         value = TextFieldValue(block.text, TextRange(
             selection.start.coerceIn(0, block.text.length), selection.end.coerceIn(0, block.text.length))),
-        onValueChange = { next -> if (next.text == block.text) selection = next.selection },
+        onValueChange = { next ->
+            if (next.text == block.text) {
+                selection = next.selection
+                readerSelection?.report(block.id, next.selection)
+            }
+        },
         readOnly = true,
         textStyle = blockTextStyle(block),
         visualTransformation = remember(block.runs, block.text, block.type, accent, syntax) {
@@ -1309,7 +1369,7 @@ private fun ReadOnlyTable(block: NoteDocBlock, table: NoteDocTable) {
 }
 
 /** What a block row may do: the editor's own actions, or the reading view's view-only ones. */
-private class NoteRowActions(
+internal class NoteRowActions(
     val readOnly: Boolean,
     val toggleCollapsed: (String) -> Unit,
     val playVideo: (String?) -> Unit,

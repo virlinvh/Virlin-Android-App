@@ -194,23 +194,45 @@ object FlashcardStore {
         val root = JSONObject(atomic.openRead().bufferedReader().use { it.readText() })
         if (root.optInt("v") != 1) error("Unsupported flashcard store version")
         val rows = root.getJSONArray("cards")
-        return (0 until rows.length()).map { index ->
-            val row = rows.getJSONObject(index)
-            val content = VirlinNoteCodec.decode(row.getString("content")).single()
-            SavedFlashcard(row.getString("id"), row.getString("ownerKey"),
-                row.getString("noteTitle"), content, row.getLong("createdAt"),
-                row.optInt("colorIndex", index), row.optString("recallPrompt"),
-                row.optString("difficulty", "NORMAL"), row.optInt("intervalDays", 1),
-                row.optLong("nextReviewAt", row.getLong("createdAt") + 86_400_000L),
-                row.optInt("reviewCount", 0),
-                row.optLong("lastReviewedAt", 0L).takeIf { it > 0L },
-                row.optBoolean("isStarred", false),
-                row.optString("frontContent").takeIf { it.isNotBlank() }
-                    ?.let { VirlinNoteCodec.decode(it).singleOrNull() },
-                row.richSide("frontBlocks"), row.richSide("backBlocks"),
-                isArchived = row.optBoolean("isArchived", false),
-                sourceBlockId = row.optString("sourceBlockId").takeIf { it.isNotBlank() },
-                frontCardStyle = row.optBoolean("frontCardStyle", true))
+        return (0 until rows.length()).map { index -> decodeRow(rows.getJSONObject(index), index) }
+    }
+
+    /** One stored card row (store format v1); [index] is the colour fallback for rows written before colours. */
+    internal fun decodeRow(row: JSONObject, index: Int): SavedFlashcard {
+        val content = VirlinNoteCodec.decode(row.getString("content")).single()
+        return SavedFlashcard(row.getString("id"), row.getString("ownerKey"),
+            row.getString("noteTitle"), content, row.getLong("createdAt"),
+            row.optInt("colorIndex", index), row.optString("recallPrompt"),
+            row.optString("difficulty", "NORMAL"), row.optInt("intervalDays", 1),
+            row.optLong("nextReviewAt", row.getLong("createdAt") + 86_400_000L),
+            row.optInt("reviewCount", 0),
+            row.optLong("lastReviewedAt", 0L).takeIf { it > 0L },
+            row.optBoolean("isStarred", false),
+            row.optString("frontContent").takeIf { it.isNotBlank() }
+                ?.let { VirlinNoteCodec.decode(it).singleOrNull() },
+            row.richSide("frontBlocks"), row.richSide("backBlocks"),
+            isArchived = row.optBoolean("isArchived", false),
+            sourceBlockId = row.optString("sourceBlockId").takeIf { it.isNotBlank() },
+            frontCardStyle = row.optBoolean("frontCardStyle", true))
+    }
+
+    /** Adds whole cards (project import) with their schedules as saved; ids must be new. */
+    internal suspend fun importCards(context: Context, cards: List<SavedFlashcard>) = mutex.withLock {
+        if (cards.isEmpty()) return@withLock
+        withContext(Dispatchers.IO) {
+            val existing = read(context)
+            val taken = existing.map { it.id }.toSet()
+            require(cards.none { it.id in taken } && cards.map { it.id }.toSet().size == cards.size) { "Flashcard ids must be new" }
+            write(context, existing + cards)
+        }
+    }
+
+    /** Takes back cards added by a project import that did not complete. */
+    internal suspend fun removeCards(context: Context, ids: Set<String>) = mutex.withLock {
+        if (ids.isEmpty()) return@withLock
+        withContext(Dispatchers.IO) {
+            val existing = read(context)
+            if (existing.any { it.id in ids }) write(context, existing.filterNot { it.id in ids })
         }
     }
 
@@ -220,9 +242,35 @@ object FlashcardStore {
             ?.let { runCatching { VirlinNoteCodec.decode(it) }.getOrNull() }
             ?.takeIf { it.isNotEmpty() }
 
+    /** Bytes [cards] take in the store file, measured with the exact encoding it is written in. */
+    internal fun encodedBytes(cards: List<SavedFlashcard>): Long =
+        cards.sumOf { row(it).toString().toByteArray(Charsets.UTF_8).size.toLong() }
+
+    /** One card exactly as the store file holds it (store format v1). */
+    internal fun exportRow(card: SavedFlashcard): JSONObject = row(card)
+
     private fun write(context: Context, cards: List<SavedFlashcard>) {
         val root = JSONObject().put("v", 1).put("cards", JSONArray().also { rows ->
-            cards.forEach { card -> rows.put(JSONObject()
+            cards.forEach { card -> rows.put(row(card)) }
+        })
+        val atomic = file(context)
+        val output = atomic.startWrite()
+        try {
+            output.write(root.toString().toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(output)
+            // On Windows-hosted Robolectric, AtomicFile's renameTo cannot replace an existing
+            // target and silently leaves .new behind. Promote it with replacement semantics;
+            // on Android the helper already moved it and this path is not taken.
+            val pending = File(atomic.baseFile.path + ".new")
+            if (pending.exists()) Files.move(pending.toPath(), atomic.baseFile.toPath(),
+                StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (error: Throwable) {
+            atomic.failWrite(output)
+            throw error
+        }
+    }
+
+    private fun row(card: SavedFlashcard): JSONObject = JSONObject()
                 .put("id", card.id).put("ownerKey", card.ownerKey)
                 .put("noteTitle", card.noteTitle).put("createdAt", card.createdAt)
                 .put("colorIndex", card.colorIndex)
@@ -241,22 +289,5 @@ object FlashcardStore {
                     card.frontBlocks?.let { json.put("frontBlocks", VirlinNoteCodec.encode(it)) }
                     card.backBlocks?.let { json.put("backBlocks", VirlinNoteCodec.encode(it)) }
                     card.sourceBlockId?.let { json.put("sourceBlockId", it) }
-                }) }
-        })
-        val atomic = file(context)
-        val output = atomic.startWrite()
-        try {
-            output.write(root.toString().toByteArray(Charsets.UTF_8))
-            atomic.finishWrite(output)
-            // On Windows-hosted Robolectric, AtomicFile's renameTo cannot replace an existing
-            // target and silently leaves .new behind. Promote it with replacement semantics;
-            // on Android the helper already moved it and this path is not taken.
-            val pending = File(atomic.baseFile.path + ".new")
-            if (pending.exists()) Files.move(pending.toPath(), atomic.baseFile.toPath(),
-                StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-        } catch (error: Throwable) {
-            atomic.failWrite(output)
-            throw error
-        }
-    }
+                }
 }

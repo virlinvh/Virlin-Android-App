@@ -1867,3 +1867,183 @@ Done - extend that table column-wise and row-wise - I don't want to see the popu
 - ui/notes/NoteBlockEditor.kt: editor-scoped LocalBlockFocus map (blockId -> FocusRequester) registered by each editable BlockTextField via DisposableEffect; the Backspace key handler runs the merge, then requests focus on the line it merged into while the old field is still composed, so focus moves field-to-field and the IME session restarts without hiding. If that line is not composed (folded/off screen) the old delayed request still applies.
 - test: ui/notes/NoteBackspaceKeepsFocusUiTest (fails without the fix: editor focus went false,true,false,true). Notes suite 463/463.
 - APK: releases/Virlin-backspace-20261109-1143.apk (emulator-5556 only; emulator too overloaded to exercise the keyboard by hand).
+
+## 2026-11-09 - Now approved design: finish Codex's native implementation
+
+- Presentation-only polish on top of Codex's unlogged second pass (NowApprovedStyle, NowApprovedTimer, ApprovedNowDock, NowEmptyFocusCard, etc.) to match the user's reference images.
+- NowDaySummary: larger Hi + spaced wave, date pill 14sp with raised teal lip, amber hourglass (same MasterTimerButton, params only).
+- VirlinProgressBar: Time freed value auto-fits (no '14h ...' truncation), larger Focus/External rows, flexible label width, extra sparkles.
+- VirlinCurrentFocusCard: 3D live dot, FOCUSING NOW 12sp, lilac Task total pill border, buttons 54dp / 15sp. NowApprovedTimer: compact centred group, tiles max 56dp.
+- VirlinNeedsYouSection header 15sp / 13.5sp; NowScreen passes purple tint to the existing sort control.
+- ApprovedNowDock: drawn Momentum molecule and Apps 3x3 tile icons, labels 14sp scaling down to fit 'Momentum' at large font, round teal badge.
+- Actions, timers, data and navigation unchanged. ApprovedNowDesignTest 4/4 and FocusCardPresentationTest 2/2 pass. APK releases\Virlin-nowdesign-20261109-1412.apk installed on emulator-5556 only. No commit.
+
+## 2026-11-09 - Bottom bar: no grey tap box, smooth bubble glide
+
+- ApprovedNowDock: removed the default rectangular ripple (indication = null) and added a subtle 0.92 press scale. The coral bubble now starts gliding on tap (240 ms FastOutSlowIn with a synchronous squash) and navigation fires when it arrives, so the destination's first heavy frame never stalls it. Rapid taps keep only the last; back presses still move the bubble. Icon/label white-purple hand-over follows the bubble at draw time (no per-frame recomposition); the white label copy has no semantics.
+- New RootTabTransitions.kt + VirlinApp NavHost: root-tab to root-tab switches use a 110 ms fade-out / 200 ms fade-in instead of the 700 ms cross-fade. Page slides and all other transitions unchanged.
+- ApprovedNowDesignTest: dock test advances the clock; added immediate-highlight-then-navigate and rapid-tap tests (6/6 pass); PageOpenTransitionTest 3/3. APK releases\Virlin-tabglide-20261109-1431.apk on emulator-5556 only. No commit.
+
+## 2026-11-09 - Now chooser (LEAVE / HAND OFF / check) in the new Now design
+
+- NowChooserDialog.kt presentation only: white 32dp card with soft shadow, Inter type, header with title + subtitle (Leave: 'Leave this session?' / 'Your focus time stays saved. You can come back and continue.') and a round lilac close X (chooser_close). Presets are raised lilac chips that shrink text to fit five on a 320dp phone; CUSTOM / other options are raised lilac buttons; the main exit (LEAVE WITHOUT REMINDER, NO CHECK, FOCUS NOW, SET, SAVE) is the coral raised button. Inline custom reminder restyled in a lilac panel. Cancel became a lilac 'KEEP FOCUSING' (Leave) / 'CANCEL' (others) button with the same chooser_cancel tag.
+- Every option, tag, intent call, permission prompt and the 'Return in:' label unchanged. CompletedFocusDialog untouched.
+- New LeaveChooserDesignTest (3, renders to build/outputs). InlineLeaveUiTest fake now answers equals/hashCode (it NPE'd/stalled on Compose's equality checks); assertions unchanged. com.virlin.app.now.* 141/141 pass. APK releases\Virlin-leavechooser-20261109-1442.apk on emulator-5556 only. No commit.
+
+## 2026-11-09 - Focus card: no grey rectangle on the title / path tap
+
+- VirlinCurrentFocusCard: the context block (breadcrumb + task title) keeps its Open WorkStream click but uses indication = null with a gentle press dip (alpha 0.6, scale 0.985) instead of the rectangular ripple. LEAVE / COMPLETE / HAND OFF drop their grey ripple too (existing 0.97 press scale remains).
+- ApprovedNowDesignTest: title tap still opens the WorkStream, LEAVE/COMPLETE still fire. com.virlin.app.now.* 142/142. APK releases\Virlin-noripple-20261109-1446.apk on emulator-5556 only. No commit.
+
+## 2026-11-09 - Now: Focus card fits the first screen on any phone (Claude/Cursor)
+- NowScreen measures its viewport and the header+summary block; the remaining height is a layout-phase budget passed to FocusHeroCard / VirlinCurrentFocusCard / NowEmptyFocusCard (maxHeightPx).
+- New NowFitTimer.kt: FitTimerColumn measures the content above and below the timer and gives the timer only the rest (min 52dp block, 20dp tiles); content is never clipped. fitIsCompact() switches short budgets (<400dp focus, <380dp empty) to tighter spacing, smaller hero type, single-row 11sp pills, 48dp buttons. Normal phones keep the existing look.
+- NowApprovedTimer tile size is height-aware (min 20dp, max 56dp). Summary card slightly shorter (row min 60, tile min 52/56). Header->summary spacer 10, summary->card 14.
+- Test: now/FocusCardFitsFirstScreenTest (6 cases: 412x820, 384x610, 360x540, 320x490, empty 360x540 / 320x490) asserts the unclipped card bottom is inside the viewport. com.virlin.app.now.* 148/148.
+- APK: releases\Virlin-focusfit-20261109-1503.apk (verified on emulator-5556).
+
+## 2026-11-10 - Notes reading view: + quick tools (Claude/Cursor)
+- NotesReaderRoute now shows the editor's + fan (NoteAddFan) with the same three tools: Create flashcard, Select across blocks, Heading fold. Tap opens, tap again closes; no triple-tap Add sheet (onAddBlock = null also drops the "Add block" a11y action). No keyboard: the reader has no editable fields.
+- Everything in the reader is view-only: block selection, heading fold (NoteBlockEditor readerFold -> reader's own collapsed map; selection rows use the reader row actions) never change the stored note. Flashcard uses selected blocks, or text selected in a read-only block (ReadOnlyBlockText reports to LocalNoteReaderSelection). Flashcard is enabled under the same rule as the editor.
+- New NoteReaderQuickTools.kt: NoteReaderTextSelection, NoteReaderFold, NoteFlashcardSaveDialog (the editor's flashcard save moved here unchanged; both screens use it with the screen's coroutine scope).
+- Tests: ui/notes/NoteReaderQuickToolsTest (4). Notes/flashcard suites 236/236.
+- APK: releases\Virlin-readerfan-20261110-0711.apk (verified on emulator-5556; flashcard dialog opened and cancelled, nothing saved).
+
+## 2026-11-10 - Flashcard dialog: tap words to pick them in order (Claude/Cursor)
+- FlashcardCreateDialog passage: a quick tap on a word picks it (highlighted), tapping it again un-picks it; picks keep tap order, shown under the passage with Clear. Front/Back send the picked words as one line in tap order, keeping each word's bold/italic/colour runs. Status: "N words picked".
+- Long-press/drag selection unchanged and still wins; a real range selection clears the picks. The field's own double-tap word selection right after a tap is ignored (300 ms, shorter than long-press). Taps are observed in PointerEventPass.Initial without consuming. Only real note text can be picked (not tables/media).
+- New FlashcardWordPicks.kt (flashcardWordAt, togglePickedWord, flashcardPickedBlocks). Test: ui/notes/FlashcardWordPicksTest (3, incl. real taps in the dialog). Notes suites 233 + 43 pass.
+- APK: releases\Virlin-wordpick-20261110-1058.apk (verified on emulator-5556, dialog closed without saving).
+
+## 2026-11-10 Reading view: collapsing top bar + raised plus
+- NoteReaderQuickTools.kt: NoteReaderHeaderScroll (NestedScrollConnection) + Modifier.noteReaderHeader: the reader's top bar slides away and fades while scrolling down, returns on scroll up, snaps open/closed after a fling (instant with animations off).
+- NotesRoute.kt (NotesReaderRoute only): header wrapped with noteReaderHeader, nestedScroll on the reader column, content clipped; NoteAddFan bottomLift = 44.dp.
+- NoteAddFan.kt: new bottomLift param (default 0.dp, editor unchanged).
+- NoteBlockEditor.kt: read-only end spacer 124.dp (editor 76.dp, paged unchanged) so the last lines clear the raised plus.
+- Tests: NoteReaderQuickToolsTest +2 (header hide/return, lift). Notes suites 278/278.
+- APK releases\Virlin-readerbar-20261110-1107.apk, verified on emulator-5556.
+
+
+## 2026-11-10 Task Page / map Page: long notes no longer freeze the screen
+- Root cause: an expanded note card composed the WHOLE note at once inside one LazyColumn item (every block is a read-only BasicTextField, every image decoded up to 1400px), so long notes blocked the main thread and could run out of memory; it repeated on every return to the Page because the card stays open.
+- NoteBlockEditor.kt: NoteReadOnlyPreviewState + LazyListScope.noteReadOnlyBlockItems (same rows/spacing/folds/video as NoteReadOnlyBlocks, one lazy item per block). NoteRowActions private -> internal.
+- NotesRoute.kt: LazyListScope.noteDocumentPreviewItems (palette wrapper).
+- MapContainerPageScreen.kt: MasterDocumentItem header/open row extracted unchanged (MasterDocumentHeader, MasterDocumentOpenRow); optional controlled expansion; MasterDocumentExpansion (saveable) + LazyListScope.masterDocumentItems: an open note card spans header/blocks/Open-row items drawn as card slices (same border, corners, paddings). Map page list now spaces items itself (4dp) instead of spacedBy.
+- TaskPageScreen.kt: list uses masterDocumentItems, items space themselves (12dp); VM loads off the main thread (Dispatchers.Default), decodes each note once per build, a newer load cancels a running one, ON_RESUME skips while the opening load runs (init + first resume no longer load twice).
+- Standalone MasterDocumentItem unchanged for other callers/tests. No data, schema or note content changes.
+- Tests: MasterDocumentItemUiTest +1 (400-block note composes only visible blocks, opens, collapses). hierarchy/page/notes suites 458 run; only the pre-existing PopupViewportUiTest / ProjectAppearanceUiTest failures.
+- APK releases\Virlin-pagefast-20261110-1137.apk, verified on emulator-5556 (long note expands at once, scrolls, Open Note + back keep position, no keyboard).
+
+
+## 2026-11-10 - Focus timer auto-pauses while the app is away (APK releases\Virlin-focuspause-20261110-1206.apk)
+- Request: Focus timer pauses exactly when the app is minimised or closed, continues from the same value when reopened; moving between Virlin screens never pauses; flip clock may restart at 00 for a new focus period but the top pill shows the full saved time for the task.
+- domain/model/WorkStreamModels.kt: FocusSession.periodRootId + FocusSession.continuationId(root,new) ("<root>/<id>" ids mark one Focus period split by app pauses); new FocusClockPause(sessionId, ownerId, taskId).
+- domain/model/FocusInvestment.kt: Split(prior, current) + split(sessions, taskId, now, pausedSessionId) - current = all pieces of the running period (or the paused one), prior = earlier closed sessions for the task; Durations summed before truncation.
+- domain/action/VirlinActions.kt + DefaultVirlinActions.kt: suspendFocusClock(at) closes the open FocusSession at the stop moment (clamped to [startedAt, now]); stream/task stays FOCUS, nothing else touched. resumeFocusClock(pause) opens a continuation session only if the same item is still in Focus, the paused session is the latest one and nothing is open (idempotent). Works in task-execution mode too. No schema change.
+- platform/FocusAutoPause.kt (new): ProcessLifecycleOwner observer (not activity-level, so in-app navigation and rotation never pause). ON_STOP -> suspend at that instant, marker in SharedPreferences virlin_focus_clock; ON_START -> resume. 30 s last-seen heartbeat bounds the loss after a crash/kill to <= 30 s; a session started from a notification while away is re-based to the return moment. Own IO scope + Mutex keeps stop/start ordered.
+- MainActivity.kt: FocusAutoPause.install(applicationContext) after VirlinGraph.init.
+- mock/DomainDisplayBridge.kt: projects focusInvestedSec / priorFocusInvestedSec from FocusInvestment.split (one session query per Focus stream instead of two).
+- mock/MockTimerEngine.kt: no FOCUS +1 display tick while paused.
+- ui/screens/NowScreen.kt: task-less pill now shows the full total (prior + current), same as the "Task total" pill. Layout unchanged.
+- Tests: new FocusClockPauseTest (7). Domain/Now/focus/timer run 1099: only the 4 known pre-existing failures (AttentionExitTest, BulkNamesTest, ExternalTimingTest, MasterResumeRoomTest).
+- Emulator-5556: APK installed and launches; on-device pause/resume run not completed - host RAM < 1 GB free made the emulator ANR system apps (Messages, System UI) and Virlin alike; dropbox ANR traces show Virlin main thread idle in nativePollOnce.
+
+## 2026-11-10 - PAUSE in the Leave chooser (APK releases\Virlin-pause-20261110-1307.apk)
+- Request: add "Pause" to the "Leave this session?" pop-up; the Focus card stays as it is with the time held, and the user can continue later.
+- NowChooserDialog.kt: lilac PAUSE button (tag chooser_pause) between LEAVE WITHOUT REMINDER and KEEP FOCUSING. Nothing else in the chooser changed.
+- AttentionIntentController.kt / NowViewModel.kt: pauseFocus(id) -> actions.suspendFocusClock() (same stop as the app-away pause: session closed, item stays FOCUS, nothing scheduled); resumeFocus(id) -> actions.resumePausedFocus().
+- VirlinActions / DefaultVirlinActions: resumePausedFocus() - Focus item with no running session continues its latest Focus period (resumeFocusClock), or starts a new session for the current item if that period can no longer be continued. False when nothing is paused.
+- model/Models.kt: display WorkStream.focusPaused. DomainDisplayBridge: FOCUS with no open FocusSession = paused; the latest session's period is held (no longer depends on the FocusAutoPause hint). MockTimerEngine does not tick a paused flap.
+- VirlinCurrentFocusCard.kt / NowScreen.kt: paused card uses the existing "FOCUS PAUSED" pill state; the LEAVE slot becomes RESUME (play icon, tag focus_resume). COMPLETE / HAND OFF unchanged. Layout unchanged.
+- Manual pause survives the app going away and back (FocusAutoPause finds no running session, so stores nothing).
+- Tests: FocusClockPauseTest +3, FocusCardPresentationTest +1, LeaveChooserDesignTest updated (PAUSE shown + calls pauseFocus). domain.* + now.* run 1084: only the 4 known pre-existing failures.
+- Emulator-5556: focus Question 17 -> navigate in app (timer runs) -> LEAVE -> PAUSE held 01:07 for 20 s and across Home/reopen -> RESUME continued from 01:07. Auto-pause re-checked: 01:41 at Home, 01:47 after 30 s away. Emulator left as found (focus left, nothing focused).
+
+## 2026-11-10 - Ready to Focus card polish + CHOOSE A TASK scrolls to When you're free (APK releases\Virlin-readycard-20261110-1323.apk; -1321 superseded)
+- NowEmptyFocusCard.kt: status pill is now the Focus card's own LivePill ("READY TO FOCUS", same capsule, dot, size) and the card uses the Focus card's insets so the pill sits where FOCUSING NOW does. Card outline/surface (NowFocusOutline / NowFocusSurface) untouched.
+- "Your attention is free." and "Choose where you want to make progress next." each stay on one line (private OneLineText: starts at the old size and steps down only if the width needs it); the prompt is italic. Shorter text block lets the timer move up/grow via the existing FitTimerColumn.
+- VirlinCurrentFocusCard.kt: LivePill private -> internal (no visual change).
+- NowScreen.kt: CHOOSE A TASK animates Now's own scroll to the "When you're free" heading (12dp inset; heading offset captured with onGloballyPositioned). When nothing is ready (section hidden) it still opens Projects as before. Accessibility label follows: "Show tasks ready to focus" / "Choose a task in Projects".
+- Tests: new NowEmptyFocusCardTest (one line each at 288dp, italic prompt, pill, click label). now.* 150/150 pass.
+- Emulator-5556: card verified; CHOOSE A TASK lands on When you're free.
+
+## 2026-11-10 14:40 - Focus card pills clear of the border, single line, COMPLETE warning + green finish
+- NowFocusSurface.kt: outline curves kept as data (same drawing); outlinePoints(); NowFocusPillRow (custom Layout: start pill left, optional end pill right, one line; insets from corners or lowers the row by least cost so the border stays 8dp from pill ends / 4dp over pill bodies; fit ignores its own added height -> no relayout loop); NowPillShape (wobbly capsule).
+- VirlinCurrentFocusCard.kt: FlowRow -> NowFocusPillRow; LivePill/MetricPill use NowPillShape (compact vertical padding 5dp); MetricPill label ShrinkToFitText (one line, shrinks to 8.5sp); new param completing -> FocusAction done state (green sweep, check + COMPLETED, pop, haptic, taps off; snaps with reduced motion).
+- NowEmptyFocusCard.kt: READY TO FOCUS pill in NowFocusPillRow.
+- NowScreen.kt: FocusHeroCard asks CompleteTaskDialog before completing a task (WorkStream-level keeps CompleteWorkStreamDialog only; HAND OFF unchanged), then completing=true, existing complete after 850ms (150ms reduced motion). Tags focus_pill_row, focus_live_pill, focus_metric_pill, complete_task_confirm/cancel.
+- Test: now/FocusPillsAndCompleteTest (5). now.* 155/155.
+- APK releases\Virlin-focuspills-20261110-1423.apk (1354, 1412 superseded). Verified emulator-5556; state restored (left focus).
+
+## 2026-11-10 15:30 - Soft dock edge + plain white Now background
+- ApprovedNowDock.kt: 28dp white fade drawn above the dock (over the last dp of page content) so the page dissolves into the bar instead of a hard white edge; draw-only, no touch handling; strip/bubble/glows unchanged.
+- NowApprovedStyle.kt: NowApprovedBackground is plain white (coral top-left + lilac top-right glows removed).
+- now.* 155/155. APK releases\Virlin-softdock-20261110-1522.apk, verified on emulator-5556.
+
+## 2026-11-10 Stage-by-stage Back + project icon on WorkStream/task screens
+- VirlinStreamTasks.kt: BackHandler (enabled only when the in-screen task path is non-empty) climbs one level per system Back (subtask -> task -> workstream task list); at the workstream root Back falls through to navigation (-> project overview -> Projects). New optional projectBadge slot in the top bar after the back arrow.
+- HierarchyScreens.kt: WorkStreamDetailScreen passes a 48dp ProjectIcon badge (StreamProjectBadgeTag, 'Open project overview') for the owning project; NavController.openProjectOverview pops back to the project if it is already behind, else navigates (launchSingleTop).
+- Test: hierarchy/StageBackNavigationUiTest (2). Pre-existing PopupViewportUiTest / ProjectAppearanceUiTest failures unchanged. APK releases\Virlin-stageback-20261110-1534.apk, verified on emulator-5556.
+
+## 2026-11-10 Irregular Focus-card buttons
+- NowFocusSurface.kt: nowButtonShape(wobble, mirror) - tilted pebble (opposed sloping edges, unequal corner radii, S-swung long edges), distinct from NowPillShape; NowChooseButtonShape (1.6, clearly irregular), NowLeaveButtonShape (.4), NowCompleteButtonShape (.45, mirrored).
+- VirlinCurrentFocusCard.kt: FocusAction takes a shape (default Leave/Complete by primary); layered key styling unchanged.
+- NowEmptyFocusCard.kt: CHOOSE A TASK now uses the same layered key look as COMPLETE (rose base strip, pink gradient face, light border, teal shadow, press scale); tag, role and click label unchanged; heights unchanged.
+- Test: now/FocusButtonShapeTest (4; previews in build/outputs, not goldens). now.* 159/159. APK releases\Virlin-irregbtn-20261110-1923.apk installed on emulator-5556 (device check limited by emulator ANR/starvation).
+
+## 2026-11-10 Momentum label fits the dock bubble
+- ApprovedNowDock.kt: the on-bubble label is measured; when wider than the bubble's lower band (slot*.84*.72) it condenses (scaleX to fit, scaleY half as much) and lifts 2.5dp in proportion to how much bubble is under it. Only Momentum triggers it; bubble shape/size/motion, other labels, semantics and layout unchanged.
+- Test: now/DockBubbleLabelTest (previews in build/outputs). now.* 160/160. APK releases\Virlin-dockmomentum-20261110-1936.apk verified on emulator-5556.
+
+## 2026-11-10 Status-bar strip matches Now
+- VirlinApp.kt: Scaffold containerColor (what shows behind the status bar under enforced edge-to-edge, targetSdk 36 on Android 15+) is white on Now as well as Inbox/notes reader, warm #F8F7F4 elsewhere, animated 260ms (snap with reduced motion) so switching tabs never shows a hard change. Pages and Now background unchanged.
+- Verified on emulator-5556 by pixel sampling: Now strip/page FFFFFF; Projects/Apps strip/page F8F7F4. now.* + navigation.* 163/163. APK releases\Virlin-statusstrip-20261110-1946.apk.
+
+## 2026-11-10 20:32 - Flashcard fonts, pictures and optional note update
+- New ui/notes/FlashcardFontStrip.kt: horizontally scrollable font strip (Default + handwritten, script/stylish and readable Google fonts, filtered to NoteFonts.familyFor != null). Applies to the selection in the focused line, else the whole face. Picking a font on the front turns card style off so the font shows.
+- FlashcardCreateDialog.kt: '+ Image' chip next to '+ Line' (system picker -> NoteImageStore.import, IMAGE block after the focused line); picture rows have up / remove / down; orphan imported files are deleted when the dialog closes. Optional noteUpdate param shows the 'Update the note too' switch (off by default, edit mode only). onSave signature unchanged.
+- New ui/notes/FlashcardNoteSync.kt: planFlashcardNoteSync maps each card part to an exact, unique slice of a note block; edits replace only that slice (runs included), new parts/pictures insert next to their neighbour (above or below by card order), removed parts are kept in the note, missing/ambiguous text is skipped.
+- FlashcardsRoute.kt: after the card saves, if the switch is on, the note is saved with expectedRevision (rich-structure or stale edits are refused, note untouched); result shown in a Toast.
+- NotesViewModel.refreshIfStoredChanged + NotesRoute ON_RESUME: an open note with no unsaved edits shows the updated version; unsaved typing is never replaced. refusalText is now internal.
+- Tests: ui/notes/FlashcardNoteSyncTest.kt (12). Notes/flashcard/notedoc suites 318/318 pass.
+- APK: releases\Virlin-flashcardfonts-20261110-2006.apk (installed on emulator-5556). No schema change, no dependency change, not committed.
+
+## 2026-11-10 20:57 - Page notes open in preview first
+- NotesRoute.kt: notePreviewRouteFor(editorRoute) maps notes/ and capture_note/ editor routes to the note_reader route (null for anything else); NavController.openForReading(route) navigates to the editor and then its reader, so the reader (which shares the editor entry's view model) shows first and Back lands in the editor, then the Page.
+- MapContainerPageScreen.kt (Added here / Across map|branch cards: open icon, Open row, card tap) and TaskPageScreen.kt openBlock NOTE now call openForReading. To-do, prompt, link, voice, file, PDF, image open exactly as before. New notes created from the map still open the editor.
+- Tests: ui/notes/NotePreviewFirstTest.kt (4). notes/page/hierarchy/navigation suites 403 run, only the pre-existing PopupViewportUiTest / ProjectAppearanceUiTest failures.
+- APK: releases\Virlin-notepreview-20261110-2054.apk (installed on emulator-5556). Not committed.
+
+## 2026-11-10 21:09 - Needs You sort: strip instead of popup
+- NeedsYouSort.kt: DropdownMenu removed. NeedsYouSortControl now toggles (40dp target, soft 32dp highlight while open; onSelect param kept, unused). New NeedsYouSortStrip: white rounded strip under the header, chips with icons separated by hairline bars inside NoteFeatheredRow (feathered ends, one-time peek), Role.RadioButton + selected semantics, existing tags kept; picking applies and folds it away; reduced motion = no animation.
+- New BY_PROJECT mode ("By project"): groups items by project name (case-insensitive), canonical rank inside, items without a project last. Display-only like the others; ranks/colours unchanged. NowViewModel passes project titles.
+- VirlinNeedsYouSection: optional belowHeader slot; NowScreen wires the strip there. Nothing else on Now changed.
+- Tests: now/NeedsYouSortStripTest (2), NeedsYouSortTest +1 (label list updated for the new mode). now.* 163/163 pass; androidTest NeedsYouSortUiTest updated to render the strip and compiles.
+- APK: releases\Virlin-sortstrip-20261110-2107.apk (installed on emulator-5556). Not committed.
+
+## 2026-11-14 Project storage: exact live split (File and media storage)
+- New data/project/ProjectStorageBreakdown.kt: per-kind byte breakdown (Media: note pictures, note recordings, flashcard pictures, images, PDFs, other files, voice notes, mind-map images, project icon; Project data: notes, captures, workstreams/tasks/Pages, flashcards). Files de-duplicated by canonical path; project data = UTF-8 size of the project's archive manifest sections; flashcards = encoded rows.
+- ProjectStorageTools.breakdown(); existing usage() untouched (backup/duplicate).
+- FlashcardStore.encodedBytes() (row() extracted, same JSON).
+- New ui/hierarchy/ProjectStorageUsageView.kt; ProjectStorageSettings USAGE section uses it and re-measures on repository changes, on resume, and every 4 s while open.
+- Test: ProjectStorageBreakdownTest (4). No schema change. APK releases\Virlin-storagesplit-20261114-0932.apk.
+
+## 2026-11-14 Export project: single .virlin project file (replaces PDF / Markdown / ZIP)
+- New data/project/VirlinProjectFile.kt: VirlinProjectFile (format constants, fileName, sha256, sniff, verify) + VirlinProjectWriter. Container = ZIP: 'mimetype' first+stored (application/vnd.virlin.project+zip), virlin.json header (format 1, generator, timing mode, counts, data sha256, media index with bytes/sha256/kind/modifiedAt/compression, missing list), data/project.json (ProjectArchive.manifest + history + flashcards + per-project settings), data/summary.md, README.txt, media/<store>/<path> byte-exact (already-compressed kinds stored, others deflate; type sniffed from magic bytes for extensionless note pictures/recordings).
+- Media covered: attachments + sidecars, voices, project icon, map previews, note images, note audio, flashcard pictures/recordings.
+- Settings covered: project_appearance, hierarchy_timer_display, project_block_order, note_page_setup, note_positions (exact values+types), MapAppearanceStore.exportJson, FlashcardDeckStyleStore.entriesFor.
+- Timing: KEEP (all sessions/intervals/tracked seconds) or RESET (focusSessions/externalIntervals empty, externalTrackedSeconds 0, processingStartedAt null; states/history kept). The live project is never changed.
+- Export is verified after writing (verify) and the saved copy is re-hashed via the content resolver.
+- ProjectStorageTools: removed ProjectExportFormat, export(format) and writePdf; files() now internal; added exportVirlin. ProjectArchive markdown wording updated.
+- MapAppearanceStore: encode() extracted (same JSON) + exportJson. FlashcardStore.exportRow. FlashcardDeckStyleStore.entriesFor.
+- UI: new ui/hierarchy/ProjectVirlinExportView.kt; ProjectStorageSettings EXPORT section uses it (live preview counts, timing choice, Export .virlin file).
+- Tests: new VirlinProjectFileTest (6); ProjectStorageToolsTest, ProjectCompletionUiTest, androidTest ProjectStorageDeviceTest updated. Import not implemented (later). APK releases\Virlin-virlinexport-20261114-1007.apk.
+
+## 2026-11-14 Import project: .virlin file in the "+ Project" dialog (replaces project-level Bulk)
+- BulkCreationDialog: project dialog only (projectId == null, no task destination, not embedded) shows New / Import instead of Single / Bulk; Import body = new ui/hierarchy/ProjectVirlinImportPane.kt. Workstream and task bulk dialogs unchanged.
+- New data/project/VirlinProjectImporter.kt: inspect(file) = full verify + dry-run plan -> VirlinImportPreview; import(file, title) copies media (sha checked), imports flashcards, then one repository.transaction; on failure created files and cards are removed. Every id is new (importing twice adds two projects); owner keys, managed paths and ids inside text are remapped.
+- Single Focus kept: FOCUS work arrives READY, open sessions end at exportedAt. KEEP shifts running clocks by now - exportedAt; RESET starts running work now. Unknown enums/page types reject the file (nothing imported). Settings (prefs, map appearance, deck styles) restored best-effort after commit with warnings.
+- Supporting additions: WorkStreamWriter.saveExternalRun (default no-op; Room implements), FlashcardStore.decodeRow/importCards/removeCards, FlashcardDeckStyleStore.importEntries, MapAppearanceStore.decode/importJson, ProjectArchive prompt codeText exported.
+- Tests: new VirlinProjectImportTest (6, pass); BulkCreationDialogUiTest and PopupViewportUiTest bulk cases moved to the workstream dialog. No schema change.
+- Verified on emulator-5556: exported Virlin Development, imported via + Project > Import (preview, counts, name), new project matched original (5 workstreams same states, 18 tasks, capture, notes). Test project deleted, export removed, DB counts/files restored; orphan flashcards + note position prefs left by the app's existing project delete removed by hand.
+- APK releases\Virlin-import-20261114-1444.apk.

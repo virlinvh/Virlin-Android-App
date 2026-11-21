@@ -1,10 +1,17 @@
 package com.virlin.app.hierarchy
 
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.unit.dp
 import com.virlin.app.ui.hierarchy.MasterDocumentEntry
 import com.virlin.app.ui.hierarchy.MasterDocumentItem
+import com.virlin.app.ui.hierarchy.masterDocumentItems
+import com.virlin.app.ui.hierarchy.rememberMasterDocumentExpansion
 import com.virlin.app.ui.hierarchy.previewableNoteBlocks
 import com.virlin.app.ui.hierarchy.noteCardTitle
 import com.virlin.app.domain.notedoc.NoteDocAlign
@@ -84,6 +91,35 @@ class MasterDocumentItemUiTest {
         compose.onNodeWithContentDescription("Open Note Prompt Checking").assertExists()
         compose.onNodeWithTag("map_page_item_note-2").performClick()
         compose.onNodeWithTag("map_page_open_top_note-2").performClick()
+        compose.runOnIdle { assertEquals(2, opened) }
+    }
+
+    @Test fun anOpenLongNoteInAPageListOnlyComposesTheBlocksOnScreen() {
+        var opened = 0
+        val blocks = (0 until 400).map { NoteDocBlock("b$it", NoteDocBlockType.PARAGRAPH, "Line number $it") }
+        compose.setContent {
+            val expansion = rememberMasterDocumentExpansion("page")
+            LazyColumn(Modifier.fillMaxSize().testTag("page_list")) {
+                masterDocumentItems(
+                    listOf(MasterDocumentEntry("long", "Long note", "Note", "FLAT", "route", noteBlocks = blocks)),
+                    Color.Black, Color(0xFF6033B1), null, expansion, gap = 12.dp,
+                    onOpen = { opened++ },
+                )
+            }
+        }
+        compose.onNodeWithText("Line number 0").assertDoesNotExist()
+        compose.onNodeWithTag("map_page_item_long").performClick()
+        compose.onNodeWithText("Line number 0").assertExists()
+        val composed = compose.onAllNodes(hasText("Line number", substring = true)).fetchSemanticsNodes().size
+        assertTrue("only the visible part of a 400-block note is composed, was $composed", composed in 1..60)
+        compose.onNodeWithTag("page_list").performScrollToNode(hasTestTag("map_page_open_long"))
+        compose.onNodeWithText("Line number 399").assertExists()
+        compose.onNodeWithTag("map_page_open_long").performClick()
+        compose.runOnIdle { assertEquals(1, opened) }
+        compose.onNodeWithTag("page_list").performScrollToNode(hasTestTag("map_page_item_long"))
+        compose.onNodeWithTag("map_page_item_long").performClick()
+        compose.onNodeWithText("Line number 0").assertDoesNotExist()
+        compose.onNodeWithTag("map_page_open_top_long").performClick()
         compose.runOnIdle { assertEquals(2, opened) }
     }
 

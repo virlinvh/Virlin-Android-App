@@ -26,8 +26,9 @@ import java.time.Instant
  * frozen Now UI animates (`focusInvestedSec`, `processingElapsedSec`, `checkInRemainingSec`).
  * The bridge never reads state back from MockData, so there is a single mutable owner.
  *
- * [DisplayStream.focusInvestedSec] = current open [FocusSession] elapsed (split-flap).
- * [DisplayStream.priorFocusInvestedSec] = closed sessions for the active task (cumulative base).
+ * [DisplayStream.focusInvestedSec] = the current Focus period's [FocusSession]s (split-flap),
+ * which continues across app pauses ([FocusInvestment.split]).
+ * [DisplayStream.priorFocusInvestedSec] = earlier closed sessions for the same task (cumulative base).
  * Live total invested = prior + current session; never pass the total into SplitFlapTimer.
  */
 object DomainDisplayBridge {
@@ -46,23 +47,25 @@ object DomainDisplayBridge {
                 // stored counter — so it is right again after a process restart.
                 val focusStreams = domainStreams.filter { it.state == WorkStreamState.FOCUS }
                 // Fail soft: a bad FocusSession row must never kill display projection.
-                val openSessions = focusStreams.associate { s ->
-                    s.id to runCatching { executionRepository.getOpenFocusSession(s.id) }.getOrNull()
-                }
-                val priorByStream = focusStreams.associate { s ->
+                // The split-flap shows the running Focus period (all its pieces across app
+                // pauses); the earlier total for the same task is kept separately.
+                val now = clock.now()
+                val splitByStream = focusStreams.associate { s ->
                     s.id to runCatching {
                         val tAgg = android.os.SystemClock.elapsedRealtime()
                         val sessions = executionRepository.getFocusSessions(s.id)
-                        val prior = FocusInvestment.priorClosedSeconds(sessions, s.activeTaskId)
-                            .coerceIn(0L, Int.MAX_VALUE.toLong())
-                            .toInt()
+                        // In Focus with nothing running = paused (PAUSE, or the app away): the
+                        // latest session's period is held, not reset.
+                        val paused = sessions.none { it.isOpen }
+                        val held = if (paused) sessions.maxByOrNull { it.startedAt }?.id else null
+                        val split = FocusInvestment.split(sessions, s.activeTaskId, now, held)
                         val dt = android.os.SystemClock.elapsedRealtime() - tAgg
                         VirlinStartup.mark(
                             "FocusInvestment_AGG",
                             "stream=${s.id} sessionRows=${sessions.size} durationMs=$dt"
                         )
-                        prior
-                    }.getOrDefault(0)
+                        split to paused
+                    }.getOrNull()
                 }
                 MockData.mutate { display ->
                     val known = display.map { it.id }.toHashSet()
@@ -80,7 +83,7 @@ object DomainDisplayBridge {
                     }
                     (display + added).filter { it.id in byId }.map { d ->
                         byId[d.id]?.let {
-                            project(d, it, clock.now(), openSessions[d.id], priorByStream[d.id] ?: 0).let { row ->
+                            project(d, it, now, splitByStream[d.id]?.first, splitByStream[d.id]?.second == true).let { row ->
                                 tasksById[it.id]?.let { task -> row.copy(title = task.title,
                                     subtitle = com.virlin.app.domain.model.TaskHierarchy.ancestry(repository.tasks.value, task.id)
                                         ?.reversed()?.dropLast(1)?.joinToString(" › ") { node -> node.title }.orEmpty()) } ?: row
@@ -135,12 +138,13 @@ object DomainDisplayBridge {
         display: DisplayStream,
         domain: DomainStream,
         now: Instant,
-        openSession: FocusSession? = null,
-        priorFocusInvestedSec: Int = 0
+        focus: FocusInvestment.Split? = null,
+        focusPaused: Boolean = false
     ): DisplayStream {
         val newState = toDisplayState(domain.state)
         val checkIn = domain.checkAt?.let { Duration.between(now, it).seconds.toInt() }
-        val focusSec = openSession?.let { Duration.between(it.startedAt, now).seconds.toInt().coerceAtLeast(0) }
+        val focusSec = focus?.currentSeconds?.coerceIn(0L, Int.MAX_VALUE.toLong())?.toInt()
+        val priorFocusInvestedSec = focus?.priorSeconds?.coerceIn(0L, Int.MAX_VALUE.toLong())?.toInt() ?: 0
         val processingSec = domain.processingStartedAt?.let { Duration.between(it, now).seconds.toInt().coerceAtLeast(0) }
         return display.copy(
             title = domain.title,
@@ -157,6 +161,7 @@ object DomainDisplayBridge {
             // display counter (MockTimerEngine). Seed starts at 0 so first paint is not a fake 32:35.
             focusInvestedSec = focusSec ?: 0,
             priorFocusInvestedSec = if (domain.state == WorkStreamState.FOCUS) priorFocusInvestedSec else 0,
+            focusPaused = domain.state == WorkStreamState.FOCUS && focusPaused,
             isOverdue = newState == StreamState.NEEDS_YOU && (checkIn ?: 0) < 0
         )
     }

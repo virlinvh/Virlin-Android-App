@@ -25,7 +25,10 @@ import androidx.lifecycle.repeatOnLifecycle
 @Composable
 internal fun MasterTimerButton(running: Boolean, busy: Boolean, onPause: () -> Unit,
     runningColor: Color? = null, scopeLabel: String? = null, tag: String = "master_timer_button",
-    runningGradient: List<Color>? = null) {
+    runningGradient: List<Color>? = null,
+    /** Frame colour while running; null paints the frame with the sand colour. */
+    runningFrame: Color? = null,
+    glyphScale: Float = 1f) {
     var elapsed by remember { mutableDoubleStateOf(0.0) }
     val owner = LocalLifecycleOwner.current
     val motion = remember { ValueAnimator.areAnimatorsEnabled() }
@@ -45,7 +48,7 @@ internal fun MasterTimerButton(running: Boolean, busy: Boolean, onPause: () -> U
             } else if (running) "Pause all human and external timers" else "Resume master-paused timers"
             stateDescription = if (running) "Timers running" else "Timers paused"
         }) {
-        Canvas(Modifier.width(14.dp).height(20.dp)) {
+        Canvas(Modifier.width(14.dp * glyphScale).height(20.dp * glyphScale)) {
             val phase = (elapsed % 6.6).toFloat()
             val fraction = (phase / 6f).coerceIn(0f, 1f)
             val turn = if (phase <= 6f) 0f else {
@@ -54,7 +57,8 @@ internal fun MasterTimerButton(running: Boolean, busy: Boolean, onPause: () -> U
             }
             val ink = if (running) runningColor ?: Color(0xFFA77C35) else Color(0xFF80858A)
             val sand = if (running) runningColor ?: Color(0xFFD6AA55) else Color(0xFF9CA1A5)
-            val inkBrush = if (running && runningGradient != null) Brush.verticalGradient(runningGradient)
+            val inkBrush = if (running && runningFrame != null) SolidColor(runningFrame)
+                else if (running && runningGradient != null) Brush.verticalGradient(runningGradient)
                 else SolidColor(ink)
             val sandBrush = if (running && runningGradient != null) Brush.verticalGradient(runningGradient)
                 else SolidColor(sand)

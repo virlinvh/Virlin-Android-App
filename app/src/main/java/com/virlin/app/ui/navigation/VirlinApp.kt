@@ -254,6 +254,14 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
         // Stitch: the app recedes behind the open Agent with a light blur + dim. The blur is a constant
         // 2dp only while the Agent is visible (never animated per frame; API 31+ RenderEffect, no-op below).
         Box(Modifier.fillMaxSize().then(if (agentVisible) Modifier.blur(2.dp) else Modifier)) {
+        // The container is what shows behind the status bar, so it follows the page's own
+        // top colour (white on Now and Inbox) and eases between pages instead of snapping.
+        val pageWhite = currentRoute == RootDestination.NOW.route || currentRoute == "inbox" ||
+            currentRoute == com.virlin.app.ui.notes.NOTES_READER_ROUTE
+        val containerColor by androidx.compose.animation.animateColorAsState(
+            if (pageWhite) Color.White else Color(0xFFF8F7F4),
+            if (reducedMotion) androidx.compose.animation.core.snap() else tween(260, easing = FastOutSlowInEasing),
+            label = "scaffoldContainer")
         Scaffold(
             // Keep the real footer above the IME; descendants consume this inset rather
             // than covering system back/home controls or subtracting the keyboard twice.
@@ -263,10 +271,9 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
             contentWindowInsets = if (currentRoute == com.virlin.app.ui.notes.NOTES_READER_ROUTE)
                 androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0)
             else ScaffoldDefaults.contentWindowInsets,
-            // The Inbox is a pure-white surface by design; every other route keeps the app's
+            // Now and the Inbox are pure-white surfaces by design; every other route keeps the app's
             // warm off-white, so the container follows the route rather than being tinted for all.
-            containerColor = if (currentRoute == "inbox" || currentRoute == com.virlin.app.ui.notes.NOTES_READER_ROUTE)
-                Color.White else Color(0xFFF8F7F4),
+            containerColor = containerColor,
             // Bottom-attached root navigation (Now · Streams · Pulse · Inbox). The bar owns the
             // navigation-bar inset itself; nothing else pads the bottom, so there is no gap.
             bottomBar = { if (barOnThisRoute && !(currentRoute == com.virlin.app.ui.map.ProjectMapRoute && mapFocusMode)) {
@@ -300,19 +307,19 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
                 navController = navController,
                 startDestination = "now",
                 modifier = Modifier.fillMaxSize(),
-                // Opening an item from a Page slides it in; everything else keeps the
-                // library default (a 700 ms cross-fade), as does reduced motion.
+                // Opening an item from a Page slides it in; switching bottom-bar tabs is a short
+                // fade-through; everything else keeps the library default (a 700 ms cross-fade).
                 enterTransition = {
-                    (if (reducedMotion) null else pageOpenEnter()) ?: fadeIn(animationSpec = tween(700))
+                    (if (reducedMotion) null else pageOpenEnter()) ?: rootTabEnter() ?: fadeIn(animationSpec = tween(700))
                 },
                 exitTransition = {
-                    (if (reducedMotion) null else pageOpenExit()) ?: fadeOut(animationSpec = tween(700))
+                    (if (reducedMotion) null else pageOpenExit()) ?: rootTabExit() ?: fadeOut(animationSpec = tween(700))
                 },
                 popEnterTransition = {
-                    (if (reducedMotion) null else pageOpenPopEnter()) ?: fadeIn(animationSpec = tween(700))
+                    (if (reducedMotion) null else pageOpenPopEnter()) ?: rootTabEnter() ?: fadeIn(animationSpec = tween(700))
                 },
                 popExitTransition = {
-                    (if (reducedMotion) null else pageOpenPopExit()) ?: fadeOut(animationSpec = tween(700))
+                    (if (reducedMotion) null else pageOpenPopExit()) ?: rootTabExit() ?: fadeOut(animationSpec = tween(700))
                 }
             ) {
                 composable("now") { NowScreen(navController) }

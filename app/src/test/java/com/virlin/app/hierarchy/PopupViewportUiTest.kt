@@ -77,7 +77,7 @@ class PopupViewportUiTest {
     @Config(qualifiers = "w360dp-h300dp")
     fun bulkFormInKeyboardSizedViewportCanTypeAndReachPreview() {
         compose.setContent {
-            com.virlin.app.ui.hierarchy.BulkCreationDialog("New project", "Project name", null,
+            com.virlin.app.ui.hierarchy.BulkCreationDialog("New workstream in Base", "Workstream name", "base",
                 onDismiss = {}, onSingle = {}, startBulk = true)
         }
         compose.onNode(hasSetTextAction()).performScrollTo()

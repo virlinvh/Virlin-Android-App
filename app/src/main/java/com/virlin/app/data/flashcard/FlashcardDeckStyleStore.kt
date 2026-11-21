@@ -70,6 +70,29 @@ object FlashcardDeckStyleStore {
         }
     }
 
+    /** The saved deck styles of branches whose id is in [ids], exactly as stored. */
+    suspend fun entriesFor(context: Context, ids: Set<String>): JSONObject = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val decks = read(context)
+            JSONObject().also { out ->
+                decks.keys().forEach { key -> if (key.substringAfter(':') in ids) out.put(key, decks.get(key)) }
+            }
+        }
+    }
+
+    /** Adds saved deck styles (project import) exactly as given; existing entries are never replaced. */
+    suspend fun importEntries(context: Context, entries: JSONObject) = mutex.withLock {
+        if (entries.length() == 0) return@withLock
+        withContext(Dispatchers.IO) {
+            val decks = read(context)
+            entries.keys().forEach { key ->
+                require(key.length in 1..512) { "Deck key must be 1–512 characters" }
+                if (!decks.has(key)) decks.put(key, decode(entries.getJSONObject(key)).let(::encode))
+            }
+            write(context, decks)
+        }
+    }
+
     private fun read(context: Context): JSONObject {
         val atomic = file(context)
         if (!atomic.baseFile.exists() && !File(atomic.baseFile.path + ".bak").exists()) return JSONObject()

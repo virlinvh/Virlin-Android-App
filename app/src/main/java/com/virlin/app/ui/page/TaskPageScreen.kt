@@ -1,5 +1,6 @@
 package com.virlin.app.ui.page
 
+import com.virlin.app.ui.notes.openForReading
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -35,7 +36,8 @@ import com.virlin.app.domain.capture.LinkDocumentCodec
 import com.virlin.app.domain.activity.NoteBlockText
 import com.virlin.app.domain.model.*
 import com.virlin.app.ui.hierarchy.MasterDocumentEntry
-import com.virlin.app.ui.hierarchy.MasterDocumentItem
+import com.virlin.app.ui.hierarchy.masterDocumentItems
+import com.virlin.app.ui.hierarchy.rememberMasterDocumentExpansion
 import com.virlin.app.ui.hierarchy.taskPageBody
 import com.virlin.app.ui.hierarchy.previewableNoteBlocks
 import com.virlin.app.ui.hierarchy.noteCardTitle
@@ -94,27 +96,46 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
     private val actions = TaskPageActions(repository, VirlinGraph.clock, VirlinGraph.ids)
     var state by mutableStateOf(TaskPageState()); private set
 
+    private var loading: kotlinx.coroutines.Job? = null
+
     init { refresh() }
 
-    fun refresh() = viewModelScope.launch {
-        runCatching {
-            VirlinGraph.ensureReady()
-            actions.loadAndReconcile(taskId)
-            buildState()
-        }.onFailure { state = state.copy(loading = false, message = it.message ?: "Could not open Page") }
+    /** A newer load replaces one still running, so the page never builds twice at once. */
+    fun refresh() {
+        loading?.cancel()
+        loading = viewModelScope.launch {
+            runCatching {
+                VirlinGraph.ensureReady()
+                actions.loadAndReconcile(taskId)
+                buildState()
+            }.onFailure {
+                if (it is kotlinx.coroutines.CancellationException) throw it
+                state = state.copy(loading = false, message = it.message ?: "Could not open Page")
+            }
+        }
     }
 
+    /** On return to the Page; skipped while the opening load is still running. */
+    fun refreshIfIdle() { if (loading?.isActive != true) refresh() }
+
     private suspend fun buildState() {
-        val task = repository.getTask(taskId)
-        if (task == null) { state = TaskPageState(loading = false, message = "Task not found"); return }
+        state = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { loadState() }
+    }
+
+    private suspend fun loadState(): TaskPageState {
+        val task = repository.getTask(taskId) ?: return TaskPageState(loading = false, message = "Task not found")
         val blocks = repository.getTaskPageBlocks(taskId)
         val captures = repository.captures.value.associateBy { it.id }
+        // Each note document is read and decoded once per build.
+        val docs = HashMap<String, com.virlin.app.domain.notedoc.VirlinNoteDoc?>()
+        suspend fun noteDoc(owner: String) =
+            if (owner in docs) docs[owner] else repository.getNoteDoc(owner).also { docs[owner] = it }
         suspend fun rowsFor(ownerId: String): List<TaskPageRow> {
           val ownerBlocks = if (ownerId == taskId) blocks else repository.getTaskPageBlocks(ownerId)
           val steps = repository.getTaskSteps(ownerId)
           return ownerBlocks.filterNot { block ->
             block.typeKey == TaskPageTypeKeys.NOTE && TaskPageTypeKeys.isExtraNoteOwner(block.contentId) &&
-                repository.getNoteDoc(block.contentId) == null
+                noteDoc(block.contentId) == null
           }.map { block ->
             val capture = captures[block.contentId]
             when (block.typeKey) {
@@ -123,7 +144,7 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
                     TaskPageRow(block, "To-do", "Checklist", body.lineSequence().first(), fullBody = body)
                 }
                 TaskPageTypeKeys.NOTE -> {
-                    val doc = repository.getNoteDoc(block.contentId)
+                    val doc = noteDoc(block.contentId)
                     val body = taskPageBody(block.typeKey, ownerId, steps, doc)
                     TaskPageRow(block, "Note", noteCardTitle(doc), body.lineSequence().first(), fullBody = body,
                         noteBlocks = previewableNoteBlocks(doc))
@@ -176,7 +197,7 @@ class TaskPageViewModel(private val taskId: String) : ViewModel() {
         val streams = repository.streams.value.filter { stream -> projectTasks.any { it.workStreamId == stream.id } }
         val projectTitle = task.projectId?.let { id -> repository.projects.value.firstOrNull { it.id == id }?.title }
             ?: streams.firstOrNull()?.title ?: "Project"
-        state = TaskPageState(task, rows, destinations, branchSections, loading = false,
+        return TaskPageState(task, rows, destinations, branchSections, loading = false,
             projectTitle = projectTitle, projectTasks = projectTasks, projectStreams = streams)
     }
 
@@ -247,7 +268,7 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, vm) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) vm.refresh()
+            if (event == Lifecycle.Event.ON_RESUME) vm.refreshIfIdle()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -257,6 +278,8 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
     var acrossBranch by rememberSaveable(taskId) { mutableStateOf(false) }
     var moving by remember { mutableStateOf<TaskPageRow?>(null) }
     var deleting by remember { mutableStateOf<TaskPageRow?>(null) }
+    val expansion = rememberMasterDocumentExpansion(taskId)
+    if (expansion.open.isNotEmpty()) com.virlin.app.ui.notes.NoteAudioPlaybackHost()
     val palette = rememberProjectPalette(s.task?.projectId)
     val green = palette?.let { Color(it.secondary) } ?: Color(0xFF07865B)
     val ink = palette?.let { Color(it.text) } ?: Color(0xFF17231E)
@@ -297,11 +320,12 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
                         Text(if (acrossBranch) "Items added to this task and its subtasks will appear here."
                              else "Items added from this task's + menu will appear here.", color = Color.Gray)
                     }
-                } else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                  sections.forEach { section ->
+                } else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 20.dp)) {
+                  // Items space themselves (12dp) so an open note card can span several items.
+                  sections.forEachIndexed { sectionIndex, section ->
                     item("heading-${section.task.id}") {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).then(if (section.task.id == taskId) Modifier
+                        Row(Modifier.padding(top = if (sectionIndex == 0) 0.dp else 12.dp)
+                            .fillMaxWidth().padding(horizontal = 20.dp).then(if (section.task.id == taskId) Modifier
                             else Modifier.clickable { navController.navigate(taskPage(section.task.id)) }),
                             verticalAlignment = Alignment.CenterVertically) {
                             Text(if (section.task.id == taskId) "Added to ${section.task.title}"
@@ -313,15 +337,20 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
                         }
                     }
                     if (section.rows.isEmpty()) item("empty-${section.task.id}") {
-                        Text("Nothing added here yet", color = Color.Gray, fontSize = 13.sp)
+                        Text("Nothing added here yet", color = Color.Gray, fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 12.dp))
                     }
-                    items(section.rows, key = { it.block.id }) { row ->
-                    Column {
-                        MasterDocumentItem(
+                    val rowsById = section.rows.associateBy { it.block.id }
+                    masterDocumentItems(
+                        section.rows.map { row ->
                             MasterDocumentEntry(row.block.id, row.title, row.label, row.fullBody,
                                 row.block.contentId, row.mediaPath,
-                                row.attachmentKind == AttachmentKind.IMAGE, noteBlocks = row.noteBlocks),
-                            ink, green, palette) { openBlock(navController, row, vm::notify) }
+                                row.attachmentKind == AttachmentKind.IMAGE, noteBlocks = row.noteBlocks)
+                        },
+                        ink, green, palette, expansion, gap = 12.dp,
+                        onOpen = { entry -> rowsById[entry.id]?.let { openBlock(navController, it, vm::notify) } },
+                    ) { entry ->
+                        val row = rowsById.getValue(entry.id)
                         if (organize && row.block.taskId == taskId) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp),
                                 horizontalArrangement = Arrangement.End) {
@@ -341,7 +370,6 @@ fun TaskPageScreen(taskId: String?, navController: NavController) {
                                 }
                             }
                         }
-                    }
                     }
                   }
                 }
@@ -394,7 +422,7 @@ private fun iconFor(key: String) = when (key) { TaskPageTypeKeys.TODO -> Icons.D
 private fun openBlock(nav: NavController, row: TaskPageRow, onUnsupported: (String) -> Unit) {
     when (row.block.typeKey) {
         TaskPageTypeKeys.TODO -> nav.navigate(com.virlin.app.ui.todo.taskTodo(row.block.taskId))
-        TaskPageTypeKeys.NOTE -> nav.navigate(com.virlin.app.ui.notes.notesRoute(row.block.contentId, row.title))
+        TaskPageTypeKeys.NOTE -> nav.openForReading(com.virlin.app.ui.notes.notesRoute(row.block.contentId, row.title))
         TaskPageTypeKeys.capture(CaptureType.PROMPT) -> nav.navigate(com.virlin.app.ui.prompt.promptEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.LINK) -> nav.navigate(com.virlin.app.ui.link.linkEditorRoute(row.block.contentId))
         TaskPageTypeKeys.capture(CaptureType.VOICE) -> nav.navigate(com.virlin.app.ui.voice.voiceEditorRoute(row.block.contentId))

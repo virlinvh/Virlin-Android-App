@@ -293,7 +293,10 @@ fun SplitFlapDigit(
     fontScale: Float = 1f,
     /** Unused by the digit engine; kept for call-site binary compatibility. */
     animate: Boolean = true,
-    forceFlipEpoch: Int = 0
+    forceFlipEpoch: Int = 0,
+    /** Optional Now-only typography; omitted callers retain their original face. */
+    fontFamily: androidx.compose.ui.text.font.FontFamily? = null,
+    faceBrush: Brush? = null
 ) {
     val reducedMotion = rememberReducedMotionForSplitFlap()
 
@@ -378,6 +381,8 @@ fun SplitFlapDigit(
             innerShadowHeight = innerShadowHeight,
             innerShadowOffset = innerShadowOffset,
             textOffset = textOffset,
+            fontFamily = fontFamily,
+            faceBrush = faceBrush,
             modifier = Modifier.zIndex(0f)
         )
 
@@ -391,6 +396,8 @@ fun SplitFlapDigit(
             innerShadowHeight = innerShadowHeight,
             innerShadowOffset = innerShadowOffset,
             textOffset = textOffset,
+            fontFamily = fontFamily,
+            faceBrush = faceBrush,
             modifier = Modifier.zIndex(0f)
         )
 
@@ -406,6 +413,8 @@ fun SplitFlapDigit(
                 innerShadowHeight = innerShadowHeight,
                 innerShadowOffset = innerShadowOffset,
                 textOffset = textOffset,
+                fontFamily = fontFamily,
+                faceBrush = faceBrush,
                 modifier = Modifier
                     .zIndex(1f)
                     .graphicsLayer {
@@ -428,6 +437,8 @@ fun SplitFlapDigit(
                 innerShadowHeight = innerShadowHeight,
                 innerShadowOffset = innerShadowOffset,
                 textOffset = textOffset,
+                fontFamily = fontFamily,
+                faceBrush = faceBrush,
                 modifier = Modifier
                     .zIndex(1f)
                     .graphicsLayer {
@@ -464,7 +475,9 @@ fun FlapHalf(
     fontSize: TextUnit = 54.sp,
     innerShadowHeight: Dp = 24.dp,
     innerShadowOffset: Dp = 12.dp,
-    textOffset: Dp = (-2).dp
+    textOffset: Dp = (-2).dp,
+    fontFamily: androidx.compose.ui.text.font.FontFamily? = null,
+    faceBrush: Brush? = null
 ) {
     Box(
         modifier = modifier
@@ -490,7 +503,7 @@ fun FlapHalf(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(tileColor, faceShape)
+                .then(if (faceBrush == null) Modifier.background(tileColor, faceShape) else Modifier.background(faceBrush, faceShape))
         )
 
         if (!isTop) {
@@ -513,6 +526,7 @@ fun FlapHalf(
             color = Color(0xFFF0EFEA),
             fontSize = fontSize,
             fontWeight = FontWeight.ExtraBold,
+            fontFamily = fontFamily,
             modifier = Modifier
                 .align(Alignment.Center)
                 .offset(y = textOffset)
