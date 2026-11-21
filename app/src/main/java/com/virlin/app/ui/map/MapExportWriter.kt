@@ -56,7 +56,7 @@ internal object MapExportWriter {
         )
         try {
             val canvas = Canvas(bitmap)
-            canvas.drawColor(Color.WHITE)
+            canvas.drawColor(appearance.backgroundColor?.toInt() ?: Color.WHITE)
             canvas.scale(scale, scale)
             canvas.translate(MARGIN - geometry.left, MARGIN - geometry.top)
             paintMap(canvas, geometry, appearance, geometry.viewport(), null,
@@ -84,7 +84,7 @@ internal object MapExportWriter {
                 repeat(columns) { column ->
                     val page = pdf.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, number++).create())
                     val canvas = page.canvas
-                    canvas.drawColor(Color.WHITE)
+                    canvas.drawColor(appearance.backgroundColor?.toInt() ?: Color.WHITE)
                     canvas.save()
                     canvas.clipRect(MARGIN, MARGIN, pageWidth - MARGIN, pageHeight - MARGIN)
                     canvas.translate(

@@ -79,6 +79,66 @@ class ProjectTimerControlTest {
         assertEquals(1, repo.allFocusSessions().count { it.isOpen })
     }
 
+    private fun organizeFixture(): Pair<InMemoryWorkStreamRepository, FakeClock> {
+        fun task(id: String, mode: ExecutionPreference, order: Int) = Task(id, id, workStreamId = "s", projectId = "p",
+            executionPreference = mode, order = order, createdAt = start, updatedAt = start)
+        val repo = InMemoryWorkStreamRepository(
+            listOf(WorkStream("s", "s", projectId = "p", state = WorkStreamState.READY, createdAt = start, updatedAt = start)),
+            seedTasks = listOf(task("human", ExecutionPreference.HUMAN, 0), task("ext", ExecutionPreference.EXTERNAL, 1),
+                task("box", ExecutionPreference.HUMAN, 2)),
+            taskExecutionEnabled = true)
+        return repo to FakeClock(start)
+    }
+
+    private suspend fun DefaultVirlinActions.runBothAndOrganize(clock: FakeClock) {
+        startFocus("human")
+        startExternalWork(StartExternalWork("s", workItemId = "ext"))
+        clock.current = start.plusSeconds(60)
+        assertEquals(ActionResult.Success(2), pauseTimersForOrganize("p"))
+    }
+
+    @Test fun organizeEditsNeverStrandPausedTimers() = runTest {
+        val (repo, clock) = organizeFixture()
+        val actions = DefaultVirlinActions(repo, clock, SequentialIdProvider())
+        actions.runBothAndOrganize(clock)
+        clock.current = start.plusSeconds(120)
+        assertTrue(actions.updateTask("human", TaskUpdate(title = Field.Set("Human renamed"))) is ActionResult.Success)
+        assertTrue(actions.updateTask("ext", TaskUpdate(title = Field.Set("Ext renamed"))) is ActionResult.Success)
+        val copy = (actions.duplicateTask("human") as ActionResult.Success).value
+        assertTrue(actions.moveTasks(listOf("ext"), newParentId = "box", afterId = null, withinStreamId = "s") is ActionResult.Success)
+        clock.current = start.plusSeconds(3600)
+        assertEquals(ActionResult.Success(2), actions.resumeTimersForOrganize("p"))
+        assertEquals(WorkStreamState.FOCUS, repo.getTask("human")!!.execution!!.state)
+        assertEquals(WorkStreamState.PROCESSING, repo.getTask("ext")!!.execution!!.state)
+        assertEquals(60L, ExternalTiming.seconds(repo.getTask("ext")!!.execution, clock.current))
+        assertEquals(WorkStreamState.READY, repo.getTask(copy.id)!!.execution!!.state)
+        assertEquals(1, repo.allFocusSessions().count { it.isOpen })
+    }
+
+    @Test fun organizeLetsAPausedLeafTakeChildrenAndEndsOnlyItsTimer() = runTest {
+        val (repo, clock) = organizeFixture()
+        val actions = DefaultVirlinActions(repo, clock, SequentialIdProvider())
+        actions.runBothAndOrganize(clock)
+        assertTrue(actions.addSubtask("human", "child") is ActionResult.Success)
+        assertTrue(actions.moveTasks(listOf("box"), newParentId = "ext", afterId = null, withinStreamId = "s") is ActionResult.Success)
+        assertEquals(WorkStreamState.READY, repo.getTask("human")!!.execution!!.state)
+        assertEquals(WorkStreamState.READY, repo.getTask("ext")!!.execution!!.state)
+        assertEquals(60L, repo.getTask("ext")!!.execution!!.externalTrackedSeconds)
+        assertEquals(0, repo.allFocusSessions().count { it.isOpen })
+        assertEquals(ActionResult.Success(0), actions.resumeTimersForOrganize("p"))
+        assertTrue(repo.tasks.value.none { it.execution?.state == WorkStreamState.FOCUS })
+    }
+
+    @Test fun outsideOrganizeActiveOrManuallyPausedItemsStillRefuseChildren() = runTest {
+        val (repo, clock) = organizeFixture()
+        val actions = DefaultVirlinActions(repo, clock, SequentialIdProvider())
+        actions.startFocus("human")
+        assertTrue((actions.addSubtask("human", "child") as ActionResult.Rejected).reason is DomainError.PlacementRejected)
+        assertEquals(ActionResult.Success(1), actions.pauseAllTimers("p"))
+        assertTrue((actions.addSubtask("human", "child") as ActionResult.Rejected).reason is DomainError.PlacementRejected)
+        assertEquals(WorkStreamState.PAUSED, repo.getTask("human")!!.execution!!.state)
+    }
+
     @Test fun projectResumeNeverDisplacesFocusInAnotherProjectAndGlobalCanResumeScopedPause() = runTest {
         fun stream(id: String, project: String) = WorkStream(id, id, projectId = project,
             state = WorkStreamState.READY, createdAt = start, updatedAt = start)

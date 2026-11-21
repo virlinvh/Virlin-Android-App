@@ -32,6 +32,7 @@ import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DataObject
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FontDownload
 import androidx.compose.material.icons.outlined.FormatAlignCenter
 import androidx.compose.material.icons.outlined.FormatAlignLeft
@@ -50,7 +51,16 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Numbers
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.DragIndicator
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.DriveFileRenameOutline
+import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.UploadFile
+import androidx.compose.material.icons.outlined.IosShare
+import androidx.compose.material.icons.outlined.Print
 import androidx.compose.material.icons.outlined.Style
 import androidx.compose.material.icons.outlined.TableChart
 import androidx.compose.material.icons.outlined.TextFields
@@ -104,6 +114,8 @@ private data class AddToolSpec(val tool: NoteTool, val label: String, val icon: 
 private val formatTools = listOf(
     AddToolSpec(NoteTool.UNDO, "Undo", Icons.AutoMirrored.Outlined.Undo),
     AddToolSpec(NoteTool.REDO, "Redo", Icons.AutoMirrored.Outlined.Redo),
+    AddToolSpec(NoteTool.DELETE, "Delete", Icons.Outlined.Delete),
+    AddToolSpec(NoteTool.PASTE_FROM, "Paste from", Icons.Outlined.ContentPaste),
     AddToolSpec(NoteTool.PARAGRAPH, "Text style", Icons.Outlined.TextFields),
     AddToolSpec(NoteTool.FONT, "Font", Icons.Outlined.FontDownload),
     AddToolSpec(NoteTool.SIZE, "Text size", Icons.Outlined.FormatSize),
@@ -111,6 +123,7 @@ private val formatTools = listOf(
     AddToolSpec(NoteTool.ITALIC, "Italic", Icons.Outlined.FormatItalic),
     AddToolSpec(NoteTool.UNDERLINE, "Underline", Icons.Outlined.FormatUnderlined),
     AddToolSpec(NoteTool.STRIKE, "Strike", Icons.Outlined.FormatStrikethrough),
+    AddToolSpec(NoteTool.CHANGE_CASE, "Change case", glyph = "Aa"),
     AddToolSpec(NoteTool.CODE, "Inline code", Icons.Outlined.DataObject),
     AddToolSpec(NoteTool.TEXT_COLOR, "Text colour", Icons.Outlined.FormatColorText),
     AddToolSpec(NoteTool.HIGHLIGHT, "Highlight", Icons.Outlined.BorderColor),
@@ -124,6 +137,14 @@ private val formatTools = listOf(
     AddToolSpec(NoteTool.FLASHCARD, "Flashcard", Icons.Outlined.Style),
     AddToolSpec(NoteTool.SELECT_DOCUMENT, "Select across", Icons.Outlined.SelectAll),
     AddToolSpec(NoteTool.HEADING_FOLD, "Fold headings", Icons.Outlined.AccountTree),
+    AddToolSpec(NoteTool.WORD_COUNT, "Word count", Icons.Outlined.Numbers),
+    AddToolSpec(NoteTool.ARRANGE_BLOCKS, "Arrange blocks", Icons.Outlined.DragIndicator),
+    AddToolSpec(NoteTool.RENAME, "Rename", Icons.Outlined.DriveFileRenameOutline),
+    AddToolSpec(NoteTool.DUPLICATE, "Duplicate", Icons.Outlined.ContentCopy),
+    AddToolSpec(NoteTool.IMPORT, "Import doc", Icons.Outlined.UploadFile),
+    AddToolSpec(NoteTool.PRINT, "Print / PDF", Icons.Outlined.Print),
+    AddToolSpec(NoteTool.FORMATTING, "Formatting", Icons.Outlined.Article),
+    AddToolSpec(NoteTool.EXPORT, "Export", Icons.Outlined.IosShare),
 )
 
 /**
@@ -140,6 +161,7 @@ internal fun NoteAddSheet(
     onInsertEquation: () -> Unit,
     onPickImage: () -> Unit,
     onTool: (NoteTool) -> Unit,
+    sizeControl: NoteSizeControl? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val richBlocks = listOf(
@@ -167,6 +189,10 @@ internal fun NoteAddSheet(
             type = NoteDocBlockType.HEADING_2) { TextSample("Heading", 15.sp, FontWeight.SemiBold) },
         AddBlockSpec("Heading 3", "Small section heading", glyph = "H3",
             type = NoteDocBlockType.HEADING_3) { TextSample("Heading", 13.sp, FontWeight.SemiBold) },
+        AddBlockSpec("Heading 4", "Minor heading", glyph = "H4",
+            type = NoteDocBlockType.HEADING_4) { TextSample("Heading", 12.sp, FontWeight.SemiBold) },
+        AddBlockSpec("Heading 5", "Smallest heading", glyph = "H5",
+            type = NoteDocBlockType.HEADING_5) { TextSample("Heading", 11.sp, FontWeight.SemiBold) },
         AddBlockSpec("Bulleted list", "A simple list of points", Icons.AutoMirrored.Outlined.FormatListBulleted,
             type = NoteDocBlockType.BULLET) { ListSample(listOf("•", "•")) },
         AddBlockSpec("Numbered list", "Steps in order", Icons.Outlined.FormatListNumbered,
@@ -207,7 +233,11 @@ internal fun NoteAddSheet(
             formatTools.chunked(4).forEach { row ->
                 Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { spec ->
-                        ToolTile(spec, enabled = spec.tool in tools.enabled, active = spec.tool in tools.active,
+                        val size = tools.sizeLabel.toIntOrNull()
+                        if (spec.tool == NoteTool.SIZE && sizeControl != null && size != null) SizeTile(
+                            size, enabled = spec.tool in tools.enabled, control = sizeControl,
+                            modifier = Modifier.weight(1f),
+                        ) else ToolTile(spec, enabled = spec.tool in tools.enabled, active = spec.tool in tools.active,
                             modifier = Modifier.weight(1f)) { onTool(spec.tool) }
                     }
                     repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
@@ -281,6 +311,22 @@ private fun ToolTile(spec: AddToolSpec, enabled: Boolean, active: Boolean, modif
         else Text(spec.glyph.orEmpty(), color = tint, fontSize = 16.sp)
         Spacer(Modifier.height(5.dp))
         Text(spec.label, color = tint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Text size adjusts in place here too, so the sheet stays open while the size changes behind it. */
+@Composable
+private fun SizeTile(size: Int, enabled: Boolean, control: NoteSizeControl, modifier: Modifier) {
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        modifier.height(70.dp).clip(shape).background(Color.White).border(1.dp, Border, shape)
+            .testTag("notes_add_tool_size"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        NoteSizeStepper(size, enabled, control.onStep, control.onEditStart, control.onSet,
+            framed = false, tag = "notes_add_size")
+        Text("Text size", color = if (enabled) Ink else Muted.copy(alpha = .55f), fontSize = 11.sp, maxLines = 1)
     }
 }
 

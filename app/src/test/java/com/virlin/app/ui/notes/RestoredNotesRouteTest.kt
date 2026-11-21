@@ -37,9 +37,7 @@ class RestoredNotesRouteTest {
         compose.setContent { NotesRoute(rememberNavController(), "restored-note", "Note", vm) }
         compose.onNodeWithTag("notes_editor_scroll").assertExists()
         compose.onNodeWithTag("notes_tool_select_document").performScrollTo().assertIsEnabled().performClick()
-        val projection = selectableNoteText(vm.state.value.blocks)
-        compose.onNodeWithTag("notes_document_selection_text")
-            .performTextInputSelection(TextRange(0, projection.length))
+        compose.onNodeWithTag("notes_select_all").performClick()
         compose.onNodeWithTag("notes_tool_flashcard").performScrollTo().assertIsEnabled().performClick()
         compose.onNodeWithTag("flashcard_create_dialog").assertExists()
         compose.onNodeWithTag("flashcard_source").assertExists()

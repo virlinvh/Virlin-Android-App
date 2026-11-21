@@ -17,6 +17,9 @@ data class ProjectDeletion(
     // projectId remains the receipt/root key for compatibility with existing receipts.
     val ownerIds get() = streamIds + taskIds + if (kind == "project") setOf(projectId) else emptySet()
     val noteOwners get() = taskIds.map { "task-$it" }.toSet() + captureIds.flatMap { listOf("capture-$it", "capture-legacy-$it") } + if (kind == "project") setOf("project-$projectId") else emptySet()
+    /** Prefixes of the extra notes each deleted task may own besides its canonical note. */
+    val extraNotePrefixes get() = taskIds.map { TaskPageTypeKeys.extraNotePrefix(it) }.toSet()
+    fun ownsNote(ownerKey: String) = TaskPageTypeKeys.canonicalNoteOwner(ownerKey) in noteOwners
     fun ownsTaskEvent(type: String, detail: String?): Boolean = type in setOf("TASK_CREATED", "TASK_UPDATED", "TASK_COMPLETED", "ACTIVE_TASK_SET", "ACTIVE_TASK_CLEARED") &&
         com.virlin.app.domain.activity.TaskEventDetail.decode(detail)?.taskId in taskIds
     fun encode() = JSONObject().put("project", projectId)

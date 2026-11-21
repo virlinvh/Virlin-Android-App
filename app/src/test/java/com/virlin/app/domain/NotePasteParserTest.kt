@@ -441,4 +441,82 @@ class NotePasteParserTest {
             Dispatchers.resetMain()
         }
     }
+
+    @Test fun pictureInsideInlineMarkupIsKeptAfterItsParagraph() {
+        val html = "<h3>5. The conversation flow</h3>" +
+            "<p><span>See below <span><img src='content://chat/flow' alt='Flow diagram'></span></span></p>" +
+            "<p>My recommendation</p>"
+        val pasted = NotePasteParser.parse("5. The conversation flow\nSee below\nMy recommendation", html) {
+            if (it == "content://chat/flow") "flow-image" else null
+        }
+        assertEquals(listOf(NoteDocBlockType.HEADING_3, NoteDocBlockType.PARAGRAPH,
+            NoteDocBlockType.IMAGE, NoteDocBlockType.PARAGRAPH), pasted.map { it.type })
+        assertEquals("flow-image", pasted[2].imagePath)
+    }
+
+    @Test fun unreadableWebPictureKeepsItsDescriptionAndLink() {
+        val pasted = NotePasteParser.parse("Flow", "<p>Flow</p><img src='https://example.com/flow.png' alt='Flow chart'>")
+        assertEquals("Flow chart", pasted[1].text)
+        assertEquals("https://example.com/flow.png", pasted[1].runs.single().linkUrl)
+    }
+
+    @Test fun drawnDiagramKeepsItsWordsOnePerLineAndIconsAddNothing() {
+        val html = "<p>Steps <svg viewBox='0 0 10 10'><path d='M0 0'/></svg></p>" +
+            "<svg><rect/><text>Introduce yourself</text><text>Ask permission</text></svg>"
+        val pasted = NotePasteParser.parse("Steps", html)
+        assertEquals(listOf("Steps", "Introduce yourself\nAsk permission"), pasted.map { it.text })
+    }
+
+    @Test fun markdownImageLineBecomesAnImageOrItsLinkedDescription() {
+        val plain = "# Flow\n\n![Conversation flow](content://chat/flow)\n\n![Chart](https://example.com/c.png)"
+        val pasted = NotePasteParser.parse(plain, null) { if (it.startsWith("content://")) "stored" else null }
+        assertEquals(listOf(NoteDocBlockType.HEADING_1, NoteDocBlockType.IMAGE, NoteDocBlockType.PARAGRAPH),
+            pasted.map { it.type })
+        assertEquals("stored", pasted[1].imagePath)
+        assertEquals("Chart", pasted[2].text)
+        assertEquals("https://example.com/c.png", pasted[2].runs.single().linkUrl)
+    }
+
+    @Test fun codeTheHtmlLeftOutIsRestoredFromTheMarkdownInPlace() {
+        val plain = "## 5. Flow\n\n```mermaid\nflowchart TD\nA[Introduce yourself] --> B[Ask permission]\n```\n\n" +
+            "## My recommendation\n\nOpen with **industry engagement**."
+        val html = "<h2>5. Flow</h2><div class='diagram'></div><h2>My recommendation</h2>" +
+            "<p>Open with <strong>industry engagement</strong>.</p>"
+        val pasted = NotePasteParser.parse(plain, html)
+        assertEquals(listOf(NoteDocBlockType.HEADING_2, NoteDocBlockType.CODE,
+            NoteDocBlockType.HEADING_2, NoteDocBlockType.PARAGRAPH), pasted.map { it.type })
+        assertTrue(pasted[1].text.startsWith("flowchart TD"))
+        assertTrue(pasted[3].runs.any { NoteDocMark.BOLD in it.marks })
+    }
+
+    @Test fun codeTheHtmlAlreadyHasIsNotDuplicated() {
+        val plain = "## Setup\n\n```bash\nnpm install virlin\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
+        val html = "<h2>Setup</h2><pre><code>npm install virlin</code></pre>" +
+            "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>"
+        val pasted = NotePasteParser.parse(plain, html)
+        assertEquals(listOf(NoteDocBlockType.HEADING_2, NoteDocBlockType.CODE, NoteDocBlockType.TABLE),
+            pasted.map { it.type })
+    }
+
+    @Test fun pasteDetailsSayWhenTheClipboardHeldOnlyText() {
+        val report = com.virlin.app.domain.notedoc.NotePasteReport.describe(
+            com.virlin.app.domain.notedoc.NotePasteReport.ClipMeta(1, listOf("text/plain"), 0),
+            "## Flow\n\nIntroduce yourself", null, false, NotePasteParser.parse("## Flow\n\nIntroduce yourself"))
+        assertTrue(report, report.contains("No picture or diagram was on the clipboard"))
+        assertTrue(report, report.contains("text/plain"))
+        val withPicture = com.virlin.app.domain.notedoc.NotePasteReport.describe(null, "Flow",
+            "<p>Flow</p><img src='data:image/png;base64,AAAA'>", true, emptyList())
+        assertTrue(withPicture, withPicture.contains("1 image(s) (1 embedded)"))
+    }
+
+    @Test fun viewModelRecordsPasteDetails() {
+        val ids = SequentialIdProvider()
+        val vm = NotesViewModel("task-paste-report", "Note",
+            DefaultVirlinActions(InMemoryWorkStreamRepository(), FakeClock(Instant.EPOCH), ids), ids)
+        val id = vm.state.value.blocks.single().id
+        val plain = "## Flow\n\nIntroduce yourself and ask permission."
+        assertTrue(vm.pasteStructured(id, plain, plain,
+            clipSummary = com.virlin.app.domain.notedoc.NotePasteReport.ClipMeta(1, listOf("text/plain"), 0)))
+        assertTrue(vm.lastPasteReport.orEmpty().contains("No picture or diagram"))
+    }
 }

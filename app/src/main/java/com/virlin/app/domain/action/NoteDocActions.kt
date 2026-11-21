@@ -15,8 +15,8 @@ import com.virlin.app.domain.time.VirlinClock
 object NoteDocMessages {
     const val STALE = "Note changed on the phone. Reload before saving."
     const val DAMAGED = "This note could not be read. Recover it before editing."
-    const val RICH_STRUCTURE = "This change affects rich note structure (tables, lists, equations or nested " +
-        "blocks) that can only be edited in the phone's note editor."
+    const val RICH_STRUCTURE = "This change affects a nested part of this note (a table, a nested list, an " +
+        "equation or a block inside another block) that can't be changed this way. Nothing was saved."
     const val INVALID_DOCUMENT = "The note editor produced an invalid document; nothing was saved."
 }
 

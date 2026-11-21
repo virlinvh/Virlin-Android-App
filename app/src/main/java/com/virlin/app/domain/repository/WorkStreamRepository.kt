@@ -134,6 +134,8 @@ interface WorkStreamWriter : CaptureWriter {
     suspend fun stagesOf(workStreamId: String): List<ExternalStage>
     suspend fun saveStage(stage: ExternalStage)
     suspend fun appendEvent(event: WorkStreamEvent)
+    /** Restores one finished external run (project import); adapters without run history ignore it. */
+    suspend fun saveExternalRun(run: com.virlin.app.domain.model.ExternalRunInterval) {}
     /** Transaction-consistent history for restoring a master-paused execution. */
     suspend fun executionEvents(streamId: String): List<WorkStreamEvent> = emptyList()
 
@@ -164,6 +166,8 @@ interface WorkStreamWriter : CaptureWriter {
      */
     suspend fun noteDocOf(ownerKey: String): VirlinNoteDoc?
     suspend fun saveNoteDoc(doc: VirlinNoteDoc)
+    /** Removes one Notes-page document (and its chunks); its owner may write a new one later. */
+    suspend fun deleteNoteDoc(ownerKey: String)
     suspend fun mapNodePreviewOf(ownerId: String): com.virlin.app.domain.mappreview.MapNodePreview?
     suspend fun saveMapNodePreview(preview: com.virlin.app.domain.mappreview.MapNodePreview)
     suspend fun deleteMapNodePreview(ownerId: String)

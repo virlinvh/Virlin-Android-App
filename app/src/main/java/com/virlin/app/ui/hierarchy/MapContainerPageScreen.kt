@@ -7,6 +7,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import com.virlin.app.ui.notes.noteDocumentPreviewItems
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -79,6 +83,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.rememberCoroutineScope
 import com.virlin.app.domain.VirlinGraph
+import com.virlin.app.ui.notes.openForReading
 
 /** A map Page is a content view, not the project's Overview/Knowledge/Activity tab screen. */
 @Composable
@@ -138,8 +143,7 @@ fun MapContainerPageScreen(
     }
     LaunchedEffect(allPageBlocks, resumeVersion) {
         allPageBlocks.filter { it.block.typeKey == TaskPageTypeKeys.NOTE }.forEach { entry ->
-            noteDocs[entry.block.taskId] = VirlinGraph.repository.getNoteDoc(
-                TaskPageTypeKeys.noteOwner(entry.block.taskId))
+            noteDocs[entry.block.contentId] = VirlinGraph.repository.getNoteDoc(entry.block.contentId)
         }
     }
     val captureEntries = remember(entries) { entries.associateBy { it.capture.id } }
@@ -150,6 +154,8 @@ fun MapContainerPageScreen(
         masterSections(allSections, allPageBlocks, captureEntries, taskSteps, noteDocs, vm)
     }
     val expanded = remember(project.id, scope) { mutableStateMapOf<String, Boolean>() }
+    val noteExpansion = rememberMasterDocumentExpansion(project.id, scope)
+    if (noteExpansion.open.isNotEmpty()) com.virlin.app.ui.notes.NoteAudioPlaybackHost()
     val exportPdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) coroutineScope.launch {
             runCatching { withContext(Dispatchers.IO) {
@@ -221,12 +227,13 @@ fun MapContainerPageScreen(
                 if (documentSections.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text(if (acrossMap) "Nothing has been added across this map yet."
                         else "Nothing has been added here yet.", color = muted)
-                } else LazyColumn(Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                } else LazyColumn(Modifier.fillMaxSize()) {
+                    // Items space themselves (4dp) so an open note card can span several items.
                     documentSections.forEachIndexed { index, section ->
                         val key = "$index-${section.heading}"
                         item(key = "heading-$key") {
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                            Row(Modifier.padding(top = if (index == 0) 0.dp else 4.dp)
+                                .fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
                                 .background(wash, RoundedCornerShape(14.dp))
                                 .clickable { expanded[key] = expanded[key] == false }
                                 .padding(horizontal = 14.dp, vertical = 12.dp),
@@ -237,11 +244,11 @@ fun MapContainerPageScreen(
                                     color = accent, fontSize = 13.sp)
                             }
                         }
-                        if (expanded[key] != false) items(section.entries, key = { "document-${it.id}" }) { entry ->
-                            MasterDocumentItem(entry, ink, accent) { nav.navigate(entry.route) }
-                        }
+                        if (expanded[key] != false) masterDocumentItems(section.entries, ink, accent, palette,
+                            noteExpansion, gap = 4.dp, key = { "document-${it.id}" },
+                            onOpen = { entry -> nav.openForReading(entry.route) })
                     }
-                    item { Spacer(Modifier.size(20.dp)) }
+                    item { Spacer(Modifier.padding(top = 4.dp).size(20.dp)) }
                 }
             }
             if (adding) ProjectKnowledgeAdd(project.id, title, nav, workStreamId = stream?.id) {
@@ -253,38 +260,20 @@ fun MapContainerPageScreen(
 
 @Composable
 internal fun MasterDocumentItem(entry: MasterDocumentEntry, ink: Color,
-    accent: Color, onOpen: () -> Unit) {
-    var isExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
+    accent: Color, notePalette: ProjectPalette? = null,
+    /** Set by a caller that owns the open state (see [masterDocumentItems]); otherwise kept here. */
+    expanded: Boolean? = null, onExpandedChange: (Boolean) -> Unit = {},
+    onOpen: () -> Unit) {
+    var ownExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
+    val isExpanded = expanded ?: ownExpanded
     val kind = entry.kind.lowercase()
-    val icon = when {
-        kind.contains("video") -> Icons.Outlined.PlayCircleOutline
-        kind.contains("to-do") || kind.contains("checklist") -> Icons.Outlined.CheckBox
-        kind.contains("prompt") -> Icons.Outlined.SmartToy
-        kind.contains("link") -> Icons.Outlined.Link
-        kind.contains("image") -> Icons.Outlined.Image
-        else -> Icons.Outlined.Description
-    }
     Surface(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         shape = RoundedCornerShape(16.dp), color = Color.White,
         border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = if (isExpanded) .55f else .14f))) {
         Column {
-            Row(Modifier.fillMaxWidth().clickable { isExpanded = !isExpanded }
-                .testTag("map_page_item_${entry.id}")
-                .padding(horizontal = 14.dp, vertical = 13.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(40.dp).background(accent.copy(alpha = .09f), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center) {
-                    Icon(icon, null, tint = accent, modifier = Modifier.size(20.dp))
-                }
-                Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                    Text(entry.kind.uppercase(), color = accent, fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold)
-                    Text(entry.title, color = ink, fontWeight = FontWeight.SemiBold,
-                        fontSize = 15.sp, lineHeight = 20.sp, maxLines = if (isExpanded) 3 else 2,
-                        overflow = TextOverflow.Ellipsis)
-                }
-                Icon(if (isExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                    if (isExpanded) "Collapse" else "Expand", tint = accent)
+            MasterDocumentHeader(entry, ink, accent, isExpanded, onOpen) {
+                if (expanded == null) ownExpanded = !ownExpanded
+                onExpandedChange(!isExpanded)
             }
             if (isExpanded) {
                 Column(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 14.dp)
@@ -297,22 +286,167 @@ internal fun MasterDocumentItem(entry: MasterDocumentEntry, ink: Color,
                         }
                         Spacer(Modifier.size(10.dp))
                     }
-                    MasterEntryBody(entry, ink)
-                    Row(Modifier.fillMaxWidth().padding(top = 10.dp),
-                        horizontalArrangement = Arrangement.End) {
-                        Surface(onClick = onOpen, color = accent.copy(alpha = .1f),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.testTag("map_page_open_${entry.id}")) {
-                            Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                Text("Open ${entry.kind}", color = accent, fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold)
-                                Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, tint = accent,
-                                    modifier = Modifier.padding(start = 6.dp).size(15.dp))
-                            }
-                        }
-                    }
+                    val noteBlocks = entry.noteBlocks
+                    if (noteBlocks != null) com.virlin.app.ui.notes.NoteDocumentPreview(noteBlocks, notePalette,
+                        Modifier.testTag("map_page_note_preview_${entry.id}"))
+                    else MasterEntryBody(entry, ink)
+                    MasterDocumentOpenRow(entry, accent, onOpen)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MasterDocumentHeader(entry: MasterDocumentEntry, ink: Color, accent: Color,
+    isExpanded: Boolean, onOpen: () -> Unit, onToggle: () -> Unit) {
+    val kind = entry.kind.lowercase()
+    val icon = when {
+        kind.contains("video") -> Icons.Outlined.PlayCircleOutline
+        kind.contains("to-do") || kind.contains("checklist") -> Icons.Outlined.CheckBox
+        kind.contains("prompt") -> Icons.Outlined.SmartToy
+        kind.contains("link") -> Icons.Outlined.Link
+        kind.contains("image") -> Icons.Outlined.Image
+        else -> Icons.Outlined.Description
+    }
+    Row(Modifier.fillMaxWidth().clickable(onClick = onToggle)
+        .testTag("map_page_item_${entry.id}")
+        .padding(horizontal = 14.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(40.dp).background(accent.copy(alpha = .09f), RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center) {
+            Icon(icon, null, tint = accent, modifier = Modifier.size(20.dp))
+        }
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(entry.kind.uppercase(), color = accent, fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold)
+            Text(entry.title, color = ink, fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp, lineHeight = 20.sp, maxLines = if (isExpanded) 3 else 2,
+                overflow = TextOverflow.Ellipsis)
+        }
+        Box(Modifier.padding(horizontal = 4.dp).size(40.dp).clip(RoundedCornerShape(12.dp))
+            .background(accent.copy(alpha = .1f))
+            .clickable(role = Role.Button, onClickLabel = "Open ${entry.kind}", onClick = onOpen)
+            .testTag("map_page_open_top_${entry.id}"),
+            contentAlignment = Alignment.Center) {
+            Icon(Icons.AutoMirrored.Outlined.OpenInNew, "Open ${entry.kind} ${entry.title}", tint = accent,
+                modifier = Modifier.size(18.dp))
+        }
+        Icon(if (isExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+            if (isExpanded) "Collapse" else "Expand", tint = accent)
+    }
+}
+
+@Composable
+private fun MasterDocumentOpenRow(entry: MasterDocumentEntry, accent: Color, onOpen: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp),
+        horizontalArrangement = Arrangement.End) {
+        Surface(onClick = onOpen, color = accent.copy(alpha = .1f),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.testTag("map_page_open_${entry.id}")) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Open ${entry.kind}", color = accent, fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold)
+                Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, tint = accent,
+                    modifier = Modifier.padding(start = 6.dp).size(15.dp))
+            }
+        }
+    }
+}
+
+/** Which note cards of a lazy list are open, and each open note's view-only fold/video state. */
+internal class MasterDocumentExpansion(initial: List<String> = emptyList()) {
+    val open = androidx.compose.runtime.mutableStateListOf<String>().apply { addAll(initial) }
+    private val previews = HashMap<String, com.virlin.app.ui.notes.NoteReadOnlyPreviewState>()
+    fun preview(id: String) = previews.getOrPut(id) { com.virlin.app.ui.notes.NoteReadOnlyPreviewState() }
+    fun set(id: String, value: Boolean) {
+        if (value) { if (id !in open) open.add(id) } else { open.remove(id); previews.remove(id) }
+    }
+    companion object {
+        val Saver = androidx.compose.runtime.saveable.listSaver<MasterDocumentExpansion, String>(
+            save = { it.open.toList() }, restore = { MasterDocumentExpansion(it) })
+    }
+}
+
+@Composable
+internal fun rememberMasterDocumentExpansion(vararg keys: Any?): MasterDocumentExpansion =
+    rememberSaveable(*keys, saver = MasterDocumentExpansion.Saver) { MasterDocumentExpansion() }
+
+private enum class CardEdge { Top, Middle, Bottom }
+
+/** One horizontal slice of a [MasterDocumentItem]-styled card, so a card can span list items. */
+private fun Modifier.masterCardSlice(edge: CardEdge, border: Color): Modifier {
+    val corner = 16.dp
+    val shape = when (edge) {
+        CardEdge.Top -> RoundedCornerShape(topStart = corner, topEnd = corner)
+        CardEdge.Middle -> androidx.compose.ui.graphics.RectangleShape
+        CardEdge.Bottom -> RoundedCornerShape(bottomStart = corner, bottomEnd = corner)
+    }
+    return padding(top = if (edge == CardEdge.Top) 4.dp else 0.dp,
+            bottom = if (edge == CardEdge.Bottom) 4.dp else 0.dp)
+        .padding(horizontal = 16.dp)
+        .fillMaxWidth()
+        .clip(shape)
+        .drawBehind {
+            val r = corner.toPx()
+            val stroke = 1.dp.toPx()
+            // The whole card's outline, clipped to this slice: only its own edges show.
+            val top = if (edge == CardEdge.Top) 0f else -3 * r
+            val bottom = if (edge == CardEdge.Bottom) size.height else size.height + 3 * r
+            drawRect(Color.White)
+            drawRoundRect(border, androidx.compose.ui.geometry.Offset(stroke / 2, top + stroke / 2),
+                androidx.compose.ui.geometry.Size(size.width - stroke, bottom - top - stroke),
+                androidx.compose.ui.geometry.CornerRadius(r - stroke / 2),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+        }
+}
+
+/**
+ * [MasterDocumentItem]s as lazy list items. An open note card spans one item per note block
+ * (header, blocks, Open row), so a long note never composes all at once. Each card starts [gap]
+ * below the previous item (the list itself must not space its items); [below] is drawn under
+ * the card, in the same unit.
+ */
+internal fun androidx.compose.foundation.lazy.LazyListScope.masterDocumentItems(
+    entries: List<MasterDocumentEntry>, ink: Color, accent: Color, palette: ProjectPalette?,
+    expansion: MasterDocumentExpansion, gap: androidx.compose.ui.unit.Dp,
+    key: (MasterDocumentEntry) -> Any = { it.id },
+    onOpen: (MasterDocumentEntry) -> Unit,
+    below: @Composable (MasterDocumentEntry) -> Unit = {},
+) {
+    entries.forEach { entry ->
+        val blocks = entry.noteBlocks
+        val open = entry.id in expansion.open
+        if (blocks == null || !open) {
+            item(key = key(entry)) {
+                Column(Modifier.padding(top = gap)) {
+                    if (blocks == null) MasterDocumentItem(entry, ink, accent, palette) { onOpen(entry) }
+                    else MasterDocumentItem(entry, ink, accent, palette, expanded = false,
+                        onExpandedChange = { expansion.set(entry.id, it) }) { onOpen(entry) }
+                    below(entry)
+                }
+            }
+            return@forEach
+        }
+        val border = accent.copy(alpha = .55f)
+        item(key = key(entry)) {
+            Box(Modifier.padding(top = gap).masterCardSlice(CardEdge.Top, border)) {
+                MasterDocumentHeader(entry, ink, accent, isExpanded = true, onOpen = { onOpen(entry) }) {
+                    expansion.set(entry.id, false)
+                }
+            }
+        }
+        noteDocumentPreviewItems("${key(entry)}/block/", blocks, palette, expansion.preview(entry.id)) { content ->
+            Box(Modifier.masterCardSlice(CardEdge.Middle, border).padding(horizontal = 14.dp)) { content() }
+        }
+        item(key = "${key(entry)}/end") {
+            Column {
+                Box(Modifier.masterCardSlice(CardEdge.Bottom, border)
+                    .padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {
+                    MasterDocumentOpenRow(entry, accent) { onOpen(entry) }
+                }
+                below(entry)
             }
         }
     }
@@ -380,10 +514,16 @@ private fun masterSections(sections: List<MapPageSection>, pageBlocks: List<MapT
         }))
     }
     pageBlocks.groupBy { it.taskPath }.forEach { (path, blocks) ->
-        add(MasterDocumentSection("Task · $path", blocks.map { entry ->
-            MasterDocumentEntry(entry.block.id, entry.label, entry.label,
-                taskPageBody(entry.block.typeKey, entry.block.taskId, steps,
-                    notes[entry.block.taskId]), entry.route)
+        add(MasterDocumentSection("Task · $path", blocks.mapNotNull { entry ->
+            val isNote = entry.block.typeKey == TaskPageTypeKeys.NOTE
+            val note = if (isNote) notes[entry.block.contentId] else null
+            // A new note that was never written has nothing to show.
+            if (isNote && note == null && TaskPageTypeKeys.isExtraNoteOwner(entry.block.contentId)) return@mapNotNull null
+            MasterDocumentEntry(entry.block.id,
+                if (isNote) noteCardTitle(note, entry.label) else entry.label,
+                entry.label,
+                taskPageBody(entry.block.typeKey, entry.block.taskId, steps, note), entry.route,
+                noteBlocks = if (isNote) previewableNoteBlocks(note) else null)
         }))
     }
 }
@@ -407,7 +547,7 @@ internal fun mapTaskPageEntries(blocks: List<TaskPageBlock>, tasks: List<Task>, 
                 if (block.typeKey == TaskPageTypeKeys.TODO) "To-do" else "Note",
                 names.asReversed().joinToString(" › "),
                 if (block.typeKey == TaskPageTypeKeys.TODO) com.virlin.app.ui.todo.taskTodo(task.id)
-                else com.virlin.app.ui.notes.notesForTask(task.id, task.title))
+                else com.virlin.app.ui.notes.notesRoute(block.contentId, task.title))
         }.sortedWith(compareBy({ it.taskPath }, { it.block.order }, { it.block.id }))
 }
 

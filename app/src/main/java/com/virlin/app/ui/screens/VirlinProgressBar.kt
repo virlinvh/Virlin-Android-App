@@ -1,174 +1,93 @@
 package com.virlin.app.ui.screens
 
-// The Now summary bar: supplied as a drop-in composable and used as-is.
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
-import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Layers
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** Supply the existing formatted values. No business logic or data bindings are changed. */
+/** Compact white card and honey/apricot inset from the finalized mockup. */
 @Composable
-fun VirlinProgressBar(
-    timeSaved: String,
-    tasksAdvanced: String,
-    projectsMoved: String,
-    timeFocused: String,
-    modifier: Modifier = Modifier,
-    animateSparkles: Boolean = true,
-    savedUnit: String = "saved",
-    timeExternal: String = "—",
-) {
-    val shape = RoundedCornerShape(18.dp)
-    val pulse by rememberInfiniteTransition(label = "sparkle").animateFloat(
-        initialValue = 0.88f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(tween(1500), RepeatMode.Reverse),
-        label = "sparklePulse",
-    )
-    BoxWithConstraints(
-        modifier = modifier
-            .fillMaxWidth()
-            .shadow(4.dp, shape, ambientColor = Color(0x180F4737), spotColor = Color(0x160F4737))
-            .clip(shape)
-            .background(Color(0xFFFFFEFB))
-            .border(0.7.dp, Color(0xFFF5EBD3), shape),
-    ) {
-        val narrow = maxWidth < 370.dp
-        val leftWidth = if (narrow) 92.dp else 104.dp
-        val ornamentWidth = if (narrow) 36.dp else 42.dp
-
-        Canvas(Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
-            // Pale mint waves remain behind the text and are clipped by the card.
-            val mintOuter = Path().apply {
-                moveTo(0f, h * .54f)
-                cubicTo(w * .025f, -h * .10f, w * .16f, -h * .12f, w * .24f, h * .02f)
-                cubicTo(w * .34f, -h * .02f, w * .34f, h * .67f, w * .39f, h)
-                lineTo(0f, h)
-                close()
-            }
-            drawPath(mintOuter, Brush.linearGradient(listOf(Color(0xFFF0FFF6), Color(0xFFEDFBEA)), Offset.Zero, Offset(w * .4f, h)))
-            val mintInner = Path().apply {
-                moveTo(w * .045f, h * .77f)
-                cubicTo(w * .055f, h * .21f, w * .19f, h * .18f, w * .26f, h * .34f)
-                cubicTo(w * .29f, h * .60f, w * .37f, h * .75f, w * .37f, h)
-                lineTo(w * .06f, h)
-                close()
-            }
-            drawPath(mintInner, Brush.linearGradient(listOf(Color(0xFFDDF9E9), Color(0xFFF2FFEB)), Offset(w * .04f, 0f), Offset(w * .4f, h)))
-
-            // Warm highlight is deliberately weak in the middle and strongest at the edge.
-            val cream = Path().apply {
-                moveTo(w * .91f, 0f)
-                cubicTo(w * .85f, h * .29f, w * .86f, h * .55f, w * .77f, h * .78f)
-                cubicTo(w * .70f, h * .98f, w * .72f, h, w * .72f, h)
-                lineTo(w, h)
-                lineTo(w, 0f)
-                close()
-            }
-            drawPath(cream, Brush.linearGradient(listOf(Color(0x00FFF8DC), Color(0x59FFE9A9)), Offset(w * .71f, h), Offset(w, 0f)))
-            drawCircle(Color(0x45FFE7A0), radius = h * .31f, center = Offset(w * .927f, h * .52f))
-            drawCircle(Color(0x34FFE5A1), radius = h * .19f, center = Offset(w * .975f, h * .70f))
-
-            // Accent marks are in their own gap; no painted stroke intersects text.
-            // The left block ends at 12dp + leftWidth, so the marks are anchored just past it and
-            // before the sentence starts — at Pixel-8 width the supplied ratio landed on the number.
-            val x = w * (if (narrow) .295f else .302f)
-            drawLine(Color(0xFF9BD984), Offset(x, h * .20f), Offset(x - w * .014f, h * .40f), strokeWidth = h * .052f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-            drawLine(Color(0xFF9BD984), Offset(x + w * .024f, h * .39f), Offset(x + w * .006f, h * .53f), strokeWidth = h * .052f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-
-            val shimmer = if (animateSparkles) pulse else 1f
-            scale(shimmer, pivot = Offset(w * .932f, h * .52f)) {
-                sparkle(Offset(w * .932f, h * .52f), h * .19f, Color(0xFFF1AC18))
-            }
-            sparkle(Offset(w * .963f, h * .26f), h * .075f, Color(0xFFF3AB16))
-            sparkle(Offset(w * .978f, h * .77f), h * .065f, Color(0xFFF7C19E))
-        }
-
-        Row(
-            Modifier.fillMaxSize().padding(start = 12.dp, end = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.width(leftWidth).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(timeSaved, fontSize = if (timeSaved.length > 8) 12.sp else if (timeSaved.length > 5) 20.sp else if (narrow) 29.sp else 32.sp, lineHeight = 32.sp,
-                        fontWeight = FontWeight.Black, color = Color(0xFF102322), maxLines = 1)
-                    Text(savedUnit, fontSize = 12.sp, lineHeight = 14.sp,
-                        fontWeight = FontWeight.Medium, color = Color(0xFF4F5B5B))
+fun VirlinProgressBar(timeSaved: String, tasksAdvanced: String, projectsMoved: String, timeFocused: String,
+    modifier: Modifier = Modifier, animateSparkles: Boolean = true, savedUnit: String = "saved", timeExternal: String = "—") {
+    val shape = RoundedCornerShape(24.dp)
+    BoxWithConstraints(modifier.fillMaxWidth().shadow(9.dp, shape, ambientColor = Color(0xFF68477B), spotColor = Color(0xFF68477B))
+        .background(Brush.horizontalGradient(listOf(Color.White, Color(0xFFFFFCF7))), shape).border(1.dp, Color.White, shape)) {
+        val narrow = maxWidth < 340.dp
+        Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(5.dp), verticalAlignment = Alignment.CenterVertically) {
+            BoxWithConstraints(Modifier.weight(.33f).heightIn(min = if (narrow) 52.dp else 56.dp)
+                .shadow(2.dp, RoundedCornerShape(18.dp), ambientColor = Color(0xFFE59A72), spotColor = Color(0xFFE59A72))
+                .background(Brush.linearGradient(listOf(Color(0xFFFFF5D0), Color(0xFFFFE5B9), Color(0xFFF4C2AB))), RoundedCornerShape(18.dp))
+                .border(1.dp, Color.White.copy(alpha = .6f), RoundedCornerShape(18.dp))
+                .padding(horizontal = 6.dp, vertical = 5.dp), contentAlignment = Alignment.Center) {
+                // Shrinks long totals (e.g. "14h 05m") to fit the tile instead of truncating them.
+                val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+                val fitSp = (maxWidth.value / (timeSaved.length.coerceAtLeast(1) * .62f * fontScale)).coerceIn(10f, if (narrow) 24f else 28f)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(timeSaved, fontFamily = NowApprovedFont, fontWeight = FontWeight.Black,
+                        fontSize = fitSp.sp, lineHeight = (fitSp * 1.15f).sp,
+                        color = Color(0xFF49204E), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                    Text(savedUnit, Modifier.padding(start = if (narrow) 3.dp else 8.dp), fontFamily = NowApprovedFont,
+                        fontSize = if (narrow) 11.sp else 13.sp, fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF64415B), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Canvas(Modifier.align(Alignment.BottomStart).size(if (narrow) 10.dp else 13.dp)) {
+                    val ink = Color(0xFF28756A)
+                    drawLine(ink, Offset(size.width*.45f, size.height), Offset(size.width*.45f, size.height*.38f), 1.2.dp.toPx(), StrokeCap.Round)
+                    val leaf = Path().apply {
+                        moveTo(size.width*.45f, size.height*.6f)
+                        cubicTo(-size.width*.1f, size.height*.7f, 0f, 0f, size.width*.45f, size.height*.6f)
+                        cubicTo(size.width*.9f, size.height*.7f, size.width*1.1f, -size.height*.2f, size.width*.45f, size.height*.6f)
+                    }
+                    drawPath(leaf, ink)
                 }
             }
-            Spacer(Modifier.width(if (narrow) 19.dp else 24.dp))
-            androidx.compose.foundation.layout.Column(Modifier.weight(1f), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
-                SummaryTimeRow(Icons.Outlined.Schedule, "Focus", timeFocused)
-                SummaryTimeRow(Icons.Outlined.Layers, "External", timeExternal)
+            Spacer(Modifier.width(10.dp))
+            Box(Modifier.width(1.dp).height(38.dp).background(Color(0xFFE9DFEE)))
+            Column(Modifier.weight(.58f).padding(start = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                SummaryTimeRow(Icons.Outlined.Schedule, "Focus", timeFocused, narrow)
+                SummaryTimeRow(Icons.Outlined.Layers, "External", timeExternal, narrow)
             }
-            Spacer(Modifier.width(ornamentWidth))
+            Canvas(Modifier.weight(.1f).height(34.dp)) {
+                val gold = Brush.linearGradient(listOf(Color(0xFFFFE783), Color(0xFFFFAF39)))
+                val coral = Brush.linearGradient(listOf(Color(0xFFFFC27A), Color(0xFFFF7A59)))
+                sparkleStar(Offset(size.width*.48f, size.height*.58f), 10.dp.toPx(), gold)
+                sparkleStar(Offset(size.width*.86f, size.height*.18f), 4.dp.toPx(), coral)
+                sparkleStar(Offset(size.width*.16f, size.height*.2f), 2.5.dp.toPx(), gold)
+            }
         }
     }
 }
 
 @Composable
-private fun SummaryTimeRow(icon: ImageVector, label: String, value: String) {
+private fun SummaryTimeRow(icon: ImageVector, label: String, value: String, narrow: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = Color(0xFF568577))
-        Spacer(Modifier.width(5.dp))
-        Text(label, modifier = Modifier.width(49.dp), fontSize = 11.sp, lineHeight = 18.sp,
-            fontWeight = FontWeight.Medium, color = Color(0xFF65756F), maxLines = 1)
-        Text(value, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF203D34), maxLines = 1, overflow = TextOverflow.Ellipsis,
-            style = TextStyle(fontFeatureSettings = "tnum"))
+        Icon(icon, null, tint = Color(0xFF71458D), modifier = Modifier.size(if (narrow) 14.dp else 17.dp))
+        Spacer(Modifier.width(if (narrow) 5.dp else 7.dp))
+        Text(label, Modifier.widthIn(min = if (narrow) 46.dp else 64.dp).padding(end = 4.dp), fontFamily = NowApprovedFont,
+            fontSize = if (narrow) 11.sp else 14.sp, color = Color(0xFF71458D), maxLines = 1, softWrap = false)
+        Text(value, Modifier.weight(1f, fill = false), fontFamily = NowApprovedFont, fontWeight = FontWeight.ExtraBold,
+            fontSize = if (narrow) 12.sp else 16.sp, color = NowApprovedInk, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, style = TextStyle(fontFeatureSettings = "tnum"))
     }
-}
-
-private fun DrawScope.sparkle(center: Offset, radius: Float, color: Color) {
-    val p = Path().apply {
-        moveTo(center.x, center.y - radius)
-        quadraticBezierTo(center.x + radius * .18f, center.y - radius * .18f, center.x + radius, center.y)
-        quadraticBezierTo(center.x + radius * .18f, center.y + radius * .18f, center.x, center.y + radius)
-        quadraticBezierTo(center.x - radius * .18f, center.y + radius * .18f, center.x - radius, center.y)
-        quadraticBezierTo(center.x - radius * .18f, center.y - radius * .18f, center.x, center.y - radius)
-        close()
-    }
-    drawPath(p, color)
 }

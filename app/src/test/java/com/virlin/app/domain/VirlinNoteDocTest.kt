@@ -20,12 +20,39 @@ import org.junit.Test
  */
 class VirlinNoteDocTest {
 
+    @Test fun collapsedToggleHeadingsHideTheirSectionEvenOutsideHeadingFoldMode() {
+        val blocks = listOf(
+            NoteDocBlock("th", NoteDocBlockType.HEADING_2, "Section", toggleHeading = true, isCollapsed = true),
+            NoteDocBlock("in", NoteDocBlockType.PARAGRAPH, "inside"),
+            NoteDocBlock("sub", NoteDocBlockType.HEADING_3, "Sub"),
+            NoteDocBlock("next", NoteDocBlockType.HEADING_2, "Next"),
+        )
+        assertEquals(listOf("th", "next"), visibleNoteBlocks(blocks, foldHeadings = false).map { it.id })
+        val plainHeading = blocks.map { if (it.id == "th") it.copy(toggleHeading = false) else it }
+        assertEquals(listOf("th", "in", "sub", "next"), visibleNoteBlocks(plainHeading, foldHeadings = false).map { it.id })
+        assertEquals(listOf("th", "next"), visibleNoteBlocks(plainHeading).map { it.id })
+    }
+
     @Test fun explicitCodeAndMathIdentitySurvivesSaveAndReload() {
         val blocks = listOf(
             NoteDocBlock("code", NoteDocBlockType.CODE, "E=mc^2", mathMode = false),
             NoteDocBlock("math", NoteDocBlockType.CODE, "E=mc^2", mathMode = true),
         )
         assertEquals(blocks, VirlinNoteCodec.decode(VirlinNoteCodec.encode(blocks)))
+    }
+
+    @Test fun tableCellStylesHeadersShadesWidthsAndGridLinesSurviveSaveAndReload() {
+        val table = NoteDocTable.blank(2, 3)
+            .withCellContent(0, 1, "Bold", listOf(NoteDocRun(0, 4, setOf(NoteDocMark.BOLD), color = 0xFFD32F2FL)))
+            .withCell(1, 2, "plain")
+            .withCellFill(1, 0, 0xFFFFF4C2L)
+            .withColumnWidth(2, 200)
+            .copy(headerRow = true, headerColumn = true, gridLines = false)
+        val blocks = listOf(NoteDocBlock("t", NoteDocBlockType.TABLE, table = table))
+        assertEquals(blocks, VirlinNoteCodec.decode(VirlinNoteCodec.encode(blocks)))
+        val plain = listOf(NoteDocBlock("p", NoteDocBlockType.TABLE, table = NoteDocTable(1, 2, listOf("a", "b"))))
+        assertFalse(VirlinNoteCodec.encode(plain).contains("cellRuns"))
+        assertEquals(plain, VirlinNoteCodec.decode(VirlinNoteCodec.encode(plain)))
     }
 
     @Test fun collapsedHeading_hidesNestedSectionButNotNextPeer() {

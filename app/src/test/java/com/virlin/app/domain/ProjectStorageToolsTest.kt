@@ -39,15 +39,16 @@ class ProjectStorageToolsTest {
         val repo = fixture(); val source = repo.projectSnapshot("p"); val tools = ProjectStorageTools(context, repo)
         val usage = tools.usage(source)
         assertEquals(5L, usage.bytes); assertEquals(1, usage.files); assertEquals(0, usage.missing)
-        val file = tools.export(source, ProjectExportFormat.BACKUP)
+        val file = tools.exportVirlin(source, VirlinTiming.KEEP).file
         ZipFile(file).use { zip ->
-            val json = JSONObject(zip.getInputStream(zip.getEntry("project.json")).reader().readText())
+            val json = JSONObject(zip.getInputStream(zip.getEntry(VirlinProjectFile.DATA_ENTRY)).reader().readText())
             assertEquals(1, json.getInt("version")); assertEquals("p", json.getJSONObject("project").getString("id"))
             assertFalse(json.toString().contains("Private unrelated"))
-            val media = json.getJSONArray("media").getJSONObject(0)
+            val header = JSONObject(zip.getInputStream(zip.getEntry(VirlinProjectFile.HEADER_ENTRY)).reader().readText())
+            val media = header.getJSONObject("media").getJSONArray("items").getJSONObject(0)
             assertEquals(64, media.getString("sha256").length)
             assertEquals("hello", zip.getInputStream(zip.getEntry(media.getString("entry"))).reader().readText())
-            assertNotNull(zip.getEntry("project.md")); assertNotNull(zip.getEntry("README.txt"))
+            assertNotNull(zip.getEntry(VirlinProjectFile.SUMMARY_ENTRY)); assertNotNull(zip.getEntry(VirlinProjectFile.README_ENTRY))
         }
         assertEquals(source, repo.projectSnapshot("p"))
     }
@@ -62,11 +63,12 @@ class ProjectStorageToolsTest {
         val structure = tools.duplicate(source, "Structure", ProjectCopyMode.STRUCTURE)
         assertTrue(repo.projectSnapshot(structure.id).attachments.isEmpty())
     }
-    @Test fun missingMediaFailsBackupAndFullCopyWithoutChangingProject() = runTest {
+    @Test fun missingMediaIsListedInExportAndFailsFullCopyWithoutChangingProject() = runTest {
         val repo = fixture(); val source = repo.projectSnapshot("p"); val tools = ProjectStorageTools(context, repo)
         AttachmentFileStore.resolve(context, "att/example.txt").delete()
         assertEquals(1, tools.usage(source).missing)
-        try { tools.export(source, ProjectExportFormat.BACKUP); fail("Must fail") } catch (_: IllegalArgumentException) { }
+        val export = tools.exportVirlin(source, VirlinTiming.KEEP)
+        assertEquals(listOf("attachments/att/example.txt"), export.summary.missing); export.file.delete()
         try { tools.duplicate(source, "Full", ProjectCopyMode.FULL); fail("Must fail") } catch (_: IllegalArgumentException) { }
         assertEquals(2, repo.projects.value.size); assertEquals(source, repo.projectSnapshot("p"))
     }
@@ -83,8 +85,7 @@ class ProjectStorageToolsTest {
     @Test fun pathsCannotEscapeManagedStorageAndTextExportsAreValid() = runTest {
         val repo = fixture(); val source = repo.projectSnapshot("p"); val tools = ProjectStorageTools(context, repo)
         try { tools.resolve("attachments", "../../database.db"); fail("Must reject") } catch (_: IllegalArgumentException) { }
-        val markdown = tools.export(source, ProjectExportFormat.MARKDOWN).readText()
+        val markdown = ProjectArchive.markdown(source)
         assertTrue(markdown.contains("Export Ω")); assertTrue(markdown.contains("Nested text"))
-        // Android PdfDocument's native implementation is verified by the on-device test.
     }
 }

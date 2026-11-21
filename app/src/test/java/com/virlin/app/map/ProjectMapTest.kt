@@ -54,6 +54,26 @@ class ProjectMapTest {
         }
     }
 
+    @Test fun aBoxWithALongPastedNameCanStillBeResized() {
+        val pasted = "Natural Language (copy) • Drink 2 glass\n• Empty and load the dishwasher\n" +
+            "• Reply to 3 urgent personal emails before lunch and then plan the rest of the week carefully"
+        val nodes = listOf(
+            com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("a", "p", pasted, kind = MapKind.TASK),
+        )
+        val natural = com.virlin.app.ui.map.arrange(nodes, MapLayout.RIGHT_TREE).frames.getValue("a").w
+        assertTrue(com.virlin.app.ui.map.minimumCardWidth(pasted) < natural)
+        val narrow = com.virlin.app.ui.map.arrange(nodes, MapLayout.RIGHT_TREE, nodeWidths = mapOf("a" to 160f))
+        val wide = com.virlin.app.ui.map.arrange(nodes, MapLayout.RIGHT_TREE, nodeWidths = mapOf("a" to 480f))
+        assertEquals(160f, narrow.frames.getValue("a").w, .01f)
+        assertEquals(480f, wide.frames.getValue("a").w, .01f)
+        // Three typed lines get room for three lines even when each would fit on one.
+        val lines = "One\nTwo\nThree"
+        val listed = com.virlin.app.ui.map.arrange(listOf(nodes[0],
+            com.virlin.app.ui.map.MapTopic("a", "p", lines, kind = MapKind.TASK)), MapLayout.RIGHT_TREE)
+        assertTrue(listed.frames.getValue("a").h >= 3 * 19f + 24f)
+    }
+
     @Test fun expandedPreviewGrowsDownwardWithoutCoveringSiblingCards() {
         val nodes = listOf(
             com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
@@ -81,7 +101,9 @@ class ProjectMapTest {
             com.virlin.app.ui.map.MapTopic("d", "a", "Review", kind = MapKind.TASK),
             com.virlin.app.ui.map.MapTopic("e", "b", "Release", kind = MapKind.TASK),
         )
-        assertEquals(13, MapLayout.entries.size)
+        assertEquals(21, MapLayout.entries.size)
+        assertTrue(MapLayout.entries.count { it.handDrawn } >= 7)
+        assertEquals(MapLayout.entries.size, MapLayout.entries.map { it.label }.distinct().size)
         assertEquals(MapLayout.entries.size,
             MapLayout.entries.map { Triple(it.fork, it.node, it.endpoint) }.distinct().size)
         MapLayout.entries.forEach { layout ->
@@ -279,6 +301,20 @@ class ProjectMapTest {
                 nodeFinishes = mapOf("t" to handDrawnFinishes[(index + 1) % handDrawnFinishes.size]),
                 nodeColors = mapOf("t" to 0xFF765432),
             )
+            val decoded = decodeVirlinMap(encodeVirlinMap(VirlinMapSnapshot("p", "Project", topics, appearance)))
+            assertEquals(appearance, decoded.appearance)
+        }
+    }
+
+    @Test fun everyBoxFinishSurvivesPortableRoundTrip() {
+        val topics = listOf(
+            com.virlin.app.ui.map.MapTopic("p", null, "Project", kind = MapKind.PROJECT),
+            com.virlin.app.ui.map.MapTopic("t", "p", "Task", kind = MapKind.TASK),
+        )
+        val finishes = com.virlin.app.ui.map.MapBoxFinish.entries
+        finishes.forEachIndexed { index, finish ->
+            val appearance = MapAppearance(boxFinish = finish,
+                nodeFinishes = mapOf("t" to finishes[(index + 1) % finishes.size]))
             val decoded = decodeVirlinMap(encodeVirlinMap(VirlinMapSnapshot("p", "Project", topics, appearance)))
             assertEquals(appearance, decoded.appearance)
         }

@@ -111,9 +111,10 @@ class NeedsYouSortUiTest {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             NeedsYouSortControl(
                                 mode = mode, expanded = sortOpen, enabled = shown.isNotEmpty(),
-                                onExpandedChange = { sortOpen = it }, onSelect = { mode = it }
+                                onExpandedChange = { sortOpen = it }
                             )
                         }
+                        com.virlin.app.ui.screens.NeedsYouSortStrip(sortOpen, mode, onSelect = { mode = it }, onClose = { sortOpen = false })
                         shown.forEach { e ->
                             androidx.compose.runtime.key(e.stream.id) {
                                 NeedsYouCard(

@@ -1,7 +1,29 @@
 package com.virlin.app.ui.navigation
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Apps
@@ -50,48 +72,110 @@ const val BottomNavTag = "bottom_nav"
 const val InboxBadgeTag = "bottom_nav_inbox_badge"
 fun bottomNavItemTag(d: RootDestination) = "bottom_nav_${d.route}"
 
-private val NavBackground = Color(0xFFFCFBF9)
-private val NavDivider = Color(0x14162016)
-private val Active = Color(0xFF047857)
-private val ActiveIndicator = Color(0xFFDDF3E7)
-private val Inactive = Color(0xFF7A8391)
+private val NavInk = Color(0xFF1E1442)
+private val BadgeGreen = Color(0xFF10B981)
+private val SelectedPill = Brush.verticalGradient(listOf(Color(0xFFFF8E8E), Color(0xFFFF5C77), Color(0xFFF2416A)))
+
+/** Each destination keeps its own colour when it is not the selected tab. */
+private fun RootDestination.accent(): Color = when (this) {
+    RootDestination.NOW -> Color(0xFFFF5C6C)
+    RootDestination.STREAMS -> Color(0xFF7C3AED)
+    RootDestination.PULSE -> Color(0xFF14A38F)
+    RootDestination.INBOX -> Color(0xFF7C3AED)
+}
 
 /**
- * Root bottom navigation: a standard, bottom-attached Material 3 NavigationBar. It owns its own
- * navigation-bar inset (so the surface reaches the physical bottom edge with no gap), draws no
- * floating card, and shows the live Inbox count as a compact badge.
+ * Root bottom navigation: a floating rounded bar on a soft colour backdrop. It owns its own
+ * navigation-bar inset (so the backdrop reaches the physical bottom edge with no gap), marks
+ * the selected tab with a coral pill, and shows the live Inbox count as a compact badge.
  */
 @Composable
 fun VirlinBottomNav(currentRoute: String, inboxCount: Int, navController: NavController, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.fillMaxWidth().testTag(BottomNavTag)) {
-        HorizontalDivider(thickness = 1.dp, color = NavDivider)
-        NavigationBar(
-            containerColor = NavBackground,
-            tonalElevation = 0.dp,
-            windowInsets = NavigationBarDefaults.windowInsets
+    ApprovedNowDock(currentRoute, inboxCount, { navController.navigateRoot(it) }, modifier)
+}
+
+/** Retained reference for the prior dock; existing page content and navigation remain unchanged. */
+@Composable
+private fun PreviousVirlinBottomNav(currentRoute: String, inboxCount: Int, navController: NavController, modifier: Modifier = Modifier) {
+    val barShape = RoundedCornerShape(32.dp)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag(BottomNavTag)
+            .drawBehind {
+                drawRect(Color(0xFFFCFBFF))
+                val r = size.height * 1.4f
+                drawCircle(Brush.radialGradient(listOf(Color(0x66FF8CC0), Color(0x00FF8CC0)),
+                    center = Offset(0f, size.height), radius = r), radius = r, center = Offset(0f, size.height))
+                drawCircle(Brush.radialGradient(listOf(Color(0x5CB9A5FF), Color(0x00B9A5FF)),
+                    center = Offset(size.width, size.height), radius = r), radius = r, center = Offset(size.width, size.height))
+            }
+            .windowInsetsPadding(NavigationBarDefaults.windowInsets)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .shadow(10.dp, barShape, ambientColor = Color(0x407C3AED), spotColor = Color(0x407C3AED))
+                .clip(barShape)
+                .background(Brush.verticalGradient(listOf(Color.White, Color(0xFFF5F0FF))))
+                .border(1.dp, Color.White, barShape)
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             RootDestination.entries.forEach { d ->
                 val selected = currentRoute == d.route
-                NavigationBarItem(
+                NavItem(
+                    destination = d,
                     selected = selected,
+                    inboxCount = inboxCount,
                     onClick = { navController.navigateRoot(d.route) },
-                    icon = {
-                        if (d == RootDestination.INBOX && inboxCount > 0) BadgedBox(badge = {
-                            Badge(containerColor = Active, contentColor = Color.White, modifier = Modifier.testTag(InboxBadgeTag)) { Text(if (inboxCount > 99) "99+" else "$inboxCount", fontSize = 10.sp) }
-                        }) { Icon(if (selected) d.selectedIcon else d.icon, contentDescription = null) }
-                        else Icon(if (selected) d.selectedIcon else d.icon, contentDescription = null)
-                    },
-                    label = { Text(d.label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium) },
-                    alwaysShowLabel = true,
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Active, selectedTextColor = Active, indicatorColor = ActiveIndicator,
-                        unselectedIconColor = Inactive, unselectedTextColor = Inactive
-                    ),
-                    modifier = Modifier.testTag(bottomNavItemTag(d)).semantics {
-                        contentDescription = if (d == RootDestination.INBOX && inboxCount > 0) "${d.label}, $inboxCount in inbox" else d.label
-                    }
+                    modifier = Modifier.weight(1f)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun NavItem(destination: RootDestination, selected: Boolean, inboxCount: Int, onClick: () -> Unit, modifier: Modifier) {
+    val pillAlpha by animateFloatAsState(if (selected) 1f else 0f, tween(220), label = "navPill")
+    val pillShape = RoundedCornerShape(26.dp)
+    val tint = if (selected) Color.White else destination.accent()
+    Box(
+        modifier
+            .fillMaxHeight()
+            .testTag(bottomNavItemTag(destination))
+            .semantics {
+                contentDescription = if (destination == RootDestination.INBOX && inboxCount > 0)
+                    "${destination.label}, $inboxCount in inbox" else destination.label
+            }
+            .clip(pillShape)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (pillAlpha > 0f) Box(
+            Modifier.matchParentSize()
+                .graphicsLayer { alpha = pillAlpha }
+                .background(SelectedPill, pillShape)
+        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            val icon = if (selected) destination.selectedIcon else destination.icon
+            if (destination == RootDestination.INBOX && inboxCount > 0) BadgedBox(badge = {
+                Badge(containerColor = BadgeGreen, contentColor = Color.White, modifier = Modifier.testTag(InboxBadgeTag)) {
+                    Text(if (inboxCount > 99) "99+" else "$inboxCount", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }) { Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp)) }
+            else Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
+            Text(
+                destination.label,
+                fontSize = 11.5.sp,
+                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                fontFamily = com.virlin.app.ui.screens.VirlinDmSans,
+                color = if (selected) Color.White else NavInk,
+                maxLines = 1
+            )
         }
     }
 }

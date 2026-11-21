@@ -17,6 +17,7 @@ import com.virlin.app.domain.model.ExternalStages
 import com.virlin.app.domain.model.EventType
 import com.virlin.app.domain.model.ExecutionModeResolver
 import com.virlin.app.domain.model.ExecutionPreference
+import com.virlin.app.domain.model.FocusClockPause
 import com.virlin.app.domain.model.FocusSession
 import com.virlin.app.domain.model.Project
 import com.virlin.app.domain.model.Task
@@ -720,11 +721,66 @@ class DefaultVirlinActions(
         ActionResult.Success(updated)
     }
 
+    override suspend fun suspendFocusClock(at: Instant?): ActionResult<FocusClockPause?> = try {
+        repository.transaction {
+            val writer = if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this
+            val focus = writer.getActiveFocus() ?: return@transaction ActionResult.Success(null)
+            val open = writer.getOpenFocusSession(focus.id) ?: return@transaction ActionResult.Success(null)
+            val now = clock.now()
+            val end = (at ?: now).let { if (it.isBefore(open.startedAt)) open.startedAt else if (it.isAfter(now)) now else it }
+            // The stored row keeps its own owner/task: written as is, not re-mapped.
+            saveFocusSession(open.copy(endedAt = end))
+            ActionResult.Success(FocusClockPause(open.id, open.workStreamId, open.taskId))
+        }
+    } catch (e: Exception) { ActionResult.Failure(e) }
+
+    override suspend fun resumeFocusClock(pause: FocusClockPause): ActionResult<Boolean> = try {
+        // Read before the transaction: the in-memory repository's lock is not re-entrant.
+        val history = repository.getFocusSessions(pause.ownerId)
+        val paused = history.firstOrNull { it.id == pause.sessionId }
+        val superseded = paused == null || paused.endedAt == null ||
+            history.any { it.id != paused.id && (it.isOpen || !it.startedAt.isBefore(paused.startedAt)) }
+        if (superseded) ActionResult.Success(false) else repository.transaction {
+            val writer = if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this
+            val focus = writer.getActiveFocus() ?: return@transaction ActionResult.Success(false)
+            val same = if (getTask(focus.id) != null) pause.taskId == focus.id
+                else focus.id == pause.ownerId && focus.activeTaskId == pause.taskId
+            if (!same || getOpenFocusSession(pause.ownerId) != null) return@transaction ActionResult.Success(false)
+            saveFocusSession(FocusSession(FocusSession.continuationId(paused!!.periodRootId, ids.newId("fs")),
+                pause.ownerId, paused.cycleId, startedAt = clock.now(), taskId = pause.taskId))
+            ActionResult.Success(true)
+        }
+    } catch (e: Exception) { ActionResult.Failure(e) }
+
+    override suspend fun resumePausedFocus(): ActionResult<Boolean> = try {
+        val paused = repository.transaction {
+            val writer = if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this
+            val focus = writer.getActiveFocus() ?: return@transaction null
+            if (writer.getOpenFocusSession(focus.id) != null) return@transaction null
+            val task = getTask(focus.id)
+            FocusClockPause("", task?.let { it.workStreamId ?: it.id } ?: focus.id, task?.id ?: focus.activeTaskId)
+        }
+        if (paused == null) ActionResult.Success(false) else {
+            val latest = repository.getFocusSessions(paused.ownerId).maxByOrNull { it.startedAt }
+            val continued = latest?.takeIf { !it.isOpen && it.taskId == paused.taskId }
+                ?.let { resumeFocusClock(paused.copy(sessionId = it.id)) }
+            if (continued is ActionResult.Success && continued.value) continued
+            else repository.transaction {
+                val writer = if (repository.taskExecutionEnabled) TaskExecutionWriter(this) else this
+                val focus = writer.getActiveFocus() ?: return@transaction ActionResult.Success(false)
+                if (writer.getOpenFocusSession(focus.id) != null) return@transaction ActionResult.Success(false)
+                writer.saveFocusSession(FocusSession(ids.newId("fs"), focus.id, focus.currentCycleId,
+                    startedAt = clock.now(), taskId = if (getTask(focus.id) != null) focus.id else focus.activeTaskId))
+                ActionResult.Success(true)
+            }
+        }
+    } catch (e: Exception) { ActionResult.Failure(e) }
+
     override suspend fun pauseAllTimers(projectId: String?): ActionResult<Int> =
-        pauseTimers(projectId, "All timers paused")
+        pauseTimers(projectId, ALL_TIMERS_PAUSED)
 
     override suspend fun pauseTimersForOrganize(projectId: String): ActionResult<Int> =
-        pauseTimers(projectId, "Organize timers paused")
+        pauseTimers(projectId, ORGANIZE_TIMERS_PAUSED)
 
     private suspend fun pauseTimers(projectId: String?, provenance: String): ActionResult<Int> = try {
         repository.transaction {
@@ -759,10 +815,10 @@ class DefaultVirlinActions(
     } catch (e: Exception) { ActionResult.Failure(e) }
 
     override suspend fun resumeAllTimers(projectId: String?): ActionResult<Int> =
-        resumeTimers(projectId, "All timers paused")
+        resumeTimers(projectId, ALL_TIMERS_PAUSED)
 
     override suspend fun resumeTimersForOrganize(projectId: String): ActionResult<Int> =
-        resumeTimers(projectId, "Organize timers paused")
+        resumeTimers(projectId, ORGANIZE_TIMERS_PAUSED)
 
     private suspend fun resumeTimers(projectId: String?, provenance: String): ActionResult<Int> = try {
         repository.transaction {
@@ -773,23 +829,17 @@ class DefaultVirlinActions(
             var count = 0
             with(writer) {
                 var humanRunning = items.any { it.state == FOCUS }
-                if (provenance == "Organize timers paused" && humanRunning && items.any { item ->
+                if (provenance == ORGANIZE_TIMERS_PAUSED && humanRunning && items.any { item ->
                         (projectId == null || belongsToProject(item, projectId)) &&
-                            item.state == PAUSED && !item.externalTrackingPaused &&
-                            executionEvents(item.id).lastOrNull()?.let { pause ->
-                                pause.type == EventType.PAUSED && pause.at == item.updatedAt &&
-                                    pause.detail?.contains(provenance) == true
-                            } == true
+                            !item.externalTrackingPaused && pendingTimerPause(item, provenance) != null
                     }) return@transaction ActionResult.Rejected(DomainError.AnotherTaskIsExecuting)
                 for (item in items.distinctBy { it.id }) {
                     if (projectId != null && !belongsToProject(item, projectId)) continue
                     if (item.state != PAUSED) continue
                     if (repository.taskExecutionEnabled && getTask(item.id) != null &&
                         !ExecutionEligibility.isLeaf(item.id, allTasks())) continue
-                    val pause = executionEvents(item.id).lastOrNull() ?: continue
                     // Persisted provenance survives app restarts. Never resume an unrelated manual pause.
-                    if (pause.type != EventType.PAUSED || pause.at != item.updatedAt ||
-                        pause.detail?.contains(provenance) != true) continue
+                    val pause = pendingTimerPause(item, provenance) ?: continue
                     val external = item.externalTrackingPaused
                     if (!external && humanRunning) continue
                     val remaining = Regex("remaining=(-?\\d+)").find(pause.detail!!)?.groupValues?.get(1)?.toLongOrNull()

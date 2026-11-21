@@ -28,7 +28,9 @@ data class WorkStream(
      * Live cumulative = [priorFocusInvestedSec] + [focusInvestedSec] while FOCUS.
      * Trailing so existing positional MockData seeds stay valid.
      */
-    val priorFocusInvestedSec: Int = 0
+    val priorFocusInvestedSec: Int = 0,
+    /** In FOCUS with no running FocusSession (paused): the split-flap holds its value. */
+    val focusPaused: Boolean = false
 )
 
 data class Capture(

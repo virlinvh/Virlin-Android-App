@@ -53,7 +53,19 @@ class NeedsYouSortTest {
         val (repo, _) = harness(abc())
         assertEquals(listOf("A", "B", "C"), shown(repo, NeedsYouSortMode.PRIORITY))
         assertTrue(NeedsYouSortMode.PRIORITY.isDefault)
-        assertEquals(listOf("Priority", "Longest waiting", "Most recent"), NeedsYouSortMode.entries.map { it.label })
+        assertEquals(listOf("Priority", "Longest waiting", "Most recent", "By project"), NeedsYouSortMode.entries.map { it.label })
+    }
+
+    @Test fun byProject_groupsProjectsByName_rankInside_unknownLast() {
+        val items = listOf(
+            item("A", at("11:40"), 1).copy(projectId = "pz"), item("B", at("11:58"), 2).copy(projectId = "pa"),
+            item("C", at("11:45"), 3), item("D", at("11:50"), 4).copy(projectId = "pz"), item("E", at("11:55"), 5).copy(projectId = "pa"),
+        )
+        val (repo, _) = harness(items)
+        val names = mapOf("pz" to "zebra", "pa" to "Apple")
+        assertEquals(listOf("B", "E", "A", "D", "C"),
+            NeedsYouSort.display(queue(repo), NeedsYouSortMode.BY_PROJECT, names).map { it.stream.id })
+        assertEquals(listOf(2, 5, 1, 4, 3), NeedsYouSort.display(queue(repo), NeedsYouSortMode.BY_PROJECT, names).map { it.rank })
     }
 
     @Test fun test2_longestWaitingIsEarliestDueFirst() {

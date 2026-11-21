@@ -25,6 +25,7 @@ class MainActivity : ComponentActivity() {
 
         VirlinGraph.init(applicationContext)
         VirlinStartup.mark("VirlinGraph.init_DONE")
+        com.virlin.app.platform.FocusAutoPause.install(applicationContext)
         NotificationNavigation.offer(intent)
 
         // DEBUG/TEST extras — ignored in release (BuildConfig.DEBUG).

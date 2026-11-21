@@ -25,7 +25,13 @@ internal fun DeleteProjectDialog(project: Project, busy: Boolean, error: String?
 }
 
 @Composable
-internal fun DeleteHierarchyDialog(title: String, kind: String, busy: Boolean, error: String?, onDismiss: () -> Unit, onDelete: () -> Unit) {
+internal fun DeleteHierarchyDialog(title: String, kind: String, busy: Boolean, error: String?, onDismiss: () -> Unit, onDelete: () -> Unit) =
+    DeleteByNameDialog(title, kind, "Permanent · includes nested content", busy, error, onDismiss, onDelete)
+
+/** The type-the-name delete warning, with its own consequence line. */
+@Composable
+internal fun DeleteByNameDialog(title: String, kind: String, warning: String, busy: Boolean, error: String?,
+    onDismiss: () -> Unit, onDelete: () -> Unit) {
     var name by remember(title, kind) { mutableStateOf("") }
     SafeDialog(onDismissRequest = { if (!busy) onDismiss() }, scrollContent = true) {
         val danger = MaterialTheme.colorScheme.error
@@ -51,7 +57,7 @@ internal fun DeleteHierarchyDialog(title: String, kind: String, busy: Boolean, e
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Text("Permanent · includes nested content", color = danger, fontSize = 13.sp)
+                Text(warning, color = danger, fontSize = 13.sp)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Type “$title” to confirm", color = ink, fontSize = 13.sp,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)

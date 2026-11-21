@@ -78,7 +78,6 @@ const val MapPreviewCancelTag = "map_preview_cancel"
 const val MapPreviewClearTag = "map_preview_clear"
 const val MapPreviewCloseTag = "map_preview_close"
 const val MapPreviewEditNameTag = "map_preview_edit_name"
-const val MapPreviewNameFieldTag = "map_preview_name_field"
 const val MapPreviewAddImageTag = "map_preview_add_image"
 const val MapPreviewReplaceTag = "map_preview_replace"
 const val MapPreviewDeleteImageTag = "map_preview_delete_image"
@@ -123,6 +122,7 @@ fun MapNodePreviewPopup(
     onCancel: () -> Unit,
     onSave: (String) -> Unit,
     savingName: Boolean = false,
+    nameLabel: String = "Name",
     imageLoader: @Composable (MapPreviewImage, Modifier) -> Unit,
 ) {
     var editingName by remember(nodeTitle) { mutableStateOf(false) }
@@ -170,8 +170,7 @@ fun MapNodePreviewPopup(
         ) {
             Column(Modifier.padding(20.dp)) {
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-                    Header(name, editingName, { name = it }, { editingName = true },
-                        draft.hasContent, onRequestClear, dismiss)
+                    Header(name, { editingName = true }, draft.hasContent, onRequestClear, dismiss)
                     Spacer(Modifier.height(14.dp))
                     DescriptionEditor(draft, onDraftChange)
                     Spacer(Modifier.height(16.dp))
@@ -183,22 +182,23 @@ fun MapNodePreviewPopup(
         }
         }
     }
+    // The same name editor as the Organize strip's Edit. The new name waits here and is saved
+    // with the rest of the preview, so Cancel still discards everything.
+    if (editingName) com.virlin.app.ui.map.MapRenameDialog(
+        current = name, label = nameLabel,
+        onDismiss = { editingName = false },
+        onSave = { name = it; editingName = false },
+    )
 }
 
 @Composable
 private fun Header(
     nodeTitle: String,
-    editingName: Boolean,
-    onNameChange: (String) -> Unit,
     onEditName: () -> Unit,
     hasContent: Boolean,
     onRequestClear: () -> Unit,
     onClose: () -> Unit,
 ) {
-    val focusRequester = remember { FocusRequester() }
-    androidx.compose.runtime.LaunchedEffect(editingName) {
-        if (editingName) focusRequester.requestFocus()
-    }
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Preview details", modifier = Modifier.weight(1f), fontSize = 19.sp,
@@ -225,15 +225,10 @@ private fun Header(
             )
         }
         Spacer(Modifier.height(4.dp))
-        // Editing gets the full card width, even on narrow phones.
-        if (editingName) OutlinedTextField(
-            value = nodeTitle, onValueChange = onNameChange,
-            singleLine = true, label = { Text("Name") },
-            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
-                .testTag(MapPreviewNameFieldTag),
-        ) else Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(nodeTitle, modifier = Modifier.weight(1f, fill = false),
-                fontSize = 14.sp, color = Muted, maxLines = 2)
+                fontSize = 14.sp, color = Muted, maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             Spacer(Modifier.width(8.dp))
             IconOnly(
                 icon = Icons.Outlined.Edit,

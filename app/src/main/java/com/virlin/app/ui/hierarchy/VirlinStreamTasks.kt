@@ -165,7 +165,9 @@ fun VirlinStreamTasks(
     actions: StreamTaskActions,
     modifier: Modifier = Modifier,
     /** Ancestor task ids to open at, by id. Survives process death with the rest of the screen. */
-    initialPath: List<String> = emptyList()
+    initialPath: List<String> = emptyList(),
+    /** Shown beside Back: the project's own icon, which jumps straight to its overview. */
+    projectBadge: (@Composable () -> Unit)? = null,
 ) {
     // Saved as plain ids: a rebuilt process reopens the same level without a live breadcrumb.
     val palette = rememberProjectPalette(ui.projectId)
@@ -188,6 +190,9 @@ fun VirlinStreamTasks(
     val tasksById = remember(ui.tasks) { ui.tasks.associateBy { it.id } }
     LaunchedEffect(ui.tasks, path) { pathCsv = path.takeWhile { it in tasksById }.joinToString(",") }
     val parentId = path.lastOrNull()
+    // System Back climbs one level (subtask → task → list) before leaving the WorkStream,
+    // exactly like the on-screen arrow. Sheets and dialogs opened later take Back first.
+    BackHandler(enabled = path.isNotEmpty()) { pathCsv = path.dropLast(1).joinToString(",") }
     val siblings = ui.tasks.filter { it.parentId == parentId }.sortedWith(compareBy({ it.order }, { it.id }))
     val visible = siblings.filter {
         when (filter) { TaskFilter.ALL -> true; TaskFilter.ACTIVE -> !it.completed; TaskFilter.DONE -> it.completed }
@@ -239,6 +244,10 @@ fun VirlinStreamTasks(
                 .padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { if (path.isEmpty()) actions.back() else pathCsv = path.dropLast(1).joinToString(",") }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Ink)
+                }
+                if (projectBadge != null) {
+                    projectBadge()
+                    Spacer(Modifier.width(6.dp))
                 }
                 Text(ui.streamName, Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val externalInSection = parentId == null || ui.externalTaskId == parentId ||

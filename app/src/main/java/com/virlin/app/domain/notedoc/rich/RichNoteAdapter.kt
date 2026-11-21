@@ -6,6 +6,8 @@ import com.virlin.app.domain.notedoc.NoteDocBlockType
 import com.virlin.app.domain.notedoc.NoteDocMark
 import com.virlin.app.domain.notedoc.NoteDocRun
 import com.virlin.app.domain.notedoc.NoteDocTable
+import com.virlin.app.domain.notedoc.NoteDocVideo
+import com.virlin.app.domain.notedoc.NoteDocAudio
 import com.virlin.app.domain.notedoc.NoteMath
 import com.virlin.app.domain.notedoc.NoteRuns
 
@@ -128,9 +130,9 @@ object RichNoteAdapter {
                 i = next
                 continue
             }
-            if (current == null || currentType != b.type) {
+            if (current == null || currentType != b.type || current.attr<String>("listStyle") != listStyleAttr(b)) {
                 currentType = b.type
-                current = node(listTypeName(b.type), attrs("id" to "list-${b.id}"), mutableListOf())
+                current = node(listTypeName(b.type), attrs("id" to "list-${b.id}", "listStyle" to listStyleAttr(b)), mutableListOf())
                 lists += current
             }
             val itemIndent = b.indent - offset - depth
@@ -147,10 +149,12 @@ object RichNoteAdapter {
     private fun legacyBlock(b: NoteDocBlock, offset: Int): JNode {
         val indent = (b.indent - offset).takeIf { it != 0 }
         return when (b.type) {
-            NoteDocBlockType.HEADING_1, NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3 ->
+            NoteDocBlockType.HEADING_1, NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3,
+            NoteDocBlockType.HEADING_4, NoteDocBlockType.HEADING_5 ->
                 node("heading", blockAttrs(b, b.id, indent).apply {
                     put("level", headingLevel(b.type).toLong())
                     if (b.isCollapsed) put("collapsed", true)
+                    if (b.toggleHeading) put("toggle", true)
                 }, inlineFrom(b.text, b.runs))
             NoteDocBlockType.QUOTE -> node("blockquote", attrs("id" to b.id, "indent" to indent),
                 mutableListOf(node("paragraph", blockAttrs(b, "${b.id}:p", null), inlineFrom(b.text, b.runs))))
@@ -174,18 +178,42 @@ object RichNoteAdapter {
                         !it.startsWith("https://", true) && !it.startsWith("http://", true) },
                     "indent" to indent))
             }
+            NoteDocBlockType.VIDEO -> node("youtube", videoAttrs(b.id, b.video, indent))
+            NoteDocBlockType.AUDIO -> node("audio", attrs("id" to b.id, "file" to b.audio?.file,
+                "durationMs" to b.audio?.durationMs, "peaks" to b.audio?.peaks?.takeIf { it.isNotEmpty() },
+                "title" to b.audio?.title, "indent" to indent))
             NoteDocBlockType.TABLE -> {
                 val table = b.table ?: NoteDocTable.blank(1, 1)
-                node("table", attrs("id" to b.id, "indent" to indent), MutableList(table.rows) { r ->
-                    node("tableRow", null, MutableList(table.cols) { c ->
-                        node(if (r == 0) "tableHeader" else "tableCell", null,
-                            mutableListOf(node("paragraph", attrs("id" to "${b.id}:r${r}c$c"), inlineFrom(table.cell(r, c), emptyList()))))
+                node("table", attrs("id" to b.id, "indent" to indent, "gridLines" to false.takeIf { !table.gridLines }),
+                    MutableList(table.rows) { r ->
+                        node("tableRow", null, MutableList(table.cols) { c ->
+                            node(if (table.isHeader(r, c)) "tableHeader" else "tableCell", tableCellAttrs(table, r, c),
+                                mutableListOf(node("paragraph", attrs("id" to "${b.id}:r${r}c$c"),
+                                    inlineFrom(table.cell(r, c), table.runsAt(r, c)))))
+                        })
                     })
-                })
             }
             else -> node("paragraph", blockAttrs(b, b.id, indent), inlineFrom(b.text, b.runs))
         }
     }
+
+    private fun videoAttrs(id: String, video: NoteDocVideo?, indent: Int?): JNode = attrs(
+        "id" to id,
+        "videoId" to video?.videoId,
+        "start" to video?.startSeconds?.takeIf { it > 0 }?.toLong(),
+        "end" to video?.endSeconds?.toLong(),
+        "title" to video?.title,
+        "channel" to video?.channel,
+        "indent" to indent,
+    )
+
+    private fun projectVideo(n: JNode): NoteDocVideo? = NoteDocVideo(
+        videoId = n.attr<String>("videoId").orEmpty(),
+        startSeconds = n.attrInt("start") ?: 0,
+        endSeconds = n.attrInt("end"),
+        title = n.attr<String>("title")?.take(NoteDocVideo.MAX_TEXT),
+        channel = n.attr<String>("channel")?.take(NoteDocVideo.MAX_TEXT),
+    ).takeIf { it.isValid }
 
     private fun blockAttrs(b: NoteDocBlock, id: String, indent: Int?): JNode = attrs(
         "id" to id,
@@ -241,9 +269,12 @@ object RichNoteAdapter {
                     Target.Inline(n, n, here, topLevel))
                 "heading" -> {
                     val level = (n.attrInt("level") ?: 1).coerceIn(1, 6)
+                    // Level 6 shows as Heading 5; its stored level is kept unless the user restyles it.
                     val type = when (level) { 1 -> NoteDocBlockType.HEADING_1; 2 -> NoteDocBlockType.HEADING_2
-                        else -> NoteDocBlockType.HEADING_3 }
-                    out += Projected(inlineBlock(n, id, type, indent).copy(isCollapsed = n.attr<Boolean>("collapsed") == true),
+                        3 -> NoteDocBlockType.HEADING_3; 4 -> NoteDocBlockType.HEADING_4
+                        else -> NoteDocBlockType.HEADING_5 }
+                    out += Projected(inlineBlock(n, id, type, indent).copy(isCollapsed = n.attr<Boolean>("collapsed") == true,
+                        toggleHeading = n.attr<Boolean>("toggle") == true),
                         Target.Inline(n, n, here, topLevel))
                 }
                 "blockquote" -> {
@@ -271,6 +302,7 @@ object RichNoteAdapter {
                 "bulletList", "orderedList", "taskList" -> {
                     val type = when (n["type"]) { "orderedList" -> NoteDocBlockType.NUMBERED
                         "taskList" -> NoteDocBlockType.CHECKLIST; else -> NoteDocBlockType.BULLET }
+                    val listStyle = if (type == NoteDocBlockType.CHECKLIST) null else n.attr<String>("listStyle")
                     for (itemRaw in n.contentList().toList()) {
                         @Suppress("UNCHECKED_CAST") val item = itemRaw as? JNode ?: continue
                         val itemChain = here + (n.contentList() to item)
@@ -281,12 +313,14 @@ object RichNoteAdapter {
                         val rest: List<Any?>
                         if (firstChild?.get("type") == "paragraph") {
                             out += Projected(inlineBlock(firstChild, itemId, type, itemIndent)
-                                .copy(checked = type == NoteDocBlockType.CHECKLIST && item.attr<Boolean>("checked") == true),
+                                .copy(checked = type == NoteDocBlockType.CHECKLIST && item.attr<Boolean>("checked") == true,
+                                    listStyle = listStyle),
                                 Target.Inline(item, firstChild, itemChain, false))
                             rest = children.drop(1)
                         } else {
                             out += Projected(NoteDocBlock(itemId, type, "", indent = itemIndent,
-                                checked = type == NoteDocBlockType.CHECKLIST && item.attr<Boolean>("checked") == true),
+                                checked = type == NoteDocBlockType.CHECKLIST && item.attr<Boolean>("checked") == true,
+                                listStyle = listStyle),
                                 Target.Fixed(item, itemChain))
                             rest = children
                         }
@@ -300,18 +334,20 @@ object RichNoteAdapter {
                 "table" -> {
                     val rows = n.contentList().mapNotNull { it as? Map<*, *> }
                     val cols = rows.maxOfOrNull { (it["content"] as? List<*>)?.size ?: 0 } ?: 0
-                    val cells = rows.flatMap { row ->
-                        val rowCells = (row["content"] as? List<*>).orEmpty()
-                        List(cols) { c -> (rowCells.getOrNull(c) as? Map<*, *>)?.let { cellText(it) } ?: "" }
-                    }
                     out += Projected(NoteDocBlock(id, NoteDocBlockType.TABLE, indent = indent,
                         table = if (rows.isEmpty() || cols == 0) NoteDocTable.blank(1, 1)
-                        else NoteDocTable(rows.size, cols, cells)), Target.Table(n, here))
+                        else projectTable(n, rows, cols)), Target.Table(n, here))
                 }
                 "image" -> out += Projected(NoteDocBlock(id, NoteDocBlockType.IMAGE, indent = indent,
                     imagePath = n.attr<String>("name") ?: n.attr<String>("url") ?: n.attr<String>("legacyPath") ?: ""),
                     Target.Fixed(n, here))
                 "horizontalRule" -> out += Projected(NoteDocBlock(id, NoteDocBlockType.DIVIDER, indent = indent), Target.Fixed(n, here))
+                "youtube" -> out += Projected(NoteDocBlock(id, NoteDocBlockType.VIDEO, indent = indent,
+                    video = projectVideo(n)), Target.Fixed(n, here))
+                "audio" -> out += Projected(NoteDocBlock(id, NoteDocBlockType.AUDIO, indent = indent,
+                    audio = NoteDocAudio(n.attr<String>("file").orEmpty(), n.attrNumber("durationMs")?.toLong() ?: 0L,
+                        n.attr<String>("peaks").orEmpty(), n.attr<String>("title")?.take(NoteDocAudio.MAX_TITLE))
+                        .takeIf { it.isValid }), Target.Fixed(n, here))
                 "toggleBlock" -> {
                     val children = n.contentList()
                     @Suppress("UNCHECKED_CAST") val summary = children.firstOrNull() as? JNode
@@ -400,6 +436,41 @@ object RichNoteAdapter {
         return run.takeUnless { it.isEmptyStyle }
     }
 
+    private fun projectTable(table: Map<*, *>, rows: List<Map<*, *>>, cols: Int): NoteDocTable {
+        val grid = rows.map { row ->
+            val rowCells = (row["content"] as? List<*>).orEmpty()
+            List(cols) { c -> rowCells.getOrNull(c) as? Map<*, *> }
+        }
+        val texts = grid.flatMap { row -> row.map { cell -> cell?.let(::cellText) ?: "" } }
+        fun header(cell: Map<*, *>?) = cell?.get("type") == "tableHeader"
+        val headerRow = grid.first().all(::header)
+        val body = grid.drop(if (headerRow) 1 else 0)
+        return NoteDocTable(
+            rows.size, cols, texts,
+            cellRuns = grid.flatMap { row -> row.map { cell -> cell?.let(::cellRuns).orEmpty() } },
+            cellFills = grid.flatMap { row -> row.map { cell -> cssToArgb(cell?.attr<String>("background")) } },
+            colWidths = List(cols) { c ->
+                (grid.first()[c]?.attr<List<*>>("colwidth")?.firstOrNull() as? Number)?.toInt()
+            },
+            headerRow = headerRow,
+            headerColumn = body.isNotEmpty() && body.all { header(it[0]) },
+            gridLines = table.attr<Boolean>("gridLines") != false,
+        ).compact()
+    }
+
+    /** Formatting of a cell holding one paragraph; anything richer projects as plain text. */
+    private fun cellRuns(cell: Map<*, *>): List<NoteDocRun> {
+        val paragraph = (cell["content"] as? List<*>)?.singleOrNull() as? Map<*, *> ?: return emptyList()
+        if (paragraph["type"] != "paragraph" && paragraph["type"] != "heading") return emptyList()
+        val (text, runs) = inlineText(paragraph)
+        return NoteRuns.normalize(runs, text.length)
+    }
+
+    private fun tableCellAttrs(table: NoteDocTable, r: Int, c: Int): JNode? = attrs(
+        "background" to table.fillAt(r, c)?.let(::argbToCss),
+        "colwidth" to table.widthAt(c)?.let { mutableListOf<Any?>(it.toLong()) },
+    ).takeIf { it.isNotEmpty() }
+
     private fun cellText(cell: Map<*, *>): String =
         (cell["content"] as? List<*>).orEmpty().mapNotNull { it as? Map<*, *> }.joinToString("\n") {
             if (it["type"] == "paragraph" || it["type"] == "heading") inlineText(it).first else plainText(it)
@@ -433,7 +504,7 @@ object RichNoteAdapter {
     fun applyBlockEdits(treeJson: String, incoming: List<NoteDocBlock>): String? {
         val doc = parseDocument(treeJson).node
         val projected = projectWithTargets(doc)
-        val byId = projected.associateBy { it.block.id }
+        var byId = projected.associateBy { it.block.id }
         val incomingIds = incoming.mapTo(HashSet()) { it.id }
         // Removals first, using node identity so later lookups stay valid.
         for (p in projected) if (p.block.id !in incomingIds) {
@@ -443,24 +514,95 @@ object RichNoteAdapter {
             }
             if (keepsDescendant || !remove(p)) return null
         }
+        reorderTopLevel(doc, projected.filter { it.block.id in incomingIds }, incoming)
         var previousTop: JNode? = null
+        // Set when the previous block is an item of a top-level list, so a new line typed after it
+        // lands right after that item instead of after the whole list.
+        var previousItem: Pair<JNode, JNode>? = null
         for (block in incoming) {
             val p = byId[block.id]
             if (p == null) {
                 val created = legacyDoc(listOf(block)).contentList()
                 val docContent = doc.contentList()
+                val after = previousItem
+                if (after != null) {
+                    val (list, item) = after
+                    val items = list.contentList()
+                    val index = items.indexOfFirst { it === item }
+                    if (index < 0) return null
+                    @Suppress("UNCHECKED_CAST") val single = created.singleOrNull() as? JNode
+                    @Suppress("UNCHECKED_CAST") val newItem = single?.contentList()?.singleOrNull() as? JNode
+                    if (newItem != null && single["type"] == list["type"] &&
+                        single.attr<String>("listStyle") == list.attr<String>("listStyle")) {
+                        items.add(index + 1, newItem)
+                        previousItem = list to newItem
+                        continue
+                    }
+                    if (!splitListAfter(docContent, list, index)) return null
+                }
                 val at = previousTop?.let { top -> docContent.indexOfFirst { it === top } + 1 } ?: 0
                 docContent.addAll(at.coerceIn(0, docContent.size), created)
                 @Suppress("UNCHECKED_CAST")
                 previousTop = created.lastOrNull() as? JNode ?: previousTop
+                previousItem = null
                 continue
             }
             previousTop = p.target.chain.firstOrNull()?.second
+            previousItem = topLevelListItem(p)
             val normalized = block.copy(runs = NoteRuns.normalize(block.runs, block.text.length))
             if (normalized == p.block) continue
             if (!patch(p, normalized)) return null
+            if (normalized.type != p.block.type) {
+                // A type change can move nodes (into or out of a list, quote or toggle).
+                byId = projectWithTargets(doc).associateBy { it.block.id }
+                val moved = byId[block.id] ?: return null
+                previousTop = moved.target.chain.firstOrNull()?.second ?: return null
+                previousItem = topLevelListItem(moved)
+            }
         }
         return RichJson.stringify(doc)
+    }
+
+    /**
+     * Puts the document's top-level nodes in the order [incoming] lists their blocks, when that is
+     * a pure reorder of whole top-level nodes (a list, quote or toggle moves as one piece) and
+     * every kept block has its own id. Anything else leaves the tree exactly as it was, so the
+     * caller's read-back sees the order was not applied. Node identities never change, so
+     * [kept]'s targets stay valid.
+     */
+    private fun reorderTopLevel(doc: JNode, kept: List<Projected>, incoming: List<NoteDocBlock>) {
+        val byId = kept.associateBy { it.block.id }
+        val wanted = incoming.mapNotNull { block -> block.id.takeIf { it in byId } }
+        if (wanted == kept.map { it.block.id }) return
+        if (kept.any { it.block.id.startsWith("anon-") }) return
+        val order = ArrayList<JNode>()
+        for (id in wanted) {
+            val node = byId.getValue(id).target.chain.firstOrNull()?.second ?: return
+            if (order.lastOrNull() === node) continue
+            if (order.any { it === node }) return
+            order += node
+        }
+        val top = doc.contentList()
+        val original = ArrayList(top)
+        // Nodes with no block of their own stay right after the node they followed.
+        val start = Any()
+        val trailing = java.util.IdentityHashMap<Any, MutableList<Any?>>()
+        var anchor: Any = start
+        for (raw in original) {
+            if (order.any { it === raw }) anchor = raw!! else trailing.getOrPut(anchor) { ArrayList() } += raw
+        }
+        if (original.count { raw -> order.any { it === raw } } != order.size) return
+        top.clear()
+        trailing[start]?.let { top.addAll(it) }
+        for (node in order) {
+            top += node
+            trailing[node]?.let { top.addAll(it) }
+        }
+        val after = projectWithTargets(doc).map { it.block.id }.filter { it in byId }
+        if (after != wanted) {
+            top.clear()
+            top.addAll(original)
+        }
     }
 
     private fun remove(p: Projected): Boolean {
@@ -480,14 +622,22 @@ object RichNoteAdapter {
         val old = p.block
         return when (val target = p.target) {
             is Target.Inline -> {
+                if (block.type != old.type && (block.type !in TEXTBLOCK_TYPES || old.type !in TEXTBLOCK_TYPES)) {
+                    return patch(convertStep(p, block) ?: return false, block)
+                }
                 if (block.type != old.type) {
-                    if (!target.topLevelTextblock || block.type !in TEXTBLOCK_TYPES) return false
+                    if (!target.topLevelTextblock) return false
                     val node = target.container
                     if (block.type == NoteDocBlockType.PARAGRAPH) {
                         node["type"] = "paragraph"; node.attrsMap().remove("level"); node.attrsMap().remove("collapsed")
+                        node.attrsMap().remove("toggle")
                     } else {
                         node["type"] = "heading"; node.attrsMap()["level"] = headingLevel(block.type).toLong()
                     }
+                }
+                if (block.toggleHeading != old.toggleHeading) {
+                    if (block.toggleHeading && target.container["type"] != "heading") return false
+                    target.container.attrsMap().setOrRemove("toggle", block.toggleHeading.takeIf { it })
                 }
                 if (block.indent != old.indent) {
                     if (!target.topLevelTextblock) return false
@@ -510,10 +660,17 @@ object RichNoteAdapter {
                     val owner = if (target.node["type"] == "toggleBlock") target.node else target.container
                     owner.attrsMap().setOrRemove("collapsed", block.isCollapsed.takeIf { it })
                 }
+                if (listStyleAttr(block) != listStyleAttr(old)) {
+                    // The style belongs to the whole list node; callers restyle every item of it.
+                    val list = target.chain.getOrNull(target.chain.size - 2)?.second
+                    if (target.node["type"] != "listItem" || list?.get("type") !in setOf("bulletList", "orderedList")) return false
+                    list!!.attrsMap().setOrRemove("listStyle", listStyleAttr(block))
+                }
                 true
             }
             is Target.Text -> {
-                if (block.type != old.type || block.indent != old.indent) return false
+                if (block.type != old.type) return patch(convertStep(p, block) ?: return false, block)
+                if (block.indent != old.indent) return false
                 if (block.text != old.text) target.node["content"] = textContent(block.text)
                 if (block.promptTitle != old.promptTitle) target.node.attrsMap().setOrRemove("title", block.promptTitle)
                 true
@@ -529,10 +686,25 @@ object RichNoteAdapter {
             is Target.Table -> {
                 val oldTable = old.table ?: return false
                 val newTable = block.table ?: return false
-                if (block.type != old.type || oldTable.rows != newTable.rows || oldTable.cols != newTable.cols) return false
+                if (block.type != old.type) return false
+                if (isSimpleTable(target.node, oldTable)) return rebuildTable(target.node, old.id, oldTable, newTable)
+                // Merged cells or cells holding several blocks: only text and formatting edits, plus
+                // growth at the edges, can be written without losing anything.
+                val sameSize = oldTable.rows == newTable.rows && oldTable.cols == newTable.cols
+                if (if (sameSize) newTable.cellFills != oldTable.cellFills
+                    else newTable.cellFills.isNotEmpty() || oldTable.cellFills.isNotEmpty()) return false
+                if (newTable.colWidths != oldTable.colWidths || newTable.headerRow != oldTable.headerRow ||
+                    newTable.headerColumn != oldTable.headerColumn || newTable.gridLines != oldTable.gridLines) return false
+                val (dr, dc) = if (sameSize) 0 to 0
+                else growTable(target.node, old.id, oldTable, newTable) ?: return false
                 val rows = target.node.contentList()
                 for (r in 0 until newTable.rows) for (c in 0 until newTable.cols) {
-                    if (oldTable.cell(r, c) == newTable.cell(r, c)) continue
+                    val sr = r - dr
+                    val sc = c - dc
+                    val inOld = sr in 0 until oldTable.rows && sc in 0 until oldTable.cols
+                    val before = if (inOld) oldTable.cell(sr, sc) else ""
+                    val beforeRuns = if (inOld) oldTable.runsAt(sr, sc) else emptyList()
+                    if (before == newTable.cell(r, c) && beforeRuns == newTable.runsAt(r, c)) continue
                     @Suppress("UNCHECKED_CAST")
                     val row = rows.getOrNull(r) as? JNode ?: return false
                     @Suppress("UNCHECKED_CAST")
@@ -540,12 +712,429 @@ object RichNoteAdapter {
                     @Suppress("UNCHECKED_CAST")
                     val oldId = ((cell["content"] as? List<*>)?.firstOrNull() as? Map<*, *>)?.let { (it["attrs"] as? Map<*, *>)?.get("id") }
                     cell["content"] = mutableListOf<Any?>(node("paragraph", attrs("id" to (oldId ?: "${old.id}:r${r}c$c")),
-                        inlineFrom(newTable.cell(r, c), emptyList())))
+                        inlineFrom(newTable.cell(r, c), newTable.runsAt(r, c))))
                 }
                 true
             }
-            is Target.Fixed -> false
+            is Target.Fixed -> {
+                // A recording is never edited in place; it is only inserted or removed.
+                if (target.node["type"] == "audio") return block == old
+                if (target.node["type"] == "youtube") {
+                    // New clip times or details for an embedded video; nothing else about it changes.
+                    val video = block.video
+                    if (block.type != old.type || block.indent != old.indent || block.copy(video = old.video) != old ||
+                        video == null || !video.isValid) return false
+                    val a = target.node.attrsMap()
+                    a["videoId"] = video.videoId
+                    a.setOrRemove("start", video.startSeconds.takeIf { it > 0 }?.toLong())
+                    a.setOrRemove("end", video.endSeconds?.toLong())
+                    a.setOrRemove("title", video.title)
+                    a.setOrRemove("channel", video.channel)
+                    return true
+                }
+                // An edited or replaced picture: only the stored file name changes; every other
+                // attribute of the image node (size, caption, alignment) stays as it was.
+                val path = block.imagePath.orEmpty()
+                if (target.node["type"] != "image" || block.type != old.type || block.indent != old.indent ||
+                    block.copy(imagePath = old.imagePath) != old || !MANAGED_IMAGE.matches(path)) return false
+                val a = target.node.attrsMap()
+                a["name"] = path
+                a.remove("url")
+                a.remove("legacyPath")
+                true
+            }
         }
+    }
+
+    /**
+     * Moves a block one step toward [block]'s type when that needs a different node shape: a list
+     * item, quote, toggle, code or prompt block first becomes a top-level paragraph; a top-level
+     * paragraph or heading then becomes a list item, quote, toggle, code or prompt block. Only
+     * simple shapes convert (top level, a single paragraph, nothing nested under it, its own id;
+     * code or prompt only from unformatted text). Anything else returns null with the tree
+     * unchanged, so the save is refused instead of losing content.
+     */
+    private fun convertStep(p: Projected, block: NoteDocBlock): Projected? {
+        val old = p.block
+        // Nodes without an id are numbered by position; moving one would renumber the others.
+        if (p.target.node.attr<String>("id") != old.id) return null
+        val root = p.target.chain.firstOrNull()?.first ?: return null
+        if (old.type == NoteDocBlockType.TOGGLE) return convertToggle(p, block.copy(type = NoteDocBlockType.PARAGRAPH))
+        val changed = when {
+            old.type.isListType() -> unwrapListItem(p)
+            old.type == NoteDocBlockType.QUOTE -> unwrapQuote(p)
+            old.type == NoteDocBlockType.CODE || old.type == NoteDocBlockType.PROMPT -> textToParagraph(p)
+            old.type !in TEXTBLOCK_TYPES -> false
+            block.type == NoteDocBlockType.TOGGLE -> return convertToggle(p, block)
+            block.type.isListType() -> wrapInList(p, block)
+            block.type == NoteDocBlockType.QUOTE -> wrapInQuote(p)
+            block.type == NoteDocBlockType.CODE || block.type == NoteDocBlockType.PROMPT -> paragraphToText(p, block)
+            else -> false
+        }
+        if (!changed) return null
+        val out = ArrayList<Projected>()
+        walk(root, 0, 0, emptyList(), out, intArrayOf(0), topLevel = true)
+        return out.firstOrNull { it.block.id == old.id }
+    }
+
+    /** The single top-level paragraph or heading behind [p], or null for any other shape. */
+    private fun topLevelTextblock(p: Projected): Pair<MutableList<Any?>, JNode>? {
+        val target = p.target as? Target.Inline ?: return null
+        if (!target.topLevelTextblock || target.chain.size != 1 || target.container !== target.node) return null
+        return target.chain.single()
+    }
+
+    private fun asParagraph(node: JNode, id: String) {
+        node["type"] = "paragraph"
+        node.attrsMap().apply {
+            remove("level"); remove("collapsed"); remove("toggle"); remove("indent")
+            put("id", id)
+        }
+    }
+
+    /** Joins a neighbouring list of the same kind and style, so consecutive items stay one list. */
+    @Suppress("UNCHECKED_CAST")
+    private fun wrapInList(p: Projected, block: NoteDocBlock): Boolean {
+        val (parent, textNode) = topLevelTextblock(p) ?: return false
+        val at = parent.indexOfFirst { it === textNode }
+        if (at < 0) return false
+        val indent = textNode.attrInt("indent")?.takeIf { it != 0 }?.toLong()
+        asParagraph(textNode, "${p.block.id}:p")
+        val item = if (block.type == NoteDocBlockType.CHECKLIST)
+            node("taskItem", attrs("id" to p.block.id, "checked" to false, "indent" to indent), mutableListOf(textNode))
+        else node("listItem", attrs("id" to p.block.id, "indent" to indent), mutableListOf(textNode))
+        val type = listTypeName(block.type)
+        val style = listStyleAttr(block)
+        fun joinable(raw: Any?): JNode? = (raw as? JNode)?.takeIf {
+            it["type"] == type && it.attr<String>("listStyle") == style && it.attr<String>("id") != null
+        }
+        val before = joinable(parent.getOrNull(at - 1))
+        val after = joinable(parent.getOrNull(at + 1))
+        when {
+            before != null -> {
+                parent.removeAt(at)
+                before.contentList() += item
+                if (after != null) {
+                    before.contentList().addAll(after.contentList())
+                    parent.removeAll { it === after }
+                }
+            }
+            after != null -> {
+                parent.removeAt(at)
+                after.contentList().add(0, item)
+            }
+            else -> parent[at] = node(type, attrs("id" to "list-${p.block.id}", "listStyle" to style), mutableListOf(item))
+        }
+        return true
+    }
+
+    /** Lifts a one-paragraph item of a top-level list out of it; later items keep a list of their own. */
+    private fun unwrapListItem(p: Projected): Boolean {
+        val target = p.target as? Target.Inline ?: return false
+        if (target.chain.size != 2) return false
+        val (parent, list) = target.chain[0]
+        val (items, item) = target.chain[1]
+        val paragraph = target.container
+        if (list["type"] !in LIST_TYPES || paragraph["type"] != "paragraph") return false
+        if (item.contentList().size != 1 || item.contentList().first() !== paragraph) return false
+        val at = parent.indexOfFirst { it === list }
+        val index = items.indexOfFirst { it === item }
+        if (at < 0 || index < 0) return false
+        if (index == 0 && list.attr<String>("id") == null) return false
+        if (!splitListAfter(parent, list, index)) return false
+        paragraph.attrsMap().apply {
+            put("id", p.block.id)
+            setOrRemove("indent", item.attrInt("indent")?.takeIf { it != 0 }?.toLong())
+        }
+        items.removeAt(index)
+        parent.add(at + 1, paragraph)
+        if (items.isEmpty()) parent.removeAt(at)
+        return true
+    }
+
+    /** Moves the items after [index] into a new list of the same kind placed right after [list]. */
+    private fun splitListAfter(parent: MutableList<Any?>, list: JNode, index: Int): Boolean {
+        val items = list.contentList()
+        if (index >= items.lastIndex) return true
+        val at = parent.indexOfFirst { it === list }
+        if (at < 0) return false
+        val tail = items.subList(index + 1, items.size).toMutableList()
+        while (items.size > index + 1) items.removeAt(items.size - 1)
+        val tailAttrs = linkedMapOf<String, Any?>()
+        (list["attrs"] as? Map<*, *>)?.forEach { (k, v) -> if (k is String && k != "id" && k != "start") tailAttrs[k] = v }
+        tailAttrs["id"] = "list-${(tail.first() as? Map<*, *>)?.attr<String>("id") ?: "split-$at"}"
+        parent.add(at + 1, node(list["type"] as String, tailAttrs, tail))
+        return true
+    }
+
+    /** The top-level list and item [p] sits in, or null when it is not a top-level list item. */
+    private fun topLevelListItem(p: Projected?): Pair<JNode, JNode>? {
+        val chain = p?.target?.chain ?: return null
+        if (chain.size != 2 || chain[0].second["type"] !in LIST_TYPES) return null
+        return chain[0].second to chain[1].second
+    }
+
+    private fun wrapInQuote(p: Projected): Boolean {
+        val (parent, textNode) = topLevelTextblock(p) ?: return false
+        val at = parent.indexOfFirst { it === textNode }
+        if (at < 0) return false
+        val indent = textNode.attrInt("indent")?.takeIf { it != 0 }?.toLong()
+        asParagraph(textNode, "${p.block.id}:p")
+        parent[at] = node("blockquote", attrs("id" to p.block.id, "indent" to indent), mutableListOf(textNode))
+        return true
+    }
+
+    private fun unwrapQuote(p: Projected): Boolean {
+        val target = p.target as? Target.Inline ?: return false
+        if (target.chain.size != 2) return false
+        val (parent, quote) = target.chain[0]
+        val paragraph = target.container
+        if (quote["type"] != "blockquote" || paragraph["type"] != "paragraph") return false
+        if (quote.contentList().size != 1 || quote.contentList().first() !== paragraph) return false
+        val at = parent.indexOfFirst { it === quote }
+        if (at < 0) return false
+        paragraph.attrsMap().apply {
+            put("id", p.block.id)
+            setOrRemove("indent", quote.attrInt("indent")?.takeIf { it != 0 }?.toLong())
+        }
+        parent[at] = paragraph
+        return true
+    }
+
+    private fun textToParagraph(p: Projected): Boolean {
+        val target = p.target as? Target.Text ?: return false
+        if (target.chain.size != 1) return false
+        val (parent, textNode) = target.chain.single()
+        if (textNode["type"] == "codeBlock" && !textNode.attr<String>("language").isNullOrBlank()) return false
+        val at = parent.indexOfFirst { it === textNode }
+        if (at < 0) return false
+        parent[at] = node("paragraph", attrs("id" to p.block.id,
+            "indent" to textNode.attrInt("indent")?.takeIf { it != 0 }?.toLong()), inlineFrom(p.block.text, emptyList()))
+        return true
+    }
+
+    private fun paragraphToText(p: Projected, block: NoteDocBlock): Boolean {
+        val (parent, textNode) = topLevelTextblock(p) ?: return false
+        val plain = textNode.contentList().all { raw ->
+            val child = raw as? Map<*, *>
+            child != null && (child["type"] == "hardBreak" ||
+                (child["type"] == "text" && (child["marks"] as? List<*>).isNullOrEmpty()))
+        }
+        if (!plain) return false
+        val at = parent.indexOfFirst { it === textNode }
+        if (at < 0) return false
+        parent[at] = legacyBlock(p.block.copy(type = block.type, runs = emptyList(), mathMode = block.mathMode,
+            promptTitle = block.promptTitle, toggleHeading = false, isCollapsed = false), 0)
+        return true
+    }
+
+    /**
+     * Wraps a top-level paragraph or heading into a toggle block, or unwraps a toggle that has no
+     * children back into a top-level text block. The summary node (and so its inline content and
+     * marks) is reused as is. Returns the re-targeted block, or null — leaving the tree unchanged —
+     * when the shape cannot be converted without moving other content (a toggle with children).
+     */
+    private fun convertToggle(p: Projected, block: NoteDocBlock): Projected? {
+        val old = p.block
+        val target = p.target as? Target.Inline ?: return null
+        val (parentList, owner) = target.chain.lastOrNull() ?: return null
+        val summary = target.container
+        if (block.type == NoteDocBlockType.TOGGLE) {
+            if (!target.topLevelTextblock || old.type !in TEXTBLOCK_TYPES || summary !== owner) return null
+            val at = parentList.indexOfFirst { it === summary }
+            if (at < 0) return null
+            val indent = summary.attrInt("indent")
+            summary["type"] = "paragraph"
+            summary.attrsMap().apply {
+                remove("level"); remove("collapsed"); remove("toggle"); remove("indent")
+                put("id", "${old.id}:s")
+            }
+            val toggle = node("toggleBlock", attrs("id" to old.id, "indent" to indent?.toLong()), mutableListOf(summary))
+            parentList[at] = toggle
+            return Projected(old.copy(type = NoteDocBlockType.TOGGLE, isCollapsed = false, toggleHeading = false),
+                Target.Inline(toggle, summary, target.chain.dropLast(1) + (parentList to toggle), false))
+        }
+        if (owner["type"] != "toggleBlock" || block.type !in TEXTBLOCK_TYPES) return null
+        val content = owner.contentList()
+        if (content.size != 1 || content.first() !== summary || summary["type"] != "paragraph") return null
+        val at = parentList.indexOfFirst { it === owner }
+        if (at < 0) return null
+        summary.attrsMap().apply {
+            put("id", old.id)
+            setOrRemove("indent", owner.attrInt("indent")?.takeIf { it != 0 }?.toLong())
+        }
+        parentList[at] = summary
+        return Projected(old.copy(type = NoteDocBlockType.PARAGRAPH, isCollapsed = false),
+            Target.Inline(summary, summary, target.chain.dropLast(1) + (parentList to summary), target.chain.size == 1))
+    }
+
+    /**
+     * True when every cell is a plain one-by-one cell holding at most one paragraph of text,
+     * line breaks and inline math: exactly what [NoteDocTable] describes, so the table can be
+     * rewritten from it without losing anything.
+     */
+    private fun isSimpleTable(table: JNode, t: NoteDocTable): Boolean {
+        val rows = table.contentList()
+        if (rows.size != t.rows) return false
+        for ((r, rowRaw) in rows.withIndex()) {
+            val row = rowRaw as? Map<*, *> ?: return false
+            if (row["type"] != "tableRow") return false
+            val cells = (row["content"] as? List<*>).orEmpty()
+            if (cells.size != t.cols) return false
+            for ((c, cellRaw) in cells.withIndex()) {
+                val cell = cellRaw as? Map<*, *> ?: return false
+                if (cell["type"] != if (t.isHeader(r, c)) "tableHeader" else "tableCell") return false
+                if ((cell.attrInt("colspan") ?: 1) != 1 || (cell.attrInt("rowspan") ?: 1) != 1) return false
+                val background = cell.attr<Any>("background")
+                if (background != null && cssToArgb(background as? String) != t.fillAt(r, c)) return false
+                val width = cell.attr<List<*>>("colwidth")?.firstOrNull()
+                if (width != null && (width as? Number)?.toInt() != t.widthAt(c)) return false
+                val content = (cell["content"] as? List<*>).orEmpty()
+                if (content.size > 1) return false
+                val paragraph = content.firstOrNull() as? Map<*, *> ?: if (content.isEmpty()) continue else return false
+                if (paragraph["type"] != "paragraph") return false
+                if ((paragraph["content"] as? List<*>).orEmpty().any { (it as? Map<*, *>)?.get("type") !in INLINE_TYPES }) return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * Rewrites a simple table to [new]: rows and columns may be inserted or deleted anywhere, and
+     * header cells, shading, widths and grid lines follow the model. Cells whose text and
+     * formatting did not change keep their stored nodes; the old grid is matched to the new one by
+     * the insertion/deletion position that keeps the most cells unchanged.
+     */
+    private fun rebuildTable(table: JNode, blockId: String, old: NoteDocTable, new: NoteDocTable): Boolean {
+        @Suppress("UNCHECKED_CAST")
+        val oldRows = table.contentList().map { it as JNode }
+        @Suppress("UNCHECKED_CAST")
+        val oldCells = oldRows.map { row -> row.contentList().map { it as JNode } }
+        val usedIds = HashSet<String>()
+        oldCells.forEach { row -> row.forEach { cell ->
+            (cell["content"] as? List<*>).orEmpty().forEach { p -> (p as? Map<*, *>)?.attr<String>("id")?.let(usedIds::add) }
+        } }
+        fun freshId(r: Int, c: Int): String {
+            val base = "$blockId:r${r}c$c"
+            var id = base
+            var n = 2
+            while (!usedIds.add(id)) id = "$base-${n++}"
+            return id
+        }
+        fun unchanged(sr: Int, sc: Int, r: Int, c: Int) =
+            old.cell(sr, sc) == new.cell(r, c) && old.runsAt(sr, sc) == new.runsAt(r, c)
+        val rowMap: IntArray
+        val colMap: IntArray
+        run {
+            var best: Pair<IntArray, IntArray>? = null
+            var bestScore = -1
+            for (rm in axisMaps(old.rows, new.rows)) for (cm in axisMaps(old.cols, new.cols)) {
+                var score = 0
+                for (r in 0 until new.rows) { val sr = rm[r]; if (sr < 0) continue
+                    for (c in 0 until new.cols) { val sc = cm[c]; if (sc >= 0 && unchanged(sr, sc, r, c)) score++ } }
+                if (score > bestScore) { bestScore = score; best = rm to cm }
+            }
+            rowMap = best!!.first
+            colMap = best.second
+        }
+        table["content"] = MutableList<Any?>(new.rows) { r ->
+            val sr = rowMap[r]
+            val row = if (sr >= 0) oldRows[sr] else node("tableRow", null, mutableListOf())
+            row["content"] = MutableList<Any?>(new.cols) { c ->
+                val sc = colMap[c]
+                val base = if (sr >= 0 && sc >= 0) oldCells[sr][sc] else null
+                val cell = base ?: node("tableCell", null)
+                cell["type"] = if (new.isHeader(r, c)) "tableHeader" else "tableCell"
+                val a = cell.attrsMap()
+                a.setOrRemove("background", new.fillAt(r, c)?.let(::argbToCss))
+                a.setOrRemove("colwidth", new.widthAt(c)?.let { mutableListOf<Any?>(it.toLong()) })
+                if (a.isEmpty()) cell.remove("attrs")
+                if (base == null || !unchanged(sr, sc, r, c)) {
+                    @Suppress("UNCHECKED_CAST")
+                    val paragraph = (base?.get("content") as? List<*>)?.firstOrNull() as? JNode
+                        ?: node("paragraph", attrs("id" to freshId(r, c)))
+                    paragraph["content"] = inlineFromWithMath(new.cell(r, c), new.runsAt(r, c), collectInlineMath(paragraph))
+                    cell["content"] = mutableListOf<Any?>(paragraph)
+                }
+                cell
+            }
+            row
+        }
+        table.attrsMap().setOrRemove("gridLines", false.takeIf { !new.gridLines })
+        return true
+    }
+
+    /**
+     * Candidate old-index maps for one axis growing or shrinking from [old] to [new]: one block of
+     * inserted (-1) or deleted entries at each possible position.
+     */
+    private fun axisMaps(old: Int, new: Int): List<IntArray> {
+        val d = new - old
+        if (d == 0) return listOf(IntArray(new) { it })
+        return (0..minOf(old, new)).map { at ->
+            IntArray(new) { i ->
+                when {
+                    i < at -> i
+                    d > 0 && i < at + d -> -1
+                    else -> i - d
+                }
+            }
+        }
+    }
+
+    /**
+     * Grows a stored table in place to [new]'s size by adding whole rows (top or bottom) and/or
+     * whole columns (left or right). Existing row and cell nodes are kept untouched; new cells copy
+     * their neighbour's cell type. Returns the (row, column) offset of the old grid inside the new
+     * one, or null — leaving the node unchanged — when the stored shape cannot be grown safely
+     * (shrinking, ragged rows, merged cells).
+     */
+    private fun growTable(table: JNode, blockId: String, old: NoteDocTable, new: NoteDocTable): Pair<Int, Int>? {
+        if (new.rows < old.rows || new.cols < old.cols || old.rows == 0 || old.cols == 0) return null
+        @Suppress("UNCHECKED_CAST")
+        val rowNodes = table.contentList().map { it as? JNode ?: return null }
+        if (rowNodes.size != old.rows) return null
+        val usedIds = HashSet<String>()
+        for (row in rowNodes) {
+            if (row["type"] != "tableRow") return null
+            val cells = row.contentList()
+            if (cells.size != old.cols) return null
+            for (cellRaw in cells) {
+                val cell = cellRaw as? Map<*, *> ?: return null
+                if ((cell.attrInt("colspan") ?: 1) != 1 || (cell.attrInt("rowspan") ?: 1) != 1) return null
+                (cell["content"] as? List<*>).orEmpty().forEach { p -> (p as? Map<*, *>)?.attr<String>("id")?.let(usedIds::add) }
+            }
+        }
+        val addRows = new.rows - old.rows
+        val addCols = new.cols - old.cols
+        val (dr, dc) = listOf(0 to 0, addRows to 0, 0 to addCols, addRows to addCols).distinct().maxBy { (r0, c0) ->
+            var same = 0
+            for (r in 0 until old.rows) for (c in 0 until old.cols) if (old.cell(r, c) == new.cell(r + r0, c + c0)) same++
+            same
+        }
+        fun freshId(r: Int, c: Int): String {
+            val base = "$blockId:r${r}c$c"
+            var id = base
+            var n = 2
+            while (!usedIds.add(id)) id = "$base-${n++}"
+            return id
+        }
+        val grown = MutableList<Any?>(new.rows) { r ->
+            val sr = r - dr
+            val row = rowNodes.getOrNull(sr) ?: node("tableRow", null, mutableListOf())
+            @Suppress("UNCHECKED_CAST")
+            val reference = rowNodes[sr.coerceIn(0, old.rows - 1)].contentList().map { it as JNode }
+            val existing = row.contentList().toList()
+            row["content"] = MutableList<Any?>(new.cols) { c ->
+                val sc = c - dc
+                if (sr in 0 until old.rows && sc in 0 until old.cols) existing[sc]
+                else node(reference[sc.coerceIn(0, old.cols - 1)]["type"] as? String ?: "tableCell", null,
+                    mutableListOf(node("paragraph", attrs("id" to freshId(r, c)), mutableListOf())))
+            }
+            row
+        }
+        table["content"] = grown
+        return dr to dc
     }
 
     private fun collectInlineMath(container: Map<*, *>): Set<String> =
@@ -673,7 +1262,7 @@ object RichNoteAdapter {
     private val EMPTYABLE_CONTAINERS = setOf("bulletList", "orderedList", "taskList", "blockquote", "toggleBlock",
         "listItem", "taskItem")
     private val TEXTBLOCK_TYPES = setOf(NoteDocBlockType.PARAGRAPH, NoteDocBlockType.HEADING_1,
-        NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3)
+        NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3, NoteDocBlockType.HEADING_4, NoteDocBlockType.HEADING_5)
 
     private fun NoteDocBlockType.isListType() = this == NoteDocBlockType.BULLET ||
         this == NoteDocBlockType.NUMBERED || this == NoteDocBlockType.CHECKLIST
@@ -682,9 +1271,10 @@ object RichNoteAdapter {
         NoteDocBlockType.NUMBERED -> "orderedList"; NoteDocBlockType.CHECKLIST -> "taskList"; else -> "bulletList"
     }
 
-    private fun headingLevel(type: NoteDocBlockType) = when (type) {
-        NoteDocBlockType.HEADING_1 -> 1; NoteDocBlockType.HEADING_2 -> 2; else -> 3
-    }
+    private fun listStyleAttr(b: NoteDocBlock): String? =
+        b.listStyle.takeIf { b.type == NoteDocBlockType.BULLET || b.type == NoteDocBlockType.NUMBERED }
+
+    private fun headingLevel(type: NoteDocBlockType) = type.headingLevel.takeIf { it > 0 } ?: 3
 
     private fun node(type: String, attrs: JNode?, content: MutableList<Any?>? = null): JNode =
         linkedMapOf<String, Any?>("type" to type).apply {

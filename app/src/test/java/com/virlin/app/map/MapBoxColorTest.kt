@@ -24,6 +24,14 @@ class MapBoxColorTest {
         assertEquals(original.nodeColors["other"], cleared.nodeColors["other"])
     }
 
+    @Test fun colourCodeSetsWithoutTogglingOffAndKeepsOtherBoxes() {
+        val original = MapAppearance(nodeColors = mapOf("other" to 0xFF123456))
+        val once = com.virlin.app.ui.map.setBoxColor(original, "task", 0xFFFF8800)
+        val twice = com.virlin.app.ui.map.setBoxColor(once, "task", 0xFFFF8800)
+        assertEquals(0xFFFF8800, twice.nodeColors["task"])
+        assertEquals(0xFF123456, twice.nodeColors["other"])
+    }
+
     @Test fun nodeOverrideSurvivesProjectPaletteChanges() {
         val selected = toggleBoxColor(MapAppearance(), "task", 0xFF52A887)
         assertEquals(0xFF52A887, selected.copy(paletteIndex = 3).nodeColors["task"])

@@ -37,6 +37,7 @@ fun encodeVirlinMap(snapshot: VirlinMapSnapshot): ByteArray {
     appearance.put("nodeWidths", JSONObject().also { o -> snapshot.appearance.nodeWidths.forEach { (id, width) ->
         if (width.isFinite() && width in 110f..560f) o.put(id, width.toDouble())
     } })
+    appearance.putColourSettings(snapshot.appearance)
     val nodes = JSONArray()
     snapshot.topics.forEach { t ->
         nodes.put(
@@ -114,7 +115,7 @@ fun decodeVirlinMap(bytes: ByteArray): VirlinMapSnapshot {
             boxFinish = enumOrNull<MapBoxFinish>(a.optString("boxFinish")) ?: MapBoxFinish.SMOOTH,
             nodeFinishes = a.finishMap("nodeFinishes", ids),
             nodeWidths = a.widthMap("nodeWidths", ids),
-        ),
+        ).withColourSettings(a),
     )
 }
 

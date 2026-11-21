@@ -7,14 +7,18 @@ import android.graphics.Path
 import android.graphics.RectF
 import kotlin.math.min
 
-internal fun MapBoxFinish.isHandDrawn() = this == MapBoxFinish.HAND_DRAWN ||
-    this == MapBoxFinish.PENCIL_SKETCH || this == MapBoxFinish.DOUBLE_INK ||
-    this == MapBoxFinish.MARKER_EDGE
+internal fun MapBoxFinish.isHandDrawn() = group == MapBoxFinishGroup.HANDMADE
 
 /** Repeatable vector strokes: the same finish is used by the picker and every map node. */
 internal fun drawHandDrawnBox(canvas: Canvas, rect: RectF, paint: Paint,
                               finish: MapBoxFinish, selected: Boolean = false,
-                              boxColor: Int? = null) {
+                              boxColor: Int? = null, fillColor: Int? = null,
+                              strokeColor: Int? = null, drawStroke: Boolean = true,
+                              paletteTint: Int? = null) {
+    if (finish.isCrafted()) {
+        drawCraftedBox(canvas, rect, paint, finish, selected, boxColor, fillColor, strokeColor, drawStroke, paletteTint)
+        return
+    }
     val radius = min(18f, rect.height() * .27f)
     val path = Path().apply {
         moveTo(rect.left + radius, rect.top + 1f)
@@ -36,7 +40,7 @@ internal fun drawHandDrawnBox(canvas: Canvas, rect: RectF, paint: Paint,
         MapBoxFinish.MARKER_EDGE -> Color.rgb(232, 234, 231)
         else -> Color.rgb(239, 239, 237)
     }
-    paint.color = boxColor?.let { androidx.core.graphics.ColorUtils.blendARGB(paperColor, it, .42f) }
+    paint.color = fillColor ?: boxColor?.let { androidx.core.graphics.ColorUtils.blendARGB(paperColor, it, .42f) }
         ?: paperColor
     paint.alpha = 255
     canvas.drawPath(path, paint)
@@ -52,7 +56,8 @@ internal fun drawHandDrawnBox(canvas: Canvas, rect: RectF, paint: Paint,
         x += if (finish == MapBoxFinish.PENCIL_SKETCH) 9f else 12f
     }
     canvas.restore()
-    paint.color = boxColor ?: if (finish == MapBoxFinish.PENCIL_SKETCH) Color.rgb(82, 82, 79)
+    if (!drawStroke) { paint.alpha = 255; paint.style = Paint.Style.FILL; return }
+    paint.color = strokeColor ?: boxColor ?: if (finish == MapBoxFinish.PENCIL_SKETCH) Color.rgb(82, 82, 79)
                   else Color.rgb(24, 24, 24)
     paint.alpha = 255
     paint.strokeWidth = when (finish) {

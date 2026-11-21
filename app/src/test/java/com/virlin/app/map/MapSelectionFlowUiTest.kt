@@ -1,6 +1,7 @@
 package com.virlin.app.map
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
@@ -50,6 +51,82 @@ class MapSelectionFlowUiTest {
         compose.onNodeWithTag("map_box_color_none").performClick().assertIsSelected()
         compose.onNodeWithTag("map_box_color_0").assertIsNotSelected()
         compose.onNodeWithContentDescription("Box color").assertIsNotSelected()
+    }
+
+    @Test fun organizeStripShowsWithoutSelectionAndExportStripRoutesEveryFormat() {
+        val calls = mutableListOf<String>()
+        val formats = listOf("xmind", "virlin", "pdf", "png", "md", "json")
+        val options = formats.map { f ->
+            MapExportOption("map_export_$f", f.uppercase(), androidx.compose.material.icons.Icons.Default.Close) { calls += f }
+        }
+        compose.setContent {
+            MaterialTheme {
+                MapStructureBar(selected = null, affectedCount = 0, clipboard = null,
+                    organizing = true, onOpen = {}, onEdit = {}, onMove = {}, onCopy = {},
+                    onDuplicate = {}, onPaste = {}, onClear = {}, colorPickerOpen = true,
+                    exportOptions = options)
+            }
+        }
+        compose.onNodeWithTag("map_organize_strip").assertExists()
+        compose.onNodeWithTag("map_box_color_palette").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Clear selection").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Edit").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Delete selected box").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag(MapExportStripTag).assertDoesNotExist()
+        formats.forEach { f ->
+            compose.onNodeWithContentDescription("Export").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithTag(MapExportStripTag).assertExists()
+            compose.onNodeWithTag("map_export_$f").performScrollTo().performClick()
+            compose.onNodeWithTag(MapExportStripTag).assertDoesNotExist()
+        }
+        compose.runOnIdle { assertEquals(formats, calls) }
+    }
+
+    @Test fun confirmDialogRoutesCancelCloseAndConfirm() {
+        val calls = mutableListOf<String>()
+        val open = mutableStateOf(true)
+        compose.setContent {
+            MaterialTheme {
+                if (open.value) MapConfirmDialog("Duplicate task branch?", "A copy will be placed beside it.",
+                    "Duplicate", onDismiss = { calls += "dismiss" }, onConfirm = { calls += "confirm" })
+            }
+        }
+        compose.onNodeWithTag(MapConfirmDialogTag).assertExists()
+        compose.onNodeWithText("Duplicate task branch?").assertExists()
+        compose.onNodeWithTag(MapConfirmCancelTag).performClick()
+        compose.onNodeWithContentDescription("Close").performClick()
+        compose.onNodeWithTag(MapConfirmOkTag).assertTextEquals("Duplicate").performClick()
+        compose.runOnIdle { assertEquals(listOf("dismiss", "dismiss", "confirm"), calls) }
+    }
+
+    @Test fun colourCodeEntryAppliesAHexColourAndKeepsItAsASwatch() {
+        val appearance = mutableStateOf(MapAppearance())
+        compose.setContent {
+            MaterialTheme {
+                MapStructureBar(MapTopic("node", null, "Selected", kind = MapKind.TASK), 1,
+                    null, true, onOpen = {}, onEdit = {}, onMove = {}, onCopy = {},
+                    onDuplicate = {}, onPaste = {}, onClear = {},
+                    colorPickerOpen = true,
+                    selectedBoxColor = appearance.value.nodeColors["node"],
+                    onChooseBoxColor = { appearance.value =
+                        toggleBoxColor(appearance.value, "node", it) },
+                    onClearBoxColor = { appearance.value =
+                        clearBoxColor(appearance.value, "node") },
+                    onSetBoxColor = { appearance.value =
+                        setBoxColor(appearance.value, "node", it) })
+            }
+        }
+        compose.onNodeWithTag(MapBoxColorHexTag).performClick()
+        compose.onNodeWithTag(MapBoxColorHexApplyTag).assertIsNotEnabled()
+        compose.onNodeWithTag(MapBoxColorHexFieldTag).performTextInput("#12g")
+        compose.onNodeWithTag(MapBoxColorHexApplyTag).assertIsNotEnabled()
+        compose.onNodeWithTag(MapBoxColorHexFieldTag).performTextClearance()
+        compose.onNodeWithTag(MapBoxColorHexFieldTag).performTextInput("#ff8800")
+        compose.onNodeWithTag(MapBoxColorHexApplyTag).assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(0xFFFF8800, appearance.value.nodeColors["node"]) }
+        compose.onNodeWithTag(MapBoxColorHexFieldTag).assertDoesNotExist()
+        compose.onNodeWithTag("map_box_color_custom_FF8800").assertIsSelected().performClick()
+        compose.runOnIdle { assertEquals(0xFFFF8800, appearance.value.nodeColors["node"]) }
     }
 
     @Test fun selectedBoxShowsResizeHandleOnlyWhenToolIsArmedInOrganizeMode() {
@@ -110,7 +187,7 @@ class MapSelectionFlowUiTest {
                     onDuplicate = {}, onPaste = {}, onClear = {}, onDelete = { requests++ })
             }
         }
-        compose.onNodeWithContentDescription("Delete selected box").performClick()
+        compose.onNodeWithContentDescription("Delete selected box").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(1, requests) }
     }
 
@@ -170,7 +247,9 @@ class MapSelectionFlowUiTest {
         val branch = compose.onNodeWithContentDescription("Add branch").getUnclippedBoundsInRoot()
         val into = compose.onNodeWithContentDescription("Into").getUnclippedBoundsInRoot()
         val close = compose.onNodeWithContentDescription("Clear selection").getUnclippedBoundsInRoot()
-        assertTrue(branch.left < edit.left && edit.left < into.left && into.left < close.left)
+        // Like the notes rail, the most used tools come first and the strip scrolls to the rest.
+        assertTrue(edit.left < into.left && into.left < branch.left && branch.left < close.left)
+        compose.onNodeWithTag("map_organize_strip").assertExists()
         compose.onNodeWithContentDescription("Copy").assertExists()
         compose.onNodeWithContentDescription("Add branch").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Duplicate").performClick()
@@ -215,6 +294,7 @@ class MapSelectionFlowUiTest {
                     onAppearanceChange = {}, onNodeOpen = {}, onBack = {},
                     onExportXmind = {}, onExportVirlin = {}, onOpenVirlinMap = {},
                     structureMode = true, selectedId = task.id,
+                    onToggleStructureMode = {},
                     structureBar = {
                         MapStructureBar(task, 1, null, true, true,
                             onOpen = {}, onEdit = {}, onMove = {}, onCopy = {},
@@ -223,7 +303,7 @@ class MapSelectionFlowUiTest {
             }
         }
         compose.waitForIdle()
-        val menu = compose.onNodeWithContentDescription("More").getUnclippedBoundsInRoot()
+        val menu = compose.onNodeWithTag(MindMapStructureToggleTag).getUnclippedBoundsInRoot()
         val clear = compose.onNodeWithContentDescription("Clear selection").getUnclippedBoundsInRoot()
         val menuCenterX = (menu.left.value + menu.right.value) / 2f
         val clearCenterX = (clear.left.value + clear.right.value) / 2f
@@ -373,10 +453,10 @@ class MapSelectionFlowUiTest {
         compose.runOnIdle { assertEquals(MapLayout.FLOW_FORKS, saved.value.layout) }
 
         compose.onNodeWithContentDescription("Map colours").performClick()
-        compose.onNodeWithText("Choose a palette").assertExists()
+        compose.onNodeWithText("Your palette").assertExists()
         compose.onNodeWithTag(MindMapCanvasTag).assertDoesNotExist()
         compose.onNodeWithText("Save colours").assertDoesNotExist()
-        compose.onNodeWithText("Quiet earth").performClick()
+        compose.onNodeWithText("Quiet earth").performScrollTo().performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Save colours").performClick()
         compose.runOnIdle { assertEquals(1, saved.value.paletteIndex) }
@@ -539,11 +619,11 @@ class MapSelectionFlowUiTest {
         compose.onNodeWithTag("map_node_toggle_preview").performClick()
         compose.runOnIdle { assertEquals(emptyList<String>(), calls); selected.value = stream.id }
         compose.onNodeWithTag("mind_map_branch_drag_handle").assertDoesNotExist()
-        compose.onNodeWithTag(MindMapStructureToggleTag).assertDoesNotExist()
-        compose.onNodeWithContentDescription("More").performClick()
-        compose.onNodeWithTag(MindMapStructureToggleTag).assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("More").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Organize").assertIsDisplayed().assertIsNotSelected()
+        compose.onNodeWithTag(MindMapStructureToggleTag).performClick()
         compose.onNodeWithTag("mind_map_branch_drag_handle").assertIsDisplayed()
-        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithContentDescription("Done organizing").assertIsSelected()
         compose.onNodeWithTag(MindMapStructureToggleTag).performClick()
         compose.onNodeWithTag("mind_map_branch_drag_handle").assertDoesNotExist()
         compose.onNodeWithTag("map_node_toggle_preview").performClick()

@@ -176,6 +176,23 @@ interface VirlinActions {
 
     /** "I am choosing not to work on this now." No wake time. */
     suspend fun pauseStream(streamId: String): ActionResult<WorkStream>
+    /**
+     * The app left the foreground: end the live human Focus session at [at] (default now,
+     * clamped to the session). Focus itself, external work and every state stay as they are.
+     * Returns what was stopped, or null when no Focus session was running.
+     */
+    suspend fun suspendFocusClock(at: java.time.Instant? = null): ActionResult<com.virlin.app.domain.model.FocusClockPause?>
+    /**
+     * The app is back: continue [pause] as the same Focus period, from now. Does nothing (false)
+     * when Focus moved, ended or another session started meanwhile.
+     */
+    suspend fun resumeFocusClock(pause: com.virlin.app.domain.model.FocusClockPause): ActionResult<Boolean>
+    /**
+     * RESUME after a manual Pause ([suspendFocusClock] from the Leave chooser): the item still in
+     * Focus but with no running session continues its latest Focus period, or starts a new one
+     * when that period can no longer be continued. False when nothing was paused.
+     */
+    suspend fun resumePausedFocus(): ActionResult<Boolean>
     /** Pause every live human/external timer atomically, preserving recorded history. */
     suspend fun pauseAllTimers(projectId: String? = null): ActionResult<Int>
     suspend fun resumeAllTimers(projectId: String? = null): ActionResult<Int>

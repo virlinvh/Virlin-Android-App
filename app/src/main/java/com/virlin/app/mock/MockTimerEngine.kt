@@ -34,10 +34,12 @@ object MockTimerEngine {
 
     private suspend fun tick() {
         val dueForCheck = mutableListOf<String>()
+        // While the app is away the Focus session is stopped; the flap must not creep on.
+        val focusRunning = com.virlin.app.platform.FocusAutoPause.pausedSessionId == null
         MockData.mutate { list ->
             list.map { stream ->
                 when (stream.state) {
-                    StreamState.FOCUS -> stream.copy(focusInvestedSec = stream.focusInvestedSec + 1)
+                    StreamState.FOCUS -> if (focusRunning && !stream.focusPaused) stream.copy(focusInvestedSec = stream.focusInvestedSec + 1) else stream
                     StreamState.PROCESSING -> {
                         val remaining = stream.checkInRemainingSec?.minus(1)
                         if (remaining != null && remaining <= 0) dueForCheck += stream.id

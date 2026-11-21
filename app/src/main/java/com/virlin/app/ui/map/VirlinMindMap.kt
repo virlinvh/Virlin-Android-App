@@ -13,6 +13,16 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.DesignServices
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -31,6 +41,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -113,31 +126,13 @@ const val MindMapCanvasTag = "mind_map_canvas"
 const val MindMapStructureToggleTag = "mind_map_structure_toggle"
 
 /** Virlin's own presets. No other product's themes or assets are used. */
-private val mapPalettes = listOf(
-    listOf(0xFF24A46B, 0xFF618EE1, 0xFFD97867, 0xFF9A70CD, 0xFFE0A73A, 0xFF48A9AD),
-    listOf(0xFF70A985, 0xFF698BBD, 0xFFB78FA9, 0xFFD9A57E, 0xFF8D9E76, 0xFF8B80B6),
-    listOf(0xFF238B78, 0xFF6689A8, 0xFFD47882, 0xFFA885B8, 0xFFBB9957, 0xFF658F77),
-    listOf(0xFF78A85D, 0xFF658FCE, 0xFFDF8774, 0xFF846FBD, 0xFFD9B45C, 0xFF52A7A5),
-)
+private val mapPalettes = mapPresetPalettes.map { it.colors }
 private val customColors = listOf(
     0xFF52A887, 0xFF95BC7C, 0xFF93C9C0, 0xFF438FAD,
     0xFF82A9DE, 0xFF7582D1, 0xFFAC85D3, 0xFFD28CC0,
     0xFFE58DA6, 0xFFD88474, 0xFFEDAD82, 0xFFE6C26C,
     0xFF9B9EA7, 0xFF739B91, 0xFFB59A82, 0xFF81A8B8,
 )
-
-/** Connector colours, including inherited branch overrides, shared by the canvas and fold controls. */
-internal fun mapBranchTints(g: MapGeometry, appearance: MapAppearance): Map<String, Long> {
-    val palette = appearance.customPalette.takeIf { it.isNotEmpty() }
-        ?: mapPalettes[appearance.paletteIndex.mod(mapPalettes.size)]
-    val colors = mutableMapOf<String, Long>()
-    for (topic in g.topics) {
-        val inherited = g.parent[topic.id]?.let(colors::get)
-        colors[topic.id] = appearance.branchColors[topic.id] ?: inherited
-            ?: palette[g.branch.getValue(topic.id) % palette.size]
-    }
-    return colors
-}
 
 private const val MIN_ZOOM = MAP_MIN_ZOOM
 private const val MAX_ZOOM = MAP_MAX_ZOOM
@@ -166,15 +161,20 @@ internal data class MapGeometry(
 private fun estimatedTitleWidth(title: String) = title.sumOf { ch ->
         when { ch.isWhitespace() -> 4.0; ch in "ilI.,'" -> 4.5; ch in "MW@" -> 13.0; else -> 8.5 }
     }.toFloat()
-private fun minimumCardWidth(title: String) =
-    (estimatedTitleWidth(title) / 3f + 66f).coerceIn(110f, 560f)
+// Capped below the widest natural card (240): a long title would otherwise push the minimum up to
+// the 560 maximum and leave nothing to resize. Past three lines the card ends its title with "…".
+internal fun minimumCardWidth(title: String) =
+    (estimatedTitleWidth(title) / 3f + 66f).coerceIn(110f, 160f)
 
 private fun compactCardSize(title: String, widthOverride: Float? = null): Pair<Float, Float> {
     val titleWidth = estimatedTitleWidth(title)
     val naturalWidth = (titleWidth + 66f).coerceIn(110f, 240f)
     val width = widthOverride?.takeIf { it.isFinite() }
         ?.coerceIn(minimumCardWidth(title), 560f) ?: naturalWidth
-    val lines = kotlin.math.ceil(titleWidth / (width - 66f)).toInt().coerceIn(1, 3)
+    // Each line break in the title starts a new line of its own.
+    val lines = title.split('\n').sumOf { line ->
+        kotlin.math.ceil(estimatedTitleWidth(line) / (width - 66f)).toInt().coerceAtLeast(1)
+    }.coerceIn(1, 3)
     return width to max(64f, lines * 19f + 24f)
 }
 
@@ -254,8 +254,8 @@ internal fun arrange(
     // neighbours below it need to move.
     val extraHeight = expanded?.takeIf { it.first in y }?.let {
         // The expanded host also has a taller header than the compact card.
-        it.second + 96f - compactCardSize(ordered.first { node -> node.id == it.first }.title,
-            nodeWidths[it.first]).second
+        it.second + 96f - craftCardHeight(layout, compactCardSize(ordered.first { node -> node.id == it.first }.title,
+            nodeWidths[it.first]).second)
     } ?: 0f
     if (extraHeight > 0f) {
         val pivot = y.getValue(expanded!!.first)
@@ -271,8 +271,9 @@ internal fun arrange(
         // Short titles no longer inherit a large fixed rectangle. Keep the preview host's
         // existing width when expanded, and reserve a separate right-hand control lane.
         val compact = compactCardSize(node.title, nodeWidths[node.id])
+        val compactHeight = craftCardHeight(layout, compact.second)
         val w = if (node.id == expanded?.first) 240f else compact.first
-        val h = if (node.id == expanded?.first) 96f + expanded.second else compact.second
+        val h = if (node.id == expanded?.first) 96f + expanded.second else compactHeight
         val row = y.getValue(node.id)
         val x: Float
         val cy: Float
@@ -318,9 +319,23 @@ internal fun arrange(
             MapLayout.LOOP_FORKS -> {
                 x = d * 310f; cy = row
             }
+            MapLayout.STICKY_WALL -> {
+                x = d * 296f + if (d == 0) 0f else (b % 2) * 12f
+                cy = row
+            }
+            MapLayout.SKETCH_TREE -> {
+                x = d * 290f; cy = row
+            }
+            MapLayout.METRO_LINES -> {
+                x = d * 304f; cy = row
+            }
+            MapLayout.WHITEBOARD, MapLayout.DOODLE_BUBBLES, MapLayout.BRUSH_INK,
+            MapLayout.DRAFTING, MapLayout.PAPER_CRAFT -> {
+                x = d * 300f; cy = row
+            }
         }
         // Grow downward from the compact card's top rather than upward into the preceding card.
-        val anchoredCy = cy + if (node.id == expanded?.first) (h - compact.second) / 2f else 0f
+        val anchoredCy = cy + if (node.id == expanded?.first) (h - compactHeight) / 2f else 0f
         frames[node.id] = Frame(node.id, x, anchoredCy - h / 2f, w, h)
     }
     // A widened card must push every later depth to the right. This preserves connector
@@ -336,6 +351,11 @@ internal fun arrange(
         MapLayout.FAN_FORKS -> 302f
         MapLayout.FACETED_PATHS -> 300f
         MapLayout.LOOP_FORKS -> 310f
+        MapLayout.STICKY_WALL -> 296f
+        MapLayout.SKETCH_TREE -> 290f
+        MapLayout.METRO_LINES -> 304f
+        MapLayout.WHITEBOARD, MapLayout.DOODLE_BUBBLES, MapLayout.BRUSH_INK,
+        MapLayout.DRAFTING, MapLayout.PAPER_CRAFT -> 300f
     }
     val widestAtDepth = ordered.groupBy { depth.getValue(it.id) }
         .mapValues { (_, level) -> level.maxOf { frames.getValue(it.id).w } }
@@ -618,8 +638,6 @@ fun VirlinProjectMindMap(
         // The task it was opened for has gone (moved out of this project, or removed).
         if (addPaletteTaskId != null && paletteTask == null) addPaletteTaskId = null
     }
-    val offset = Offset(if (offsetX.isNaN()) 0f else offsetX, if (offsetY.isNaN()) 0f else offsetY)
-
     fun fit() {
         if (viewport == IntSize.Zero) return
         val margin = 72f * density
@@ -803,9 +821,10 @@ fun VirlinProjectMindMap(
         }
         return
     }
-    Column(modifier.fillMaxSize().background(projectPalette?.let { Color(it.surface) } ?: Color(0xFFFBFAF8))) {
+    val mapSurface = projectPalette?.let { Color(it.surface) } ?: Color(0xFFFBFAF8)
+    Column(modifier.fillMaxSize().background(mapSurface)) {
         if (!focusMode) Row(
-            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { if (focusedRootId != null) toggleBranchFocus() else onBack() }) {
@@ -823,7 +842,9 @@ fun VirlinProjectMindMap(
             IconButton(onClick = { current = appearance; showLayouts = true }) {
                 Icon(Icons.Default.Dashboard, "Map layout")
             }
-            Box {
+            if (onToggleStructureMode != null) {
+                MapOrganizeToggle(structureMode, projectAccent, projectText, onToggleStructureMode)
+            } else Box {
                 IconButton(onClick = { exportMenuPage = false; menu = true }) {
                     Icon(Icons.Default.MoreVert, "More")
                 }
@@ -862,7 +883,9 @@ fun VirlinProjectMindMap(
                 } }
             }
         }
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+        // Clipped so boxes slide under the header instead of painting over the title.
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().clipToBounds()
+            .background(current.backgroundColor?.let { Color(it.toInt()) } ?: Color.Transparent)) {
             Canvas(
                 Modifier.fillMaxSize().testTag(MindMapCanvasTag)
                     .onSizeChanged { next ->
@@ -941,6 +964,9 @@ fun VirlinProjectMindMap(
                     }
             ) {
                 drawIntoCanvas { composeCanvas ->
+                    // Pan and zoom are read here, in the draw phase, so a pinch frame repaints the
+                    // canvas without recomposing the whole map screen.
+                    val offset = Offset(if (offsetX.isNaN()) 0f else offsetX, if (offsetY.isNaN()) 0f else offsetY)
                     val native = composeCanvas.nativeCanvas
                     native.save()
                     native.translate(offset.x, offset.y)
@@ -1294,10 +1320,19 @@ fun VirlinProjectMindMap(
             // then slid away and the drop landed on nothing.
             // The bar appears whenever something is selected, not only while organizing, so a
             // drag handle can never be on screen without its action bar.
+            // Without the organize strip the map feathers out under the header; the opaque strip
+            // covers this with its own hard edge when it is open.
+            if (!focusMode) Box(
+                Modifier.align(Alignment.TopStart).fillMaxWidth().height(20.dp).zIndex(4f)
+                    .testTag("mind_map_header_feather")
+                    .background(Brush.verticalGradient(
+                        0f to mapSurface, .45f to mapSurface.copy(alpha = .7f),
+                        1f to mapSurface.copy(alpha = 0f))),
+            )
             if (structureMode && !focusMode) {
-                // Match the three-dot button's right inset: the final Clear icon lands directly
-                // beneath it, and the remaining actions extend left across the map.
-                Box(Modifier.align(Alignment.TopEnd).padding(end = 4.dp)) {
+                // Full width so the organize strip spans the map; the bar itself insets its final
+                // Clear icon to land directly beneath the three-dot button.
+                Box(Modifier.align(Alignment.TopEnd).zIndex(5f)) {
                     structureBar?.invoke()
                 }
             }
@@ -1310,7 +1345,8 @@ fun VirlinProjectMindMap(
             ) {
                 MapSelectedTaskBar(
                     task = barTask,
-                    modifier = Modifier.align(Alignment.BottomCenter)
+                    // Above every map-space overlay (fold pills, resize edge, drag handle, organize strip).
+                    modifier = Modifier.align(Alignment.BottomCenter).zIndex(6f)
                         .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
                     onOpenTask = onNodeOpen,
                     onFlashcards = onOpenFlashcards,
@@ -1522,6 +1558,48 @@ private fun MapActionsMenu(
     }
 }
 
+/**
+ * The header's Organize switch. Turning it on fills an accent disc behind the icon and turns
+ * the tools glyph into a check; the Organize strip then opens under the header.
+ */
+@Composable
+private fun MapOrganizeToggle(on: Boolean, accent: Color, ink: Color, onToggle: () -> Unit) {
+    val fill by animateFloatAsState(if (on) 1f else 0f,
+        spring(dampingRatio = .62f, stiffness = Spring.StiffnessMediumLow), label = "organizeFill")
+    val turn by animateFloatAsState(if (on) 360f else 0f, tween(380), label = "organizeTurn")
+    Box(
+        Modifier.size(48.dp).clip(CircleShape)
+            .clickable(role = Role.Switch, onClick = onToggle)
+            .semantics {
+                contentDescription = if (on) "Done organizing" else "Organize"
+                stateDescription = if (on) "On" else "Off"
+                selected = on
+            }
+            .testTag(MindMapStructureToggleTag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(38.dp).graphicsLayer {
+            scaleX = .55f + .45f * fill; scaleY = .55f + .45f * fill; alpha = fill.coerceIn(0f, 1f)
+        }.background(accent, CircleShape))
+        AnimatedContent(
+            targetState = on,
+            transitionSpec = {
+                (fadeIn(tween(180, delayMillis = 90)) + scaleIn(tween(220, delayMillis = 90), initialScale = .6f)) togetherWith
+                    (fadeOut(tween(120)) + scaleOut(tween(140), targetScale = .6f))
+            },
+            modifier = Modifier.graphicsLayer { rotationZ = turn },
+            label = "organizeIcon",
+        ) { isOn ->
+            Icon(
+                if (isOn) Icons.Default.Check else Icons.Outlined.DesignServices,
+                contentDescription = null,
+                tint = if (isOn) com.virlin.app.ui.hierarchy.readableOn(accent) else ink,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
 @Composable
 private fun MapExportMenuItem(
     tag: String,
@@ -1630,7 +1708,11 @@ private fun MapLayoutPage(
                         Spacer(Modifier.height(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(candidate.label, fontWeight = FontWeight.SemiBold, color = textColor)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(candidate.label, fontWeight = FontWeight.SemiBold, color = textColor)
+                                    if (candidate.handDrawn) Text("  Hand-drawn", fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold, color = accent.copy(alpha = .8f))
+                                }
                                 Text(
                                     "${candidate.fork} · ${candidate.node} · ${candidate.endpoint}",
                                     fontSize = 12.sp, color = textColor.copy(alpha = .65f),
@@ -1797,7 +1879,7 @@ private fun statusLabel(status: MapStatus) = when (status) {
 }
 
 /** Structural previews of the same left-to-right hierarchy in each connector language. */
-private val layoutPreviewExample = listOf(
+internal val layoutPreviewExample = listOf(
     MapTopic("preview-root", null, "Project", kind = MapKind.PROJECT),
     MapTopic("preview-plan", "preview-root", "Plan", kind = MapKind.WORKSTREAM, order = 0),
     MapTopic("preview-build", "preview-root", "Build", kind = MapKind.WORKSTREAM, order = 1),
@@ -1915,11 +1997,18 @@ private fun drawLayoutNode(
                 rect.left + notch, rect.top)
             close()
         }
+        layout.isCraft() -> craftNodePath(rect, layout, radius)
         else -> null
     }
     if (path == null) canvas.drawRoundRect(rect, radius, radius, paint)
     else canvas.drawPath(path, paint)
 }
+
+private val MapTitleTypeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+private val MapDetailTypeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+
+/** Title layouts by colour, width and text; a pan or zoom frame redraws them without re-measuring. */
+private val MapTitleLayouts = android.util.LruCache<String, android.text.StaticLayout>(600)
 
 internal fun paintMap(
     canvas: android.graphics.Canvas, g: MapGeometry, appearance: MapAppearance,
@@ -1932,12 +2021,14 @@ internal fun paintMap(
     expandedId: String? = null,
     showPreviewControls: Boolean = true,
 ) {
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    // Linear, subpixel text scales continuously with the canvas. Hinted text snaps each glyph
+    // to whole pixels at every zoom step, so labels shimmer while pinching.
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.LINEAR_TEXT_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
     val branchTint = mapBranchTints(g, appearance)
+    val boxTint = mapBoxTints(g, appearance, branchTint)
     val tint = mutableMapOf<String, Int>()
     for (topic in g.topics) {
-        val branchColor = branchTint.getValue(topic.id)
-        tint[topic.id] = (appearance.nodeColors[topic.id] ?: branchColor).toInt()
+        tint[topic.id] = (appearance.nodeColors[topic.id] ?: boxTint.getValue(topic.id)).toInt()
     }
     fun accent(topic: MapTopic): Int = tint.getValue(topic.id)
     fun connectorAccent(topic: MapTopic): Int = branchTint.getValue(topic.id).toInt()
@@ -1978,7 +2069,11 @@ internal fun paintMap(
             else -> 14f
         }
         val ys = children.map { g.frames.getValue(it.id).let { f -> f.y + f.h / 2f } }
-        paint.color = connectorAccent(g.topics.first { it.id == parentId })
+        // The trunk carries the children's colour when they share one (one colour, by level),
+        // otherwise its parent's; each stub always carries its own child's branch colour.
+        val childColors = children.map { connectorAccent(it) }.distinct()
+        val trunkColor = childColors.singleOrNull() ?: connectorAccent(g.topics.first { it.id == parentId })
+        paint.color = trunkColor
         paint.alpha = if (parentId in ghostIds) 65 else if (bracketStyle) 190 else 170
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = if (bracketStyle) 2f else 1.5f
@@ -1987,6 +2082,7 @@ internal fun paintMap(
         children.forEach { child ->
             val f = g.frames.getValue(child.id)
             val y = f.y + f.h / 2f
+            paint.color = connectorAccent(child)
             paint.alpha = if (child.id in ghostIds) 65 else if (bracketStyle) 190 else 170
             canvas.drawLine(spineX, y, f.x, y, paint)
             if (bracketStyle) {
@@ -1995,6 +2091,7 @@ internal fun paintMap(
             }
         }
         if (appearance.layout == MapLayout.NESTED_BRACKETS) {
+            paint.color = trunkColor
             canvas.drawLine(spineX + 8f, ys.min() - 10f, spineX + 8f, ys.max() + 10f, paint)
             canvas.drawLine(spineX, ys.min() - 10f, spineX + 8f, ys.min() - 10f, paint)
             canvas.drawLine(spineX, ys.max() + 10f, spineX + 8f, ys.max() + 10f, paint)
@@ -2011,6 +2108,11 @@ internal fun paintMap(
             max(parent.y + parent.h, child.y + child.h) + 20f
         )
         if (!RectF.intersects(viewport, lineBounds)) continue
+        if (appearance.layout.isCraft()) {
+            drawCraftConnector(canvas, paint, appearance.layout, parent, child,
+                connectorAccent(topic), if (topic.id in ghostIds) 65 else 210)
+            continue
+        }
         val fromX = parent.x + parent.w
         val toX = child.x
         val fromY = parent.y + parent.h / 2f
@@ -2093,7 +2195,12 @@ internal fun paintMap(
             MapLayout.FAN_FORKS -> min(25f, f.h / 2f)
             MapLayout.FACETED_PATHS -> 0f
             MapLayout.LOOP_FORKS -> if (isLeaf) 16f else 23f
+            MapLayout.SKETCH_TREE, MapLayout.WHITEBOARD, MapLayout.DOODLE_BUBBLES, MapLayout.STICKY_WALL,
+            MapLayout.BRUSH_INK, MapLayout.DRAFTING, MapLayout.PAPER_CRAFT, MapLayout.METRO_LINES ->
+                craftNodeRadius(appearance.layout, f.h)
         }
+        val craft = appearance.layout.isCraft() && !finish.isHandDrawn()
+        if (craft) drawCraftUnderlay(canvas, r, appearance.layout, radius, paint, color)
         if (appearance.layout == MapLayout.CARD_CASCADE) {
             paint.shader = null
             paint.color = androidx.core.graphics.ColorUtils.blendARGB(
@@ -2102,20 +2209,16 @@ internal fun paintMap(
             canvas.drawRoundRect(RectF(r.left + 4f, r.top + 4f, r.right + 4f, r.bottom + 4f),
                 radius, radius, paint)
         }
-        // Presentation only: tint follows the existing palette/custom node colour.
+        val boxColors = boxColors(appearance, color, customBoxColor, selected, dimmed, finish.isHandDrawn())
+        // Presentation only: fill, edge and ink follow the palette, overrides and box settings.
         // Clear the shader immediately so connectors, text and affordances retain their colours.
         paint.shader = android.graphics.LinearGradient(
             r.left, r.top, r.right, r.bottom,
-            intArrayOf(
-                android.graphics.Color.rgb(253, 255, 252),
-                androidx.core.graphics.ColorUtils.blendARGB(android.graphics.Color.WHITE, color,
-                    if (customBoxColor) .32f else if (selected) .12f else .05f),
-                androidx.core.graphics.ColorUtils.blendARGB(android.graphics.Color.WHITE, color,
-                    if (customBoxColor) .48f else if (selected) .25f else .14f),
-            ), floatArrayOf(0f, .45f, 1f), android.graphics.Shader.TileMode.CLAMP,
+            boxColors.fill, floatArrayOf(0f, .45f, 1f), android.graphics.Shader.TileMode.CLAMP,
         )
         if (finish.isHandDrawn()) drawHandDrawnBox(canvas, r, paint, finish, selected,
-            appearance.nodeColors[topic.id]?.toInt())
+            appearance.nodeColors[topic.id]?.toInt(), boxColors.handFill, boxColors.handStroke,
+            drawStroke = boxColors.stroke != null, paletteTint = color)
         else drawLayoutNode(canvas, r, appearance.layout, isLeaf, radius, paint)
         paint.shader = null
         if (finish != MapBoxFinish.SMOOTH && !finish.isHandDrawn()) {
@@ -2171,19 +2274,25 @@ internal fun paintMap(
                     paint.color = android.graphics.Color.WHITE; paint.alpha = 210
                     canvas.drawRect(r, paint)
                 }
-                else -> Unit
+                else -> if (finish.isMaterial()) drawMaterialTexture(canvas, r, paint, finish, color)
             }
             canvas.restore()
             paint.alpha = 255
         }
+        if (craft && finish == MapBoxFinish.SMOOTH) drawCraftFill(canvas, r, appearance.layout, radius, paint, color)
         paint.style = Paint.Style.STROKE
         // 1.2f vs 2.4f was a sub-pixel difference at the 18-26% zoom Fit lands on, which is
         // why a tap looked like it did nothing. A selection now reads as one.
         paint.strokeWidth = if (selected) 2f else 1f
+        if (craft) drawCraftOutline(canvas, r, appearance.layout, radius, paint,
+            boxColors.stroke, boxColors.strokeAlpha, selected)
+        else boxColors.stroke?.let { stroke ->
+            paint.color = stroke
+            paint.alpha = boxColors.strokeAlpha
+            if (!finish.isHandDrawn())
+                drawLayoutNode(canvas, r, appearance.layout, isLeaf, radius, paint)
+        }
         paint.color = color
-        paint.alpha = if (selected || customBoxColor) 255 else if (dimmed) 55 else 130
-        if (!finish.isHandDrawn())
-            drawLayoutNode(canvas, r, appearance.layout, isLeaf, radius, paint)
         if (appearance.layout == MapLayout.FAN_FORKS && isLeaf) {
             paint.style = Paint.Style.FILL
             paint.alpha = if (dimmed) 55 else 180
@@ -2204,31 +2313,32 @@ internal fun paintMap(
         }
         paint.style = Paint.Style.FILL; paint.alpha = 255
         paint.color = connectorAccent(topic)
-        canvas.drawCircle(f.x, f.y + f.h / 2f, 3f, paint)
-        paint.color = android.graphics.Color.rgb(25, 34, 41)
-        paint.typeface =
-            android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+        if (appearance.layout.isCraft()) {
+            if (g.parent[topic.id] != null)
+                drawCraftEndpoint(canvas, paint, appearance.layout, f, connectorAccent(topic), if (dimmed) 90 else 230)
+        } else canvas.drawCircle(f.x, f.y + f.h / 2f, 3f, paint)
+        paint.color = boxColors.title
+        paint.typeface = MapTitleTypeface
         paint.textSize = 15f
-        val titleLayout = android.text.StaticLayout.Builder.obtain(topic.title, 0, topic.title.length,
-            android.text.TextPaint(paint), (f.w - 66f).toInt())
+        val titleWidth = (f.w - 66f).toInt()
+        val titleKey = if (paint.shader != null) null else
+            "${paint.color}|${paint.style.ordinal}|${paint.strokeWidth}|$titleWidth|${topic.title}"
+        val titleLayout = titleKey?.let(MapTitleLayouts::get) ?: android.text.StaticLayout.Builder
+            .obtain(topic.title, 0, topic.title.length, android.text.TextPaint(paint), titleWidth)
             .setMaxLines(3).setEllipsize(TextUtils.TruncateAt.END).setIncludePad(false).build()
+            .also { layout -> titleKey?.let { MapTitleLayouts.put(it, layout) } }
         canvas.save()
         canvas.translate(f.x + 16f, f.y + (f.h - titleLayout.height) / 2f)
         titleLayout.draw(canvas)
         canvas.restore()
-        paint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        paint.typeface = MapDetailTypeface
         paint.textSize = 11f
         // Colour is never the only signal: every status also carries a word and a glyph.
-        paint.color = when (topic.status) {
+        paint.color = boxColors.detail ?: when (topic.status) {
             MapStatus.BLOCKED -> android.graphics.Color.rgb(195, 57, 56)
             MapStatus.DONE -> android.graphics.Color.rgb(34, 126, 63)
             else -> android.graphics.Color.rgb(99, 114, 131)
         }
-        val detail = listOf(topic.detail, statusLabel(topic.status))
-            .filter { it.isNotBlank() }.joinToString(" · ")
-        val sub = TextUtils.ellipsize(
-            detail, android.text.TextPaint(paint), f.w - 28f, TextUtils.TruncateAt.END
-        ).toString()
 
         // Disclosure is visible by default; the edit icon appears only on the selected node.
         if (showPreviewControls) drawPreviewAffordances(canvas, paint, f, topic.id in previewOwners, false, selected)

@@ -18,8 +18,10 @@ class InlineLeaveUiTest {
         var openedCustom = 0
         var saved = 0L
         val intents = java.lang.reflect.Proxy.newProxyInstance(AttentionIntents::class.java.classLoader,
-            arrayOf(AttentionIntents::class.java)) { _, method, args ->
+            arrayOf(AttentionIntents::class.java)) { proxy, method, args ->
             when (method.name) {
+                "equals" -> proxy === args?.get(0)
+                "hashCode" -> System.identityHashCode(proxy)
                 "openCustom" -> { openedCustom++; null }
                 "customMinutes" -> { saved = args!![2] as Long; true }
                 else -> null

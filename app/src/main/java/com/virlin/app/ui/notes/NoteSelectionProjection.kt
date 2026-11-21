@@ -41,6 +41,8 @@ internal fun selectableNoteText(blocks: List<NoteDocBlock>): AnnotatedString = b
                 }
             }
             NoteDocBlockType.IMAGE -> append("[Image]")
+            NoteDocBlockType.VIDEO -> append("[Video]")
+            NoteDocBlockType.AUDIO -> append("[Audio]")
             NoteDocBlockType.DIVIDER -> append("────────")
             else -> {
                 block.promptTitle?.takeIf(String::isNotBlank)?.let { append(it); append('\n') }
@@ -50,6 +52,8 @@ internal fun selectableNoteText(blocks: List<NoteDocBlock>): AnnotatedString = b
                     NoteDocBlockType.HEADING_1 -> 27.sp
                     NoteDocBlockType.HEADING_2 -> 23.sp
                     NoteDocBlockType.HEADING_3 -> 19.sp
+                    NoteDocBlockType.HEADING_4 -> 17.sp
+                    NoteDocBlockType.HEADING_5 -> 15.sp
                     else -> null
                 }
                 if (heading != null) addStyle(SpanStyle(fontSize = heading,

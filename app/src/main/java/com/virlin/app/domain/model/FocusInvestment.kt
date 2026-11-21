@@ -42,6 +42,26 @@ object FocusInvestment {
             }
     }
 
+    /** [currentSeconds] = the running Focus period (all its pieces); [priorSeconds] = everything before it. */
+    data class Split(val priorSeconds: Long, val currentSeconds: Long)
+
+    /**
+     * Splits a focus item's time into the current Focus period (the split-flap) and the earlier
+     * total for [taskId] (null = time not attributed to a task). The period is the open session's,
+     * or the paused one's ([pausedSessionId]) while the app is away; otherwise it is empty.
+     */
+    fun split(sessions: List<FocusSession>, taskId: String?, now: Instant, pausedSessionId: String? = null): Split {
+        val live = sessions.firstOrNull { it.isOpen } ?: pausedSessionId?.let { id -> sessions.firstOrNull { it.id == id } }
+        val root = live?.periodRootId
+        // Whole seconds only after summing, so splitting a period never drops its fractions.
+        val current = if (root == null) Duration.ZERO else sessions.asSequence().filter { it.periodRootId == root }
+            .fold(Duration.ZERO) { acc, s -> acc.plus(safeDuration(s, now)) }
+        val prior = sessions.asSequence()
+            .filter { it.taskId == taskId && !it.isOpen && it.periodRootId != root }
+            .fold(Duration.ZERO) { acc, s -> acc.plus(s.endedAt?.let { safeDuration(s, it) } ?: Duration.ZERO) }
+        return Split(prior.seconds, current.seconds)
+    }
+
     /** Live total seconds = prior closed + current open session elapsed. */
     fun liveTotalSeconds(priorClosedSec: Long, currentSessionSec: Int): Long =
         priorClosedSec.coerceAtLeast(0L) + currentSessionSec.coerceAtLeast(0).toLong()

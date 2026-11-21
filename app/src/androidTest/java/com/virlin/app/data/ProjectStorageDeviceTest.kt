@@ -1,8 +1,6 @@
 package com.virlin.app.data
 
 import android.content.Context
-import android.graphics.pdf.PdfRenderer
-import android.os.ParcelFileDescriptor
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -20,7 +18,7 @@ import java.util.zip.ZipFile
 
 @RunWith(AndroidJUnit4::class)
 class ProjectStorageDeviceTest {
-    @Test fun roomCopyAndNativePdfZipExportKeepOriginalUnchanged() = runBlocking {
+    @Test fun roomCopyAndVirlinExportKeepOriginalUnchanged() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = Room.inMemoryDatabaseBuilder(context, VirlinDatabase::class.java).build()
         try {
@@ -37,15 +35,11 @@ class ProjectStorageDeviceTest {
             assertNotEquals(source.project.id, copy.id)
             assertEquals(1, repo.projectSnapshot(copy.id).tasks.size)
             assertEquals(source, repo.projectSnapshot("source"))
-            val pdf = tools.export(source, ProjectExportFormat.PDF)
+            val export = tools.exportVirlin(source, VirlinTiming.KEEP)
             try {
-                ParcelFileDescriptor.open(pdf, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
-                    PdfRenderer(descriptor).use { renderer -> assertTrue("PDF is paginated", renderer.pageCount > 1) }
-                }
-            } finally { pdf.delete() }
-            val zip = tools.export(source, ProjectExportFormat.BACKUP)
-            try { ZipFile(zip).use { assertNotNull(it.getEntry("project.json")); assertNotNull(it.getEntry("project.md")) } }
-            finally { zip.delete() }
+                ZipFile(export.file).use { assertNotNull(it.getEntry(VirlinProjectFile.DATA_ENTRY)); assertNotNull(it.getEntry(VirlinProjectFile.HEADER_ENTRY)) }
+                assertEquals("source", VirlinProjectFile.verify(export.file).projectId)
+            } finally { export.file.delete() }
             assertEquals(source, repo.projectSnapshot("source"))
         } finally { db.close() }
     }

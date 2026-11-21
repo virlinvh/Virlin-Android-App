@@ -5,9 +5,7 @@ import com.virlin.app.domain.notedoc.NoteDocBlockType
 
 /** Display-only rhythm shared by editing and preview. Never writes document attributes. */
 internal object NoteDocumentLayout {
-    fun isHeading(type: NoteDocBlockType) = type in setOf(
-        NoteDocBlockType.HEADING_1, NoteDocBlockType.HEADING_2, NoteDocBlockType.HEADING_3,
-    )
+    fun isHeading(type: NoteDocBlockType) = type.headingLevel > 0
 
     private fun isList(type: NoteDocBlockType) = type in setOf(
         NoteDocBlockType.BULLET, NoteDocBlockType.NUMBERED, NoteDocBlockType.CHECKLIST,

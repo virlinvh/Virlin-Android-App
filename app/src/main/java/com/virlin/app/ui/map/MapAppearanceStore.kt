@@ -78,6 +78,7 @@ class MapAppearanceStore(context: Context) {
     private fun prune(appearance: MapAppearance) = appearance.copy(
         nodeColors = appearance.nodeColors - removedOwners,
         branchColors = appearance.branchColors - removedOwners,
+        boxBranchColors = appearance.boxBranchColors - removedOwners,
         nodeFinishes = appearance.nodeFinishes - removedOwners,
         nodeWidths = appearance.nodeWidths - removedOwners,
         hiddenNodeIds = appearance.hiddenNodeIds - removedOwners,
@@ -96,27 +97,7 @@ class MapAppearanceStore(context: Context) {
             if (!file.exists() && !File(file.path + ".bak").exists()) return@runCatching emptyMap<String, MapAppearance>()
             val root = JSONObject(android.util.AtomicFile(file).openRead().bufferedReader().use { it.readText() })
             buildMap {
-                root.keys().forEach { projectId ->
-                    val o = root.getJSONObject(projectId)
-                    put(
-                        projectId,
-                        MapAppearance(
-                            layout = MapLayout.entries.firstOrNull { it.name == o.optString("layout") }
-                                ?: MapLayout.RIGHT_TREE,
-                            paletteIndex = o.optInt("paletteIndex", 0),
-                            nodeColors = o.longMap("nodeColors"),
-                            branchColors = o.longMap("branchColors"),
-                            hiddenNodeIds = o.optJSONArray("hiddenNodeIds")?.let { a ->
-                                (0 until a.length()).mapTo(mutableSetOf()) { a.getString(it) }
-                            } ?: emptySet(),
-                            customPalette = o.longList("customPalette"),
-                            savedColors = o.longList("savedColors"),
-                            boxFinish = enumValueOrDefault(o.optString("boxFinish")),
-                            nodeFinishes = o.finishMap("nodeFinishes"),
-                            nodeWidths = o.widthMap("nodeWidths"),
-                        )
-                    )
-                }
+                root.keys().forEach { projectId -> put(projectId, decode(root.getJSONObject(projectId))) }
             }
             // A corrupt or partly written file must not stop the map opening; defaults are safe.
         }.getOrDefault(emptyMap())
@@ -125,32 +106,55 @@ class MapAppearanceStore(context: Context) {
     private suspend fun write(all: Map<String, MapAppearance>) = withContext(Dispatchers.IO) {
         runCatching {
             val root = JSONObject()
-            all.forEach { (projectId, appearance) ->
-                root.put(
-                    projectId,
-                    JSONObject()
-                        .put("layout", appearance.layout.name)
-                        .put("paletteIndex", appearance.paletteIndex)
-                        .put("nodeColors", appearance.nodeColors.toJson())
-                        .put("branchColors", appearance.branchColors.toJson())
-                        .put("hiddenNodeIds", org.json.JSONArray().also { a ->
-                            appearance.hiddenNodeIds.forEach(a::put)
-                        })
-                        .put("customPalette", org.json.JSONArray().also { a -> appearance.customPalette.forEach { a.put(it.toString(16)) } })
-                        .put("savedColors", org.json.JSONArray().also { a -> appearance.savedColors.forEach { a.put(it.toString(16)) } })
-                        .put("boxFinish", appearance.boxFinish.name)
-                        .put("nodeFinishes", JSONObject().also { o -> appearance.nodeFinishes.forEach { (id, finish) -> o.put(id, finish.name) } })
-                        .put("nodeWidths", JSONObject().also { o -> appearance.nodeWidths.forEach { (id, width) ->
-                            if (width.isFinite() && width in 110f..560f) o.put(id, width.toDouble())
-                        } })
-                )
-            }
+            all.forEach { (projectId, appearance) -> root.put(projectId, encode(appearance)) }
             val atomic = android.util.AtomicFile(file)
             val output = atomic.startWrite()
             try { output.write(root.toString().toByteArray(Charsets.UTF_8)); atomic.finishWrite(output) }
             catch (e: Exception) { atomic.failWrite(output); throw e }
         }
     }
+
+    /** The project's saved map appearance in this file's own format, or null when it was never customised. */
+    suspend fun exportJson(projectId: String): JSONObject? = mutex.withLock {
+        if (!loaded) { cache.value = read(); loaded = true }
+        cache.value[projectId]?.let(::encode)
+    }
+
+    /** Restores an exported appearance (same format as [exportJson]) onto a newly imported project. */
+    suspend fun importJson(projectId: String, json: JSONObject): MapAppearance = update(projectId) { decode(json) }
+
+    private fun decode(o: JSONObject): MapAppearance = MapAppearance(
+        layout = MapLayout.entries.firstOrNull { it.name == o.optString("layout") }
+            ?: MapLayout.RIGHT_TREE,
+        paletteIndex = o.optInt("paletteIndex", 0),
+        nodeColors = o.longMap("nodeColors"),
+        branchColors = o.longMap("branchColors"),
+        hiddenNodeIds = o.optJSONArray("hiddenNodeIds")?.let { a ->
+            (0 until a.length()).mapTo(mutableSetOf()) { a.getString(it) }
+        } ?: emptySet(),
+        customPalette = o.longList("customPalette"),
+        savedColors = o.longList("savedColors"),
+        boxFinish = enumValueOrDefault(o.optString("boxFinish")),
+        nodeFinishes = o.finishMap("nodeFinishes"),
+        nodeWidths = o.widthMap("nodeWidths"),
+    ).withColourSettings(o)
+
+    private fun encode(appearance: MapAppearance): JSONObject = JSONObject()
+        .put("layout", appearance.layout.name)
+        .put("paletteIndex", appearance.paletteIndex)
+        .put("nodeColors", appearance.nodeColors.toJson())
+        .put("branchColors", appearance.branchColors.toJson())
+        .put("hiddenNodeIds", org.json.JSONArray().also { a ->
+            appearance.hiddenNodeIds.forEach(a::put)
+        })
+        .put("customPalette", org.json.JSONArray().also { a -> appearance.customPalette.forEach { a.put(it.toString(16)) } })
+        .put("savedColors", org.json.JSONArray().also { a -> appearance.savedColors.forEach { a.put(it.toString(16)) } })
+        .put("boxFinish", appearance.boxFinish.name)
+        .put("nodeFinishes", JSONObject().also { o -> appearance.nodeFinishes.forEach { (id, finish) -> o.put(id, finish.name) } })
+        .put("nodeWidths", JSONObject().also { o -> appearance.nodeWidths.forEach { (id, width) ->
+            if (width.isFinite() && width in 110f..560f) o.put(id, width.toDouble())
+        } })
+        .putColourSettings(appearance)
 
     private fun Map<String, Long>.toJson() = JSONObject().also { o ->
         forEach { (id, argb) -> o.put(id, argb.toString(16)) }
