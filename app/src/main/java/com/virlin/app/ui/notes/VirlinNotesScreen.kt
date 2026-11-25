@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.FormatQuote
 import androidx.compose.material.icons.outlined.FormatStrikethrough
 import androidx.compose.material.icons.outlined.FormatUnderlined
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Notes
@@ -109,6 +110,7 @@ fun VirlinNotesScreen(
     onAddBlock: () -> Unit,
     onPreview: () -> Unit,
     onExport: () -> Unit,
+    onShareLink: () -> Unit,
     headingLevels: List<Int>,
     onHeadingFoldLevel: (Int?) -> Unit,
     headingFoldRequest: Int = 0,
@@ -151,6 +153,12 @@ fun VirlinNotesScreen(
             IconButton(onClick = onPreview, modifier = Modifier.size(40.dp).testTag("notes_preview_button")) {
                 Icon(Icons.Outlined.Visibility, contentDescription = "Read note preview", tint = Green)
             }
+            IconButton(
+                onClick = onShareLink,
+                modifier = Modifier.size(40.dp).testTag("notes_share_link_button"),
+            ) {
+                Icon(Icons.Outlined.IosShare, contentDescription = "Share note link", tint = Green)
+            }
             Icon(Icons.Outlined.CheckCircle, null, tint = Green, modifier = Modifier.size(16.dp))
             Text(" $saveLabel", color = Green, fontSize = 12.sp, maxLines = 1)
             Box {
@@ -161,6 +169,11 @@ fun VirlinNotesScreen(
                     DropdownMenuItem(text = { Text("Preview") }, onClick = {
                         menuOpen = false; onPreview()
                     })
+                    DropdownMenuItem(
+                        text = { Text("Share link") },
+                        onClick = { menuOpen = false; onShareLink() },
+                        modifier = Modifier.testTag("notes_share_link_menu"),
+                    )
                     DropdownMenuItem(text = { Text("Export") }, onClick = {
                         menuOpen = false; onExport()
                     })

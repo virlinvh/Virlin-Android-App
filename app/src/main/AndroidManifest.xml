@@ -42,6 +42,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Note share deep links: virlin://note/<base64url(ownerKey)> — opens that note. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="virlin" android:host="note" android:pathPrefix="/" />
+            </intent-filter>
         </activity>
 
         <activity
