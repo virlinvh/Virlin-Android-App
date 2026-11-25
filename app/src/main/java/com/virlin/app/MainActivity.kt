@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.lifecycleScope
 import com.virlin.app.debug.VirlinStartup
 import com.virlin.app.domain.VirlinGraph
+import com.virlin.app.platform.NoteDeepLinkNavigation
 import com.virlin.app.platform.NotificationNavigation
 import com.virlin.app.ui.navigation.VirlinApp
 import com.virlin.app.ui.theme.VirlinTheme
@@ -26,6 +27,7 @@ class MainActivity : ComponentActivity() {
         VirlinGraph.init(applicationContext)
         VirlinStartup.mark("VirlinGraph.init_DONE")
         NotificationNavigation.offer(intent)
+        NoteDeepLinkNavigation.offer(intent)
 
         // DEBUG/TEST extras — ignored in release (BuildConfig.DEBUG).
         if (com.virlin.app.BuildConfig.DEBUG) {
@@ -98,6 +100,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         NotificationNavigation.offer(intent)
+        NoteDeepLinkNavigation.offer(intent)
     }
 
     companion object {

@@ -223,6 +223,21 @@ fun NotesRoute(
             }
         },
         onExport = vm::onExport,
+        onShareLink = {
+            val intent = com.virlin.app.platform.NoteDeepLinks.shareIntent(
+                ownerKey = ownerKey,
+                title = state.title.ifBlank { title }.ifBlank { null },
+            )
+            if (intent == null) {
+                vm.openDialog(NoteDialog.Message("This note cannot be shared as a link."))
+            } else {
+                runCatching {
+                    context.startActivity(android.content.Intent.createChooser(intent, "Share note link"))
+                }.onFailure {
+                    vm.openDialog(NoteDialog.Message("No share target is available on this device."))
+                }
+            }
+        },
         headingLevels = state.blocks.mapNotNull { block ->
             when (block.type) {
                 NoteDocBlockType.HEADING_1 -> 1

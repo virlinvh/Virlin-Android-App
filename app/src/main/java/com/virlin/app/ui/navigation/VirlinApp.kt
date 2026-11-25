@@ -105,6 +105,16 @@ fun VirlinApp(agentViewModel: VirlinAgentViewModel = viewModel()) {
             com.virlin.app.domain.command.EntityKind.TASK -> com.virlin.app.ui.hierarchy.taskDetail(dest.id)
         })
     }
+    // Shared note links (virlin://note/…) open the matching owner-scoped Notes route after hydrate.
+    val pendingNoteDeepLink by com.virlin.app.platform.NoteDeepLinkNavigation.pending.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(pendingNoteDeepLink, readiness) {
+        if (readiness !is com.virlin.app.domain.StartupReadiness.Ready) return@LaunchedEffect
+        if (pendingNoteDeepLink == null) return@LaunchedEffect
+        val ownerKey = com.virlin.app.platform.NoteDeepLinkNavigation.consume() ?: return@LaunchedEffect
+        navController.navigate(com.virlin.app.ui.notes.notesRoute(ownerKey, "Note")) {
+            launchSingleTop = true
+        }
+    }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: "now"
     var mapFocusMode by remember { mutableStateOf(false) }
